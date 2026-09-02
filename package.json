@@ -35,8 +35,16 @@
   },
   "files": [
     "extensions/collaborating-agents/**/*",
+    "extensions/research-harness/**/*",
     "skills/collaborating-agents-system/**/*",
     "examples/subagents/**/*",
+    "packages/config/**/*",
+    "packages/controller-client/**/*",
+    "packages/controller-core/**/*",
+    "packages/prompt-runtime/**/*",
+    "packages/schemas/**/*",
+    "templates/research-three-repo/**/*",
+    "docs/repository-layout.md",
     "README.md",
     "CHANGELOG",
     "LICENSE"

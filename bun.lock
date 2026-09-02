@@ -29,6 +29,10 @@
         "researchd": "./src/index.ts",
       },
     },
+    "extensions/research-harness": {
+      "name": "@human-in-loop-harness/research-harness-extension",
+      "version": "0.0.0",
+    },
     "packages/config": {
       "name": "@human-in-loop-harness/config",
       "version": "0.0.0",
@@ -43,6 +47,10 @@
     },
     "packages/doctor": {
       "name": "@human-in-loop-harness/doctor",
+      "version": "0.0.0",
+    },
+    "packages/prompt-runtime": {
+      "name": "@human-in-loop-harness/prompt-runtime",
       "version": "0.0.0",
     },
     "packages/release-manifest": {
@@ -109,7 +117,11 @@
 
     "@human-in-loop-harness/doctor": ["@human-in-loop-harness/doctor@workspace:packages/doctor"],
 
+    "@human-in-loop-harness/prompt-runtime": ["@human-in-loop-harness/prompt-runtime@workspace:packages/prompt-runtime"],
+
     "@human-in-loop-harness/release-manifest": ["@human-in-loop-harness/release-manifest@workspace:packages/release-manifest"],
+
+    "@human-in-loop-harness/research-harness-extension": ["@human-in-loop-harness/research-harness-extension@workspace:extensions/research-harness"],
 
     "@human-in-loop-harness/researchctl": ["@human-in-loop-harness/researchctl@workspace:apps/researchctl"],
 
