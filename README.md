@@ -4,6 +4,25 @@ This is an extension for Pi for spawning subagents, and for them to reserve file
 
 All sessions auto-register immediately when they start; so when a new Pi session is started, it is already part of the collaborating agents system.
 
+## Harness workspace skeleton
+
+This fork is also becoming the implementation repo for the Human-in-the-Loop Research Harness. The P01 workspace skeleton adds package boundaries for later phases while keeping the upstream collaboration extension intact.
+
+- `apps/researchctl` — future CLI entrypoint for commands such as `researchctl version`, `doctor`, and `harness-release prepare --dry-run`.
+- `apps/researchd` — future daemon entrypoint for the long-running Controller process, health state, and later socket/RPC support.
+- `packages/config` — future configuration loader for `product.toml`, user config, project config, and CLI overrides.
+- `packages/controller-core` — future Harness Controller core for task state, gates, Agent Registry, acceptance, and related deterministic policy.
+- `packages/controller-client` — shared client/protocol interface for CLI and Pi extensions so UI code does not parse command-line log text.
+- `packages/schemas` — shared schemas and types for task contracts, review results, release manifests, and other structured artifacts.
+- `packages/doctor` — environment and repository health checks for `make doctor` / `researchctl doctor`.
+- `packages/release-manifest` — dual-repo Release Manifest draft generation logic.
+- `templates/harness-product` — future template assets for initializing Harness product workspaces.
+- `templates/research-three-repo` — future template assets for initializing research project `paper + research + code` workspaces.
+- `tests` — Harness integration/e2e tests that should not be mixed into upstream compatibility tests.
+- `scripts` — implementation-repo maintenance and automation scripts.
+
+The upstream project remains `baochunli/pi-collaborating-agents`: it provides `/agents`, subagents, messaging, reservations, and run/session inspection. Harness code is added beside that upstream collaboration plane rather than replacing it.
+
 ## Quick Start
 
 Install this extension and its included skill using **either** npm (recommended) or the git URL.
