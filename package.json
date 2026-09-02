@@ -4,6 +4,18 @@
   "description": "Collaborative multi-agent messaging and remote focus overlay extension for Pi",
   "license": "MIT",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "extensions/*"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.2"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/baochunli/pi-collaborating-agents.git"

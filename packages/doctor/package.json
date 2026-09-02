@@ -1,0 +1,10 @@
+{
+  "name": "@human-in-loop-harness/doctor",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

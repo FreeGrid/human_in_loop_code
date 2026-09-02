@@ -1,0 +1,9 @@
+{
+  "name": "@human-in-loop-harness/researchctl",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "researchctl": "./src/index.ts"
+  }
+}

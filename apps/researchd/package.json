@@ -1,0 +1,9 @@
+{
+  "name": "@human-in-loop-harness/researchd",
+  "version": "0.0.0",
+  "type": "module",
+  "private": true,
+  "bin": {
+    "researchd": "./src/index.ts"
+  }
+}
