@@ -10,7 +10,13 @@
     "extensions/*"
   ],
   "scripts": {
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "install:frozen": "BUN_INSTALL_CACHE_DIR=.harness-tmp/bun-install-cache bun install --frozen-lockfile",
+    "build": "bun run typecheck",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "bun test",
+    "package:dry-run": "npm_config_cache=.harness-tmp/npm-cache npm pack --dry-run",
+    "clean": "bun ./scripts/clean.ts",
+    "verify:code": "bun run build && bun run test && bun run package:dry-run"
   },
   "devDependencies": {
     "@types/bun": "latest",
@@ -45,6 +51,7 @@
     "packages/schemas/**/*",
     "templates/research-three-repo/**/*",
     "docs/repository-layout.md",
+    "docs/development-commands.md",
     "README.md",
     "CHANGELOG",
     "LICENSE"

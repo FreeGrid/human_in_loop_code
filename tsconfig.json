@@ -14,7 +14,9 @@
   },
   "include": [
     "apps/**/*.ts",
-    "packages/**/*.ts"
+    "packages/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts"
   ],
   "exclude": [
     "node_modules",
