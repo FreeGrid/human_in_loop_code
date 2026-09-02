@@ -1,0 +1,74 @@
+schema_version = 1
+repository = "https://github.com/baochunli/pi-collaborating-agents"
+repository_slug = "baochunli/pi-collaborating-agents"
+default_branch = "main"
+baseline_commit = "acd50d0ec091deb03bb90b57b694131cff0c297d"
+package_name = "@baochunli/pi-collaborating-agents"
+package_version = "0.4.6"
+license = "MIT"
+authority = "commit"
+assume_matching_release_tag = false
+audit_date = "2026-08-31"
+validation_status = "p00-bootstrap-source-and-local-tests"
+
+[source_audit]
+capabilities = [
+  "pi-extension-package",
+  "agents-overlay",
+  "agents-feed-reservations-chat-tabs",
+  "direct-and-broadcast-messaging",
+  "urgent-message-delivery",
+  "single-and-parallel-subagents",
+  "toml-subagent-types",
+  "run-and-session-registry",
+  "session-tail-inspection",
+  "process-launch-mode",
+  "cmux-pane-launch-mode",
+  "file-reservation-coordination",
+]
+
+[not_provided_as_canonical_harness]
+capabilities = [
+  "deterministic-task-and-phase-state-machine",
+  "optional-herdr-launch-backend-after-value-gate",
+  "commander-context-firewall",
+  "workstream-reuse-selector",
+  "git-worktree-and-os-sandbox-authority",
+  "independent-review-and-phase-gates",
+  "evidence-and-reproduction-chain",
+  "control-owned-dual-repo-hcp",
+  "product-owned-research-three-repo-rcp",
+]
+
+[p00_deferrals]
+herdr_backend = "deferred"
+heavy_sandbox = "deferred"
+first_class_resume_session = "deferred-to-P04"
+
+[fork_policy]
+origin_remote = "writable-fork"
+upstream_remote = "read-only-upstream"
+preserve_git_history = true
+preserve_license_and_copyright = true
+upstream_sync_pr_required = true
+mix_feature_changes_into_sync_pr = false
+upstream_divergence_trailer = "Upstream-Divergence"
+
+[required_local_validation]
+commands = [
+  "bun test",
+  "npm pack --dry-run",
+]
+focused_commands = [
+  "bun test extensions/collaborating-agents/docs.test.ts",
+  "bun test extensions/collaborating-agents/index.test.ts",
+  "bun test extensions/collaborating-agents/subagent-spawn.test.ts",
+  "bun test extensions/collaborating-agents/session-tail.test.ts",
+]
+
+[non_assumptions]
+completed_run_implies_resumable_session = false
+file_reservation_is_security_sandbox = false
+cmux_backend_is_herdr_backend = false
+upstream_registry_is_canonical_task_state = false
+source_audit_equals_full_runtime_validation = false
