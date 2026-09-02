@@ -4,24 +4,23 @@ This is an extension for Pi for spawning subagents, and for them to reserve file
 
 All sessions auto-register immediately when they start; so when a new Pi session is started, it is already part of the collaborating agents system.
 
-## Harness workspace skeleton
+## Research Harness product boundary
 
-This fork is also becoming the implementation repo for the Human-in-the-Loop Research Harness. The P01 workspace skeleton adds package boundaries for later phases while keeping the upstream collaboration extension intact.
+This fork is becoming the installable research product built and accepted by the separate `human_in_loop_control` development control repository. The dependency is one-way: control may locate, build, test, and package this repository; the published package and Pi runtime must not read control, aggregate the two Harness repositories, initialize a Harness-product workspace, or create/finalize an HCP.
 
-- `apps/researchctl` — future CLI entrypoint for commands such as `researchctl version`, `doctor`, and `harness-release prepare --dry-run`.
-- `apps/researchd` — future daemon entrypoint for the long-running Controller process, health state, and later socket/RPC support.
-- `packages/config` — future configuration loader for `product.toml`, user config, project config, and CLI overrides.
-- `packages/controller-core` — future Harness Controller core for task state, gates, Agent Registry, acceptance, and related deterministic policy.
-- `packages/controller-client` — shared client/protocol interface for CLI and Pi extensions so UI code does not parse command-line log text.
-- `packages/schemas` — shared schemas and types for task contracts, review results, release manifests, and other structured artifacts.
-- `packages/doctor` — environment and repository health checks for `make doctor` / `researchctl doctor`.
-- `packages/release-manifest` — dual-repo Release Manifest draft generation logic.
-- `templates/harness-product` — future template assets for initializing Harness product workspaces.
-- `templates/research-three-repo` — future template assets for initializing research project `paper + research + code` workspaces.
-- `tests` — Harness integration/e2e tests that should not be mixed into upstream compatibility tests.
-- `scripts` — implementation-repo maintenance and automation scripts.
+The active Pi-first product surface is:
 
-The upstream project remains `baochunli/pi-collaborating-agents`: it provides `/agents`, subagents, messaging, reservations, and run/session inspection. Harness code is added beside that upstream collaboration plane rather than replacing it.
+- `extensions/research-harness` — the `/research` Pi product entrypoint.
+- `packages/controller-core` and typed facade/client packages — deterministic research-task behavior, used in-process by Pi.
+- `packages/prompt-runtime` — versioned Role Prompt Registry and deterministic Prompt Composer for Role Prompt + Task Packet + admitted context + runtime envelope + output contract; every run records hashes.
+- `packages/schemas` — shared Task, Capsule, Evidence, Review, and RCP contracts.
+- `templates/research-three-repo` — research project `paper + research + code` templates.
+- `tests/fixtures` — disposable product fixtures used by control to validate the product before it enters real research repositories.
+- `scripts` — implementation-repository build, test, package, and maintenance helpers.
+
+Existing `apps/researchctl`, `apps/researchd`, CLI-oriented config/client wiring, dual-repo doctor/release packages, and `templates/harness-product` are dormant bootstrap scaffolds. They are intentionally frozen: do not extend, wire, publish, or delete them before the P09 External Adapter Value Gate. If P09 approves a CLI or daemon, it may only be a thin research-runtime adapter; dual-repo doctor, upstream sync, candidate acceptance, Human release approval, and HCP remain control-owned.
+
+The upstream project remains `baochunli/pi-collaborating-agents`: it provides `/agents`, subagents, messaging, reservations, generic TOML agent examples, and run/session inspection. Research Harness code is added beside that collaboration plane rather than replacing it. Product execution follows `Pi typed request → TypeScript policy → immutable Prompt Envelope → pi-process subagent → structured artifact → TypeScript verification`; product UI does not expose a raw-spawn bypass. Prompts explain roles and tasks, while tool policy, worktrees/sandbox, schemas, state transitions, and acceptance remain program-enforced.
 
 ## Quick Start
 
