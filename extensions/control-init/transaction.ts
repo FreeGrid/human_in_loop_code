@@ -14,6 +14,7 @@ export interface TransactionWrite {
 
 export interface TransactionResult {
   files: Array<{ path: string; action: "created" | "updated" | "unchanged" }>;
+  warnings?: string[];
 }
 
 interface Snapshot {
@@ -121,22 +122,29 @@ async function acquireTransactionLocks(writes: TransactionWrite[]): Promise<Tran
     }
     return locks;
   } catch (error) {
-    await releaseTransactionLocks(locks);
+    const releaseErrors = await releaseTransactionLocks(locks);
+    if (releaseErrors.length > 0) {
+      throw new AggregateError([error, ...releaseErrors], "Unable to acquire all workspace locks and cleanup was incomplete");
+    }
     throw error;
   }
 }
 
-async function releaseTransactionLocks(locks: TransactionLock[]): Promise<void> {
+async function releaseTransactionLocks(locks: TransactionLock[]): Promise<unknown[]> {
   const errors: unknown[] = [];
   for (const lock of [...locks].reverse()) {
     try {
       await lock.handle.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
       await unlink(lock.path);
     } catch (error) {
       if (!notFound(error)) errors.push(error);
     }
   }
-  if (errors.length > 0) throw new AggregateError(errors, "Unable to release the control-init transaction lock");
+  return errors;
 }
 
 async function install(snapshot: Snapshot): Promise<"created" | "updated" | "unchanged"> {
@@ -208,6 +216,8 @@ export async function writeWorkspaceTransaction(
 
   const snapshots: Snapshot[] = [];
   let locks: TransactionLock[] = [];
+  let result: TransactionResult | undefined;
+  let transactionError: unknown;
   try {
     // Complete every read-only preflight before creating even a transient lock.
     for (const write of writes) snapshots.push(await snapshot(write));
@@ -220,7 +230,7 @@ export async function writeWorkspaceTransaction(
       files.push({ path: item.write.path, action: await install(item) });
     }
     await verify?.();
-    return { files };
+    result = { files };
   } catch (error) {
     const rollbackErrors: unknown[] = [];
     for (const item of [...snapshots].reverse()) {
@@ -231,11 +241,27 @@ export async function writeWorkspaceTransaction(
       }
     }
     if (rollbackErrors.length > 0) {
-      throw new AggregateError([error, ...rollbackErrors], "Workspace transaction failed and rollback was incomplete");
+      transactionError = new AggregateError([error, ...rollbackErrors], "Workspace transaction failed and rollback was incomplete");
+    } else {
+      transactionError = error;
     }
-    throw error;
-  } finally {
-    await Promise.all(snapshots.map((item) => cleanTemp(item).catch(() => undefined)));
-    await releaseTransactionLocks(locks);
   }
+  await Promise.all(snapshots.map((item) => cleanTemp(item).catch(() => undefined)));
+  const releaseErrors = await releaseTransactionLocks(locks);
+  if (transactionError !== undefined) {
+    if (releaseErrors.length > 0) {
+      throw new AggregateError(
+        [transactionError, ...releaseErrors],
+        "Workspace transaction failed and lock cleanup was incomplete",
+      );
+    }
+    throw transactionError;
+  }
+  if (!result) throw new Error("Workspace transaction completed without a result");
+  if (releaseErrors.length > 0) {
+    result.warnings = [
+      `Workspace files were applied and verified, but ${TRANSACTION_LOCK_FILENAME} could not be removed. Confirm no control-init operation is running, remove the leftover lock manually, then run doctor.`,
+    ];
+  }
+  return result;
 }

@@ -555,10 +555,12 @@ async function applyPrepared(prepared: PreparedWorkspace, createIndex: boolean):
       },
     ], () => verifyInstalledWorkspace(prepared));
     const statuses = await repositoryStatuses(prepared.index, prepared.controlRoot);
+    const summary = summaryFor(prepared.index, statuses);
+    if (result.warnings?.length) summary.warnings?.push(...result.warnings);
     return {
       status: "applied",
       summary: {
-        ...summaryFor(prepared.index, statuses),
+        ...summary,
         files: result.files,
         changes: prepared.summary.changes,
       },
