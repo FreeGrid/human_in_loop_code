@@ -600,7 +600,10 @@ preconditions also reject stale writes from another process.
 The slash commands are the Human-UI fallback. `/control:init` shows the full
 profile contract, collects exact directories and one optional exception note,
 renders the candidate index plus the exact managed AGENTS content, and asks for
-final confirmation before any write.
+final confirmation before any write. The confirmation is bound to that exact
+preview: if a bound path, Git remote, index, or AGENTS file changes while the
+dialog is open, the operation returns a `preview-stale` conflict and writes
+nothing. Run the command again to review the refreshed state.
 `/control:update` prints the current state first, retains the user's original
 change description, clarifies only the affected category, prints before and
 after state, and asks for final confirmation. Cancelling either command leaves
@@ -653,10 +656,11 @@ no markers requires an explicit append choice. Manual changes inside the block
 produce drift; update requires an explicit preserve, regenerate, or hand-merge
 decision and never silently repairs it. Moving a repository or changing its
 remote is handled through update with an explicit new path or accepted remote
-identity. A new path is still checked against the previously recorded remote,
-and doctor re-renders the canonical managed block to detect an index edited
-without its corresponding AGENTS update. Removing a binding never deletes its
-directory or Git data.
+identity. Adding a remote where the recorded identity was empty is also drift,
+not an implicit acceptance. A new path is still checked against the previously
+recorded remote, and doctor re-renders the canonical managed block to detect an
+index edited without its corresponding AGENTS update. Removing a binding never
+deletes its directory or Git data.
 
 ### Directory and Git safety
 

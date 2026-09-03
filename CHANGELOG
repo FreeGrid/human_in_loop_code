@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Added a template-first control workspace extension with four Agent tools, four Human-UI commands, versioned repository bindings, managed `AGENTS.md` rules, deterministic doctor checks, and explicitly authorized local Git bootstrap.
-- Hardened control workspace remote redaction, rebind identity checks, cross-process stale-write rejection and exclusive transaction locking, persisted path boundaries, canonical AGENTS verification, preview result semantics, and new-file rollback.
+- Hardened control workspace remote redaction, rebind identity checks, Human-confirmation preview identity, cross-process stale-write rejection and exclusive transaction locking, persisted path boundaries, canonical AGENTS verification, preview result semantics, and new-file rollback.
 - Added a human-gated `spec.md` → `plan.md` → `tasks.md` planning extension with deterministic validation and task convergence.
 - Fixed subagent launch tool filtering so extension tools such as `agent_message` remain active in spawned agents.
 - Fixed Pi 0.65+ compatibility by relying on `session_start` for session replacement lifecycle events instead of the removed `session_switch` and `session_fork` hooks.
