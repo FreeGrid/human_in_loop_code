@@ -24,6 +24,8 @@ interface PathSlot {
 const PROFILE_CONTROL_CODE = "Recommended — control + code";
 const PROFILE_WITH_LATEX = "Optional — control + code + one LaTeX repository per paper";
 const PROFILE_CUSTOM = "Advanced — custom topology";
+const RETURN_TO_MODIFY = "Return to modify answers";
+const CANCEL_WITHOUT_CHANGES = "Cancel without changes";
 
 function cancelled(ctx: WizardContext): false {
   ctx.ui.notify("Control workspace operation cancelled. State was not changed.", "info");
@@ -34,6 +36,13 @@ function requireUI(ctx: WizardContext, operation: string): boolean {
   if (ctx.hasUI) return true;
   ctx.ui.notify(`${operation} requires a Human UI. Use the structured control_workspace tool in print/JSON mode.`, "error");
   return false;
+}
+
+async function requestRevision(ctx: WizardContext): Promise<"revise" | "stop"> {
+  const choice = await ctx.ui.select("The preview was not applied", [RETURN_TO_MODIFY, CANCEL_WITHOUT_CHANGES]);
+  if (choice === RETURN_TO_MODIFY) return "revise";
+  cancelled(ctx);
+  return "stop";
 }
 
 function pathSlots(input: InitWorkspaceInput, partial: boolean): PathSlot[] {
@@ -155,7 +164,7 @@ async function resolveInitConflict(
   result: Extract<OperationResult, { status: "conflict" }>,
   input: InitWorkspaceInput,
   ctx: WizardContext,
-): Promise<"retry" | "stop" | "preview-only"> {
+): Promise<"retry" | "revise" | "stop" | "preview-only"> {
   if (result.conflicts.length === 1 && result.conflicts[0].code === "unmanaged-agents-file") {
     const choice = await ctx.ui.select(
       "Existing AGENTS.md is human-owned",
@@ -173,7 +182,7 @@ async function resolveInitConflict(
     return "stop";
   }
   ctx.ui.notify(renderOperationResult(result), "error");
-  return "stop";
+  return requestRevision(ctx);
 }
 
 async function chooseControlPath(ctx: WizardContext): Promise<string | undefined> {
@@ -214,36 +223,34 @@ async function collectCustomInput(ctx: WizardContext): Promise<InitWorkspaceInpu
       "release-checkpoint",
     ],
   }, null, 2);
-  const source = await ctx.ui.editor(
-    "Custom topology JSON: define every repository path, role, visibility, ownership, and relationship",
-    prefill,
-  );
-  if (source === undefined) return undefined;
-  try {
-    const parsed = JSON.parse(source) as {
-      repositories?: InitWorkspaceInput["customRepositories"];
-      relationships?: InitWorkspaceInput["customRelationships"];
-      focusAreas?: InitWorkspaceInput["focusAreas"];
-    };
-    return {
-      topologyProfile: "custom",
-      customRepositories: parsed.repositories,
-      customRelationships: parsed.relationships,
-      focusAreas: parsed.focusAreas,
-      controlPath: parsed.repositories?.find((repository) => repository.kind === "control")?.path,
-    };
-  } catch (error) {
-    ctx.ui.notify(`Custom topology JSON is invalid: ${error instanceof Error ? error.message : String(error)}`, "error");
-    return undefined;
+  let draft = prefill;
+  for (;;) {
+    const source = await ctx.ui.editor(
+      "Custom topology JSON: define every repository path, role, visibility, ownership, and relationship",
+      draft,
+    );
+    if (source === undefined) return undefined;
+    try {
+      const parsed = JSON.parse(source) as {
+        repositories?: InitWorkspaceInput["customRepositories"];
+        relationships?: InitWorkspaceInput["customRelationships"];
+        focusAreas?: InitWorkspaceInput["focusAreas"];
+      };
+      return {
+        topologyProfile: "custom",
+        customRepositories: parsed.repositories,
+        customRelationships: parsed.relationships,
+        focusAreas: parsed.focusAreas,
+        controlPath: parsed.repositories?.find((repository) => repository.kind === "control")?.path,
+      };
+    } catch (error) {
+      ctx.ui.notify(`Custom topology JSON is invalid: ${error instanceof Error ? error.message : String(error)}`, "error");
+      draft = source;
+    }
   }
 }
 
-export async function runInitWizard(ctx: WizardContext): Promise<void> {
-  if (!requireUI(ctx, "/control:init")) return;
-  ctx.ui.notify(
-    "Built-in profiles keep control private, code delivery-only and potentially public, tests/plans/evidence in control, dependencies one-way, focused commits pushed to a verified PR after explicit task assignment, and merge/release human-controlled. The paper profile adds one independent private LaTeX repository per paper.",
-    "info",
-  );
+async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | void> {
   const profileChoice = await ctx.ui.select("Choose a topology", [PROFILE_CONTROL_CODE, PROFILE_WITH_LATEX, PROFILE_CUSTOM]);
   if (profileChoice === undefined) {
     cancelled(ctx);
@@ -310,10 +317,11 @@ export async function runInitWizard(ctx: WizardContext): Promise<void> {
   if (preview.status === "conflict") {
     const resolution = await resolveInitConflict(preview, input, ctx);
     if (resolution === "stop") return;
+    if (resolution === "revise") return "revise";
     preview = await service.init(input, { dryRun: true });
     if (preview.status !== "applied") {
       ctx.ui.notify(renderOperationResult(preview), preview.status === "conflict" ? "error" : "warning");
-      return;
+      return (await requestRevision(ctx)) === "revise" ? "revise" : undefined;
     }
     if (resolution === "preview-only") {
       ctx.ui.notify(previewText(preview), "info");
@@ -322,7 +330,7 @@ export async function runInitWizard(ctx: WizardContext): Promise<void> {
   }
   if (preview.status !== "applied") {
     ctx.ui.notify(renderOperationResult(preview), "warning");
-    return;
+    return (await requestRevision(ctx)) === "revise" ? "revise" : undefined;
   }
 
   ctx.ui.notify(previewText(preview), "info");
@@ -331,11 +339,21 @@ export async function runInitWizard(ctx: WizardContext): Promise<void> {
     "Create only the listed local repositories/Git metadata and write the shown CONTROL_INDEX.json plus managed AGENTS block? No remote, commit, push, merge, or release will run.",
   );
   if (!approved) {
-    cancelled(ctx);
-    return;
+    return (await requestRevision(ctx)) === "revise" ? "revise" : undefined;
   }
   const applied = await service.init(input, { expectedPreviewToken: preview.summary.previewToken });
   ctx.ui.notify(renderOperationResult(applied), applied.status === "applied" ? "info" : "error");
+}
+
+export async function runInitWizard(ctx: WizardContext): Promise<void> {
+  if (!requireUI(ctx, "/control:init")) return;
+  ctx.ui.notify(
+    "Built-in profiles keep control private, code delivery-only and potentially public, tests/plans/evidence in control, dependencies one-way, focused commits pushed to a verified PR after explicit task assignment, and merge/release human-controlled. The paper profile adds one independent private LaTeX repository per paper.",
+    "info",
+  );
+  while (await runInitWizardAttempt(ctx) === "revise") {
+    ctx.ui.notify("Returning to initialization answers. Review the new preview before applying.", "info");
+  }
 }
 
 function currentPath(index: ControlIndex, controlRoot: string, id: string): string {
@@ -399,17 +417,17 @@ async function collectStructuredUpdate(
     return source === undefined ? undefined : { ...base, userRequirements: source.split(/\r?\n/).map((line) => line.trim()).filter(Boolean) };
   }
 
-  const source = await ctx.ui.editor(
-    "Structured update JSON (omit unaffected fields)",
-    JSON.stringify({ name: index.name }, null, 2),
-  );
-  if (source === undefined) return undefined;
-  try {
-    const parsed = JSON.parse(source) as UpdateWorkspaceInput;
-    return { ...parsed, controlPath: controlRoot, changeRequest: request };
-  } catch (error) {
-    ctx.ui.notify(`Structured update JSON is invalid: ${error instanceof Error ? error.message : String(error)}`, "error");
-    return undefined;
+  let draft = JSON.stringify({ name: index.name }, null, 2);
+  for (;;) {
+    const source = await ctx.ui.editor("Structured update JSON (omit unaffected fields)", draft);
+    if (source === undefined) return undefined;
+    try {
+      const parsed = JSON.parse(source) as UpdateWorkspaceInput;
+      return { ...parsed, controlPath: controlRoot, changeRequest: request };
+    } catch (error) {
+      ctx.ui.notify(`Structured update JSON is invalid: ${error instanceof Error ? error.message : String(error)}`, "error");
+      draft = source;
+    }
   }
 }
 
@@ -437,8 +455,7 @@ async function resolveUpdateConflicts(
   return drift.length + remotes.length === result.conflicts.length;
 }
 
-export async function runUpdateWizard(ctx: WizardContext, controlPath = ctx.cwd): Promise<void> {
-  if (!requireUI(ctx, "/control:update")) return;
+async function runUpdateWizardAttempt(ctx: WizardContext, controlPath: string): Promise<"revise" | void> {
   const service = new ControlWorkspaceService(ctx.cwd);
   const current = await service.status(controlPath);
   if (current.status !== "applied" || !current.summary.index) {
@@ -466,7 +483,7 @@ export async function runUpdateWizard(ctx: WizardContext, controlPath = ctx.cwd)
   }
   if (preview.status !== "applied") {
     ctx.ui.notify(renderOperationResult(preview), preview.status === "conflict" ? "error" : "warning");
-    return;
+    return (await requestRevision(ctx)) === "revise" ? "revise" : undefined;
   }
   ctx.ui.notify(`Before:\n${renderSummary(current.summary)}\n\nCandidate after:\n${previewText(preview)}`, "info");
   const approved = await ctx.ui.confirm(
@@ -474,9 +491,15 @@ export async function runUpdateWizard(ctx: WizardContext, controlPath = ctx.cwd)
     "Apply only the shown binding/index/managed-block changes and approved local git init actions? Removed bindings leave all disk data intact.",
   );
   if (!approved) {
-    cancelled(ctx);
-    return;
+    return (await requestRevision(ctx)) === "revise" ? "revise" : undefined;
   }
   const applied = await service.update(input, { expectedPreviewToken: preview.summary.previewToken });
   ctx.ui.notify(renderOperationResult(applied), applied.status === "applied" ? "info" : "error");
+}
+
+export async function runUpdateWizard(ctx: WizardContext, controlPath = ctx.cwd): Promise<void> {
+  if (!requireUI(ctx, "/control:update")) return;
+  while (await runUpdateWizardAttempt(ctx, controlPath) === "revise") {
+    ctx.ui.notify("Returning to update answers. Current state will be shown again before a new preview.", "info");
+  }
 }
