@@ -704,6 +704,15 @@ human decisions:
   verify it, make focused commits on a feature branch, push them, and open a PR
   after validation.
 
+The generated rules treat a plan, plugin, or larger capability as multiple
+reviewable delivery slices rather than one oversized PR. Before implementation,
+planned tasks are mapped to PR slices with explicit dependencies and scoped
+checks. A medium-sized plan normally targets five product PRs within a four-to-
+six range; each PR normally carries three to eight focused commits and one
+primary review concern. Verification is added incrementally, while the final
+slice is reserved for integration, hardening, documentation, and end-to-end
+evidence.
+
 The PR is the automation boundary. New remotes, broader scope, destructive
 operations, merge, and release still require an explicit human decision.
 Multi-repository changes use separate commits and cross-reference the product
