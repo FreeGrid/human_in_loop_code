@@ -594,11 +594,13 @@ The code repository moved to ../my-app-v2; update its binding.
 Structured tools never open dialogs. They return one of `applied`,
 `needs_input`, or `conflict`; Pi should ask only the returned questions and then
 retry. The `init` and `update` tools run sequentially so concurrent tool calls
-cannot race one another.
+in one Pi process cannot race one another. Byte-for-byte index and AGENTS
+preconditions also reject stale writes from another process.
 
 The slash commands are the Human-UI fallback. `/control:init` shows the full
 profile contract, collects exact directories and one optional exception note,
-renders the candidate index, and asks for final confirmation before any write.
+renders the candidate index plus the exact managed AGENTS content, and asks for
+final confirmation before any write.
 `/control:update` prints the current state first, retains the user's original
 change description, clarifies only the affected category, prints before and
 after state, and asks for final confirmation. Cancelling either command leaves
@@ -627,7 +629,8 @@ Select `custom` only when those contracts cannot express the requested
 topology. Custom initialization requires an explicit directory, role,
 visibility, ownership list, and relationships for every repository. Circular
 or protected runtime dependencies and multiple owners for the same artifact
-class are rejected deterministically.
+class are rejected deterministically. Custom input may also choose from the
+shipped AGENTS focus modules; built-in profiles retain the complete V1 set.
 
 ### Authoritative files and safe updates
 
@@ -650,7 +653,10 @@ no markers requires an explicit append choice. Manual changes inside the block
 produce drift; update requires an explicit preserve, regenerate, or hand-merge
 decision and never silently repairs it. Moving a repository or changing its
 remote is handled through update with an explicit new path or accepted remote
-identity. Removing a binding never deletes its directory or Git data.
+identity. A new path is still checked against the previously recorded remote,
+and doctor re-renders the canonical managed block to detect an index edited
+without its corresponding AGENTS update. Removing a binding never deletes its
+directory or Git data.
 
 ### Directory and Git safety
 
@@ -665,7 +671,9 @@ all existing files remain byte-for-byte unchanged. Preview includes the exact
 path and explains that `git init` creates no remote, commit, or push. Symlink
 aliases, relative traversal above the workspace parent, duplicate/nested
 bindings, invalid Git metadata, and paths that appear or change after preview
-are rejected. File persistence uses temporary files, exclusive creation,
+are rejected. Status, doctor, and update re-check persisted relative paths
+before Git inspection, so an edited path cannot escape the workspace boundary
+or cause an outside repository to be inspected. File persistence uses temporary files, exclusive creation,
 post-write parsing/doctor checks, and cross-file rollback. Bootstrap rollback
 removes only unchanged metadata or repositories created by the current
 operation; externally changed content is preserved and reported.
