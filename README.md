@@ -603,13 +603,17 @@ renders the candidate index plus the exact managed AGENTS content, and asks for
 final confirmation before any write. The confirmation is bound to that exact
 preview: if a bound path, Git remote, index, or AGENTS file changes while the
 dialog is open, the operation returns a `preview-stale` conflict and writes
-nothing. Run the command again to review the refreshed state.
+nothing. Rejecting the preview offers a choice to return to the answers and
+render a revised preview, or cancel without changes. Invalid custom JSON is
+returned to the editor with its draft preserved. Run the command again after a
+`preview-stale` conflict to review the refreshed external state.
 `/control:update` prints the current state first, retains the user's original
 change description, clarifies only the affected category, prints before and
-after state, and asks for final confirmation. Cancelling either command leaves
-the workspace unchanged. Print/JSON modes without a Human UI refuse the
-interactive commands; an RPC host may use them only if it implements Pi's
-extension UI request/response protocol.
+after state, and asks for final confirmation. It offers the same return-to-edit
+choice and shows current state again before the revised preview. Cancelling
+either command leaves the workspace unchanged. Print/JSON modes without a Human
+UI refuse the interactive commands; an RPC host may use them only if it
+implements Pi's extension UI request/response protocol.
 
 ### Built-in profiles
 
