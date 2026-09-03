@@ -10,6 +10,7 @@ import { AGENTS_TEMPLATE_VERSION, CONTROL_INDEX_SCHEMA } from "./types.js";
 const HASH_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const PORTABLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const SAFE_RUNTIME_DIRECTIONS = new Set(["control->code"]);
+const SECRET_VALUE_PATTERN = /(?:\b(?:api[_-]?key|access[_-]?token|password|secret)\s*[:=]\s*\S+|\bgh[pousr]_[A-Za-z0-9_]{20,}|\bsk-[A-Za-z0-9_-]{20,})/i;
 const KNOWN_FOCUS_AREAS = new Set([
   "repository-boundary",
   "artifact-ownership",
@@ -135,6 +136,9 @@ export function validateControlIndex(index: ControlIndex): ValidationIssue[] {
   if (!index.name.trim()) {
     issue(issues, "error", "empty-workspace-name", "name must not be empty.", { path: "$.name" });
   }
+  if (SECRET_VALUE_PATTERN.test(index.name)) {
+    issue(issues, "error", "secret-like-value", "Workspace name appears to contain a secret and cannot be stored in the index.", { path: "$.name" });
+  }
   if (index.agents.template_version !== AGENTS_TEMPLATE_VERSION) {
     issue(issues, "error", "unsupported-agents-template", `Only ${AGENTS_TEMPLATE_VERSION} is supported.`);
   }
@@ -174,6 +178,9 @@ export function validateControlIndex(index: ControlIndex): ValidationIssue[] {
 
     if (!repository.role.trim()) {
       issue(issues, "error", "empty-repository-role", "Repository role must not be empty.", { repositoryId: repository.id });
+    }
+    if (SECRET_VALUE_PATTERN.test(repository.role)) {
+      issue(issues, "error", "secret-like-value", `Repository ${repository.id} role appears to contain a secret.`, { repositoryId: repository.id });
     }
     if (repository.owns.length === 0) {
       issue(issues, "error", "empty-repository-ownership", "Every repository must own at least one declared artifact class.", { repositoryId: repository.id });
@@ -264,6 +271,9 @@ export function validateControlIndex(index: ControlIndex): ValidationIssue[] {
     if (relationship.type === "custom" && !relationship.description?.trim()) {
       issue(issues, "error", "missing-custom-relationship-description", "A custom relationship requires a non-empty description.");
     }
+    if (relationship.description && SECRET_VALUE_PATTERN.test(relationship.description)) {
+      issue(issues, "error", "secret-like-value", "Relationship description appears to contain a secret.");
+    }
   }
 
   if (index.topology_profile !== "custom" && controls.length === 1 && codes.length === 1) {
@@ -287,6 +297,17 @@ export function validateControlIndex(index: ControlIndex): ValidationIssue[] {
       issue(issues, "error", "forbidden-runtime-direction", `Runtime dependency direction ${direction} is not allowed in V1.`);
     }
   }
+  index.policies.user_requirements.forEach((requirement, requirementIndex) => {
+    if (SECRET_VALUE_PATTERN.test(requirement)) {
+      issue(
+        issues,
+        "error",
+        "secret-like-value",
+        "User-specific requirements appear to contain a credential; remove the value before storing the index.",
+        { path: `$.policies.user_requirements[${requirementIndex}]` },
+      );
+    }
+  });
   if (new Set(index.policies.runtime_dependency_direction).size !== index.policies.runtime_dependency_direction.length) {
     issue(issues, "error", "duplicate-runtime-direction", "runtime_dependency_direction contains a duplicate entry.");
   }
