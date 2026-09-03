@@ -81,6 +81,7 @@ async function install(snapshot: Snapshot): Promise<"created" | "updated" | "unc
     // link(2) gives exclusive-create semantics for every initially absent file;
     // rename would overwrite a writer that appeared after preflight.
     await link(snapshot.tempPath, snapshot.write.path);
+    snapshot.applied = true;
     await unlink(snapshot.tempPath);
   } else {
     const current = await readFile(snapshot.write.path);
@@ -88,8 +89,8 @@ async function install(snapshot: Snapshot): Promise<"created" | "updated" | "unc
       throw new Error(`File changed during apply and will not be overwritten: ${snapshot.write.path}`);
     }
     await rename(snapshot.tempPath, snapshot.write.path);
+    snapshot.applied = true;
   }
-  snapshot.applied = true;
   return snapshot.existed ? "updated" : "created";
 }
 
