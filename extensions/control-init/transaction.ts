@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { chmod, link, lstat, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, open, readFile, rename, unlink, writeFile, type FileHandle } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+
+const TRANSACTION_LOCK_FILENAME = ".control-init.transaction.lock";
 
 export interface TransactionWrite {
   path: string;
@@ -23,8 +25,17 @@ interface Snapshot {
   applied: boolean;
 }
 
+interface TransactionLock {
+  path: string;
+  handle: FileHandle;
+}
+
 function notFound(error: unknown): boolean {
   return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "ENOENT";
+}
+
+function alreadyExists(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: string }).code === "EEXIST";
 }
 
 function sameBytes(left: Buffer, right: Buffer): boolean {
@@ -68,6 +79,64 @@ async function snapshot(write: TransactionWrite): Promise<Snapshot> {
     tempPath: join(parent, `.${basename(write.path)}.control-init-${process.pid}-${randomBytes(8).toString("hex")}.tmp`),
     applied: false,
   };
+}
+
+async function assertSnapshotCurrent(snapshot: Snapshot): Promise<void> {
+  let current: Buffer | undefined;
+  try {
+    const stats = await lstat(snapshot.write.path);
+    if (stats.isSymbolicLink() || !stats.isFile()) {
+      throw new Error(`Transaction target changed type after preflight: ${snapshot.write.path}`);
+    }
+    current = await readFile(snapshot.write.path);
+  } catch (error) {
+    if (!notFound(error)) throw error;
+  }
+  if (snapshot.existed !== (current !== undefined)
+    || (snapshot.content !== undefined && current !== undefined && !sameBytes(snapshot.content, current))) {
+    throw new Error(`File changed while waiting for the workspace transaction lock: ${snapshot.write.path}`);
+  }
+}
+
+async function acquireTransactionLocks(writes: TransactionWrite[]): Promise<TransactionLock[]> {
+  const locks: TransactionLock[] = [];
+  const parents = [...new Set(writes.map((write) => dirname(write.path)))].sort();
+  try {
+    for (const parent of parents) {
+      const path = join(parent, TRANSACTION_LOCK_FILENAME);
+      if (writes.some((write) => write.path === path)) {
+        throw new Error(`Transaction target uses the reserved lock path: ${path}`);
+      }
+      let handle: FileHandle;
+      try {
+        handle = await open(path, "wx", 0o600);
+      } catch (error) {
+        if (alreadyExists(error)) {
+          throw new Error(`Another control-init transaction is already in progress: ${parent}`);
+        }
+        throw error;
+      }
+      locks.push({ path, handle });
+      await handle.writeFile(`${JSON.stringify({ pid: process.pid, started_at: new Date().toISOString() })}\n`, "utf8");
+    }
+    return locks;
+  } catch (error) {
+    await releaseTransactionLocks(locks);
+    throw error;
+  }
+}
+
+async function releaseTransactionLocks(locks: TransactionLock[]): Promise<void> {
+  const errors: unknown[] = [];
+  for (const lock of [...locks].reverse()) {
+    try {
+      await lock.handle.close();
+      await unlink(lock.path);
+    } catch (error) {
+      if (!notFound(error)) errors.push(error);
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, "Unable to release the control-init transaction lock");
 }
 
 async function install(snapshot: Snapshot): Promise<"created" | "updated" | "unchanged"> {
@@ -138,9 +207,14 @@ export async function writeWorkspaceTransaction(
   if (unique.size !== writes.length) throw new Error("A transaction cannot write the same path twice");
 
   const snapshots: Snapshot[] = [];
+  let locks: TransactionLock[] = [];
   try {
-    // Complete every read-only preflight before staging or installing content.
+    // Complete every read-only preflight before creating even a transient lock.
     for (const write of writes) snapshots.push(await snapshot(write));
+    locks = await acquireTransactionLocks(writes);
+    // A competing process may have committed between preflight and lock
+    // acquisition. Re-check beneath the lock before staging any content.
+    for (const item of snapshots) await assertSnapshotCurrent(item);
     const files: TransactionResult["files"] = [];
     for (const item of snapshots) {
       files.push({ path: item.write.path, action: await install(item) });
@@ -162,5 +236,6 @@ export async function writeWorkspaceTransaction(
     throw error;
   } finally {
     await Promise.all(snapshots.map((item) => cleanTemp(item).catch(() => undefined)));
+    await releaseTransactionLocks(locks);
   }
 }
