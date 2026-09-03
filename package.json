@@ -23,6 +23,7 @@
   },
   "files": [
     "extensions/collaborating-agents/**/*",
+    "extensions/task-plan/**/*",
     "skills/collaborating-agents-system/**/*",
     "examples/subagents/**/*",
     "README.md",
@@ -34,7 +35,8 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/collaborating-agents/index.ts"
+      "./extensions/collaborating-agents/index.ts",
+      "./extensions/task-plan/index.ts"
     ],
     "skills": [
       "./skills"
