@@ -140,7 +140,15 @@ async function collectBootstrapAuthorization(
 function previewText(result: Extract<OperationResult, { status: "applied" }>): string {
   const index = result.summary.index;
   const indexPreview = index ? `\n\nCONTROL_INDEX.json preview:\n${JSON.stringify(index, null, 2)}` : "";
-  return `${renderOperationResult(result)}${indexPreview}`;
+  const agents = result.summary.agentsPreview;
+  const agentsPreview = !agents
+    ? ""
+    : agents.before === null
+      ? `\n\nAGENTS.md managed block to append:\n${agents.after}`
+      : agents.before === agents.after
+        ? `\n\nAGENTS.md managed block (unchanged):\n${agents.after}`
+        : `\n\nAGENTS.md managed block before:\n${agents.before}\n\nAGENTS.md managed block after:\n${agents.after}`;
+  return `${renderOperationResult(result)}${indexPreview}${agentsPreview}`;
 }
 
 async function resolveInitConflict(
@@ -191,6 +199,20 @@ async function collectCustomInput(ctx: WizardContext): Promise<InitWorkspaceInpu
       { from: "control", to: "code", type: "manages" },
       { from: "control", to: "code", type: "tests" },
     ],
+    focusAreas: [
+      "repository-boundary",
+      "artifact-ownership",
+      "dirty-worktree-preservation",
+      "test-acceptance-authority",
+      "human-gates",
+      "commit-pr-traceability",
+      "privacy-boundaries",
+      "destructive-operations",
+      "delegation-review",
+      "long-term-recovery",
+      "context-evidence",
+      "release-checkpoint",
+    ],
   }, null, 2);
   const source = await ctx.ui.editor(
     "Custom topology JSON: define every repository path, role, visibility, ownership, and relationship",
@@ -198,11 +220,16 @@ async function collectCustomInput(ctx: WizardContext): Promise<InitWorkspaceInpu
   );
   if (source === undefined) return undefined;
   try {
-    const parsed = JSON.parse(source) as { repositories?: InitWorkspaceInput["customRepositories"]; relationships?: InitWorkspaceInput["customRelationships"] };
+    const parsed = JSON.parse(source) as {
+      repositories?: InitWorkspaceInput["customRepositories"];
+      relationships?: InitWorkspaceInput["customRelationships"];
+      focusAreas?: InitWorkspaceInput["focusAreas"];
+    };
     return {
       topologyProfile: "custom",
       customRepositories: parsed.repositories,
       customRelationships: parsed.relationships,
+      focusAreas: parsed.focusAreas,
       controlPath: parsed.repositories?.find((repository) => repository.kind === "control")?.path,
     };
   } catch (error) {

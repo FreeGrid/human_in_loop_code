@@ -211,9 +211,9 @@ function predictFileAction(source: string | null, output: string): "created" | "
 }
 
 function controlEnteredPath(input: InitWorkspaceInput, index: ControlIndex): string {
-  if (input.controlPath?.trim()) return input.controlPath;
   const customControl = input.customRepositories?.find((repository) => repository.id === index.control_repository);
   if (customControl?.path?.trim()) return customControl.path;
+  if (input.controlPath?.trim()) return input.controlPath;
   throw new Error("The control repository path is missing");
 }
 
@@ -225,6 +225,19 @@ async function normalizeIndexPaths(
   const inputs = configuredInputPaths(input, index);
   const controlResolution = await resolveCanonicalPath(controlEnteredPath(input, index), cwd);
   const controlRoot = controlResolution.canonicalPath;
+  const customControl = input.customRepositories?.find((repository) => repository.id === index.control_repository);
+  if (customControl?.path?.trim() && input.controlPath?.trim()) {
+    const explicitControl = await resolveCanonicalPath(input.controlPath, cwd);
+    if (explicitControl.canonicalPath !== controlRoot) {
+      throw Object.assign(new Error("controlPath and the custom control repository path resolve to different directories."), {
+        conflictDetail: {
+          code: "conflicting-control-paths",
+          message: "controlPath and the custom control repository path resolve to different directories; supply one canonical control binding.",
+          choices: ["use-custom-control-path", "use-control-path"],
+        } satisfies ConflictDetail,
+      });
+    }
+  }
   const absolutePaths = new Map<string, string>();
 
   for (const repository of index.repositories) {
@@ -239,22 +252,30 @@ async function normalizeIndexPaths(
   const nesting = nestedPathConflict([...absolutePaths].map(([id, path]) => ({ id, path })));
   if (nesting) throw Object.assign(new Error(nesting.message), { conflictDetail: nesting });
 
+  const normalizedIndex: ControlIndex = {
+    ...index,
+    repositories: index.repositories.map((repository) => ({
+      ...repository,
+      path: (() => {
+        const target = absolutePaths.get(repository.id)!;
+        const entered = inputs.get(repository.id)!;
+        return isAbsolute(entered) && !isWithin(dirname(controlRoot), target)
+          ? target
+          : portablePath(controlRoot, target);
+      })(),
+    })),
+  };
+  const normalizedIssues = validateControlIndex(normalizedIndex).filter((entry) => entry.severity === "error");
+  if (normalizedIssues.length > 0) {
+    throw Object.assign(new Error("Normalized workspace paths violate the control index contract."), {
+      validationIssues: normalizedIssues,
+    });
+  }
+
   return {
     controlRoot,
     absolutePaths,
-    index: {
-      ...index,
-      repositories: index.repositories.map((repository) => ({
-        ...repository,
-        path: (() => {
-          const target = absolutePaths.get(repository.id)!;
-          const entered = inputs.get(repository.id)!;
-          return isAbsolute(entered) && !isWithin(dirname(controlRoot), target)
-            ? target
-            : portablePath(controlRoot, target);
-        })(),
-      })),
-    },
+    index: normalizedIndex,
   };
 }
 
@@ -308,8 +329,6 @@ async function remoteDriftConflicts(
   for (const repository of after.repositories) {
     const previous = before.repositories.find((entry) => entry.id === repository.id);
     if (!previous || accepted.has(repository.id)) continue;
-    const samePath = absoluteBinding(controlRoot, previous.path) === absoluteBinding(controlRoot, repository.path);
-    if (!samePath) continue;
     const current = statuses.find((entry) => entry.id === repository.id)!;
     const sameRemote = previous.git_remote === null && current.gitRemote === null
       ? true
@@ -333,6 +352,7 @@ async function prepareWorkspace(
   existingIndex?: ControlIndex,
   acceptManagedBlockDrift = false,
   acceptedRemoteIds: string[] = [],
+  expectedIndexSource?: string,
 ): Promise<PreparedWorkspace | OperationResult> {
   const resolved = resolveTemplate(input, { cwd });
   if (resolved.status === "needs_input") return { status: "needs_input", questions: resolved.questions, summary: { profile: resolved.profile } };
@@ -345,6 +365,15 @@ async function prepareWorkspace(
     const detail = typeof error === "object" && error !== null && "conflictDetail" in error
       ? (error as { conflictDetail: ConflictDetail }).conflictDetail
       : undefined;
+    const validationIssues = typeof error === "object" && error !== null && "validationIssues" in error
+      ? (error as { validationIssues: ValidationIssue[] }).validationIssues
+      : undefined;
+    if (validationIssues) {
+      return {
+        status: "conflict",
+        conflicts: validationIssues.map((entry) => ({ code: entry.code, message: entry.message, path: entry.path })),
+      };
+    }
     return detail ? { status: "conflict", conflicts: [detail] } : conflict(error);
   }
 
@@ -364,6 +393,17 @@ async function prepareWorkspace(
   }
   if (mode === "update" && onDiskIndex === null) {
     return { status: "conflict", conflicts: [{ code: "index-missing", message: `${CONTROL_INDEX_FILENAME} does not exist; initialize the workspace first.`, path: indexPath }] };
+  }
+  if (mode === "update" && expectedIndexSource !== undefined && onDiskIndex !== expectedIndexSource) {
+    return {
+      status: "conflict",
+      conflicts: [{
+        code: "index-changed-during-update",
+        message: `${CONTROL_INDEX_FILENAME} changed after the update snapshot was read; inspect current state and retry.`,
+        path: indexPath,
+        choices: ["inspect-current-state", "retry-update"],
+      }],
+    };
   }
 
   const bootstrap = await bootstrapConflicts(normalized.absolutePaths, input);
@@ -425,6 +465,10 @@ async function prepareWorkspace(
   });
   const statuses = await repositoryStatuses(index, normalized.controlRoot);
   const summary = summaryFor(index, statuses);
+  summary.agentsPreview = {
+    before: currentBlock.status === "valid" || currentBlock.status === "drift" ? currentBlock.block : null,
+    after: artifacts.managedBlock,
+  };
   summary.changes = bootstrap.plans.flatMap((plan) => {
     if (plan.action === "create-and-init") return [`Create ${plan.targetPath}, then run local git init (no remote, commit, or push).`];
     if (plan.action === "initialize-existing") return [`Preserve all existing files in ${plan.targetPath}, then run local git init (no remote, commit, or push).`];
@@ -452,13 +496,14 @@ async function prepareWorkspace(
 }
 
 async function verifyInstalledWorkspace(prepared: PreparedWorkspace): Promise<void> {
-  const parsed = parseControlIndexJson(await readFile(prepared.indexPath, "utf8"));
-  const agents = await readFile(prepared.agentsPath, "utf8");
-  const managed = inspectManagedBlock(agents, parsed.agents.managed_block_hash);
-  if (managed.status !== "valid") throw new Error(`Post-write AGENTS verification failed: ${managed.status}`);
-  const statuses = await repositoryStatuses(parsed, prepared.controlRoot);
-  const invalid = statuses.find((status) => status.gitRoot !== status.absolutePath);
-  if (invalid) throw new Error(`Post-write Git root verification failed for ${invalid.id}: ${invalid.absolutePath}`);
+  const report = await new ControlWorkspaceService(prepared.controlRoot).doctor(prepared.controlRoot);
+  if (!report.ok) {
+    const errors = report.issues
+      .filter((entry) => entry.severity === "error")
+      .map((entry) => `${entry.code}: ${entry.message}`)
+      .join("; ");
+    throw new Error(`Post-write doctor verification failed: ${errors}`);
+  }
 }
 
 async function rollbackBootstraps(records: RepositoryBootstrapRecord[]): Promise<string[]> {
@@ -508,7 +553,7 @@ async function applyPrepared(prepared: PreparedWorkspace, createIndex: boolean):
   }
 }
 
-function pathsFromExisting(index: ControlIndex, controlRoot: string): Pick<InitWorkspaceInput, "controlPath" | "codePath" | "latexRepositories" | "customRepositories" | "customRelationships"> {
+function pathsFromExisting(index: ControlIndex, controlRoot: string): Pick<InitWorkspaceInput, "controlPath" | "codePath" | "latexRepositories" | "customRepositories" | "customRelationships" | "focusAreas"> {
   if (index.topology_profile === "custom") {
     return {
       controlPath: controlRoot,
@@ -522,6 +567,7 @@ function pathsFromExisting(index: ControlIndex, controlRoot: string): Pick<InitW
         gitRemote: repository.git_remote,
       })),
       customRelationships: index.relationships.map((relationship) => ({ ...relationship })),
+      focusAreas: [...index.agents.focus_areas],
     };
   }
   const code = index.repositories.find((repository) => repository.kind === "code")!;
@@ -535,10 +581,15 @@ function pathsFromExisting(index: ControlIndex, controlRoot: string): Pick<InitW
 }
 
 function mergeUpdateInput(input: UpdateWorkspaceInput, index: ControlIndex, controlRoot: string): InitWorkspaceInput {
-  const previous = pathsFromExisting(index, controlRoot);
+  const targetProfile = input.topologyProfile ?? index.topology_profile;
+  const sameProfileFamily = (targetProfile === "custom") === (index.topology_profile === "custom");
+  const previous: Partial<InitWorkspaceInput> = sameProfileFamily
+    ? pathsFromExisting(index, controlRoot)
+    : { controlPath: controlRoot };
+  if (targetProfile === "control-code") previous.latexRepositories = [];
   return {
     ...previous,
-    topologyProfile: input.topologyProfile ?? index.topology_profile,
+    topologyProfile: targetProfile,
     workspaceId: input.workspaceId ?? index.workspace_id,
     name: input.name ?? index.name,
     userRequirements: input.userRequirements ?? index.policies.user_requirements,
@@ -549,6 +600,7 @@ function mergeUpdateInput(input: UpdateWorkspaceInput, index: ControlIndex, cont
     ...(input.latexRepositories !== undefined ? { latexRepositories: input.latexRepositories } : {}),
     ...(input.customRepositories !== undefined ? { customRepositories: input.customRepositories } : {}),
     ...(input.customRelationships !== undefined ? { customRelationships: input.customRelationships } : {}),
+    ...(input.focusAreas !== undefined ? { focusAreas: input.focusAreas } : {}),
   };
 }
 
@@ -581,8 +633,19 @@ export class ControlWorkspaceService {
       return conflict(error);
     }
     if (!("index" in prepared)) return prepared;
-    if (options.dryRun || input.agentsExistingStrategy === "preview-only") {
+    if (options.dryRun) {
       return { status: "applied", summary: prepared.summary };
+    }
+    if (input.agentsExistingStrategy === "preview-only") {
+      return {
+        status: "conflict",
+        conflicts: [{
+          code: "preview-only-no-apply",
+          message: "Preview-only was selected, so initialization was not applied.",
+          choices: ["inspect-preview", "append-managed-block-and-apply"],
+        }],
+        summary: prepared.summary,
+      };
     }
     return applyPrepared(prepared, true);
   }
@@ -601,7 +664,17 @@ export class ControlWorkspaceService {
     }
     try {
       const index = parseControlIndexJson(source);
-      const statuses = await repositoryStatuses(index, root);
+      const inspected = await this.inspectPersistedRepositories(index, root);
+      if (inspected.issues.some((entry) => entry.severity === "error")) {
+        return {
+          status: "conflict",
+          conflicts: inspected.issues
+            .filter((entry) => entry.severity === "error")
+            .map((entry) => ({ code: entry.code, message: entry.message, path: entry.path })),
+          summary: summaryFor(index, inspected.statuses),
+        };
+      }
+      const statuses = inspected.statuses;
       const summary = summaryFor(index, statuses);
       const agents = await readOptional(join(root, AGENTS_FILENAME));
       if (agents === null) summary.incomplete?.push(`${AGENTS_FILENAME} is missing.`);
@@ -620,25 +693,28 @@ export class ControlWorkspaceService {
     try {
       root = await this.resolveControlRoot(controlPath);
     } catch (error) {
-      return { ok: false, issues: [issue("error", "invalid-control-path", error instanceof Error ? error.message : String(error))], summary: {} };
+      return { status: "conflict", ok: false, issues: [issue("error", "invalid-control-path", error instanceof Error ? error.message : String(error))], summary: {} };
     }
     const indexPath = join(root, CONTROL_INDEX_FILENAME);
     const agentsPath = join(root, AGENTS_FILENAME);
     const source = await readOptional(indexPath);
     if (source === null) {
-      return { ok: false, issues: [issue("error", "index-missing", `${CONTROL_INDEX_FILENAME} is missing.`, indexPath)], summary: {} };
+      return { status: "conflict", ok: false, issues: [issue("error", "index-missing", `${CONTROL_INDEX_FILENAME} is missing.`, indexPath)], summary: {} };
     }
     let index: ControlIndex;
     try {
       index = parseControlIndexJson(source);
     } catch (error) {
-      return { ok: false, issues: [issue("error", "invalid-control-index", error instanceof Error ? error.message : String(error), indexPath)], summary: {} };
+      return { status: "conflict", ok: false, issues: [issue("error", "invalid-control-index", error instanceof Error ? error.message : String(error), indexPath)], summary: {} };
     }
-    const statuses = await repositoryStatuses(index, root);
-    const issues = [...validateControlIndex(index)];
+    const inspected = await this.inspectPersistedRepositories(index, root);
+    const statuses = inspected.statuses;
+    const issues = [...validateControlIndex(index), ...inspected.issues];
+    const unsafeRepositoryIds = new Set(inspected.issues.map((entry) => entry.repositoryId).filter((id): id is string => Boolean(id)));
     const nesting = nestedPathConflict(statuses.map((status) => ({ id: status.id, path: status.absolutePath })));
     if (nesting) issues.push(issue("error", nesting.code, nesting.message, nesting.path));
     for (const status of statuses) {
+      if (unsafeRepositoryIds.has(status.id)) continue;
       if (!status.exists) issues.push(issue("error", "repository-missing", `${status.id} path does not exist.`, status.absolutePath, status.id));
       else if (!status.gitRoot) issues.push(issue("error", "not-git-repository", `${status.id} is not a Git repository.`, status.absolutePath, status.id));
       else if (status.gitRoot !== status.absolutePath) issues.push(issue("error", "nested-git-binding", `${status.id} resolves inside ${status.gitRoot}.`, status.absolutePath, status.id));
@@ -654,8 +730,22 @@ export class ControlWorkspaceService {
     else {
       const block = inspectManagedBlock(agents, index.agents.managed_block_hash);
       if (block.status !== "valid") issues.push(issue("error", `agents-${block.status}`, block.status === "invalid" ? block.message : `Managed AGENTS block is ${block.status}.`, agentsPath));
+      try {
+        const canonical = renderAgentsArtifacts(index);
+        if (canonical.index.agents.managed_block_hash !== index.agents.managed_block_hash) {
+          issues.push(issue(
+            "error",
+            "agents-index-mismatch",
+            "The managed AGENTS block hash does not match the canonical content rendered from the current index.",
+            agentsPath,
+          ));
+        }
+      } catch (error) {
+        issues.push(issue("error", "agents-render-failed", error instanceof Error ? error.message : String(error), agentsPath));
+      }
     }
-    return { ok: !issues.some((entry) => entry.severity === "error"), issues, summary: summaryFor(index, statuses) };
+    const ok = !issues.some((entry) => entry.severity === "error");
+    return { status: ok ? "applied" : "conflict", ok, issues, summary: summaryFor(index, statuses) };
   }
 
   async update(input: UpdateWorkspaceInput, options: OperationOptions = {}): Promise<OperationResult> {
@@ -673,6 +763,27 @@ export class ControlWorkspaceService {
     } catch (error) {
       return conflict(error, "invalid-control-index");
     }
+    const persisted = await this.inspectPersistedRepositories(current, root);
+    const unsafeIds = new Set(persisted.issues.map((entry) => entry.repositoryId).filter((id): id is string => Boolean(id)));
+    if (unsafeIds.size > 0) {
+      const explicitlyRepaired = [...unsafeIds].every((id) => {
+        const repository = current.repositories.find((entry) => entry.id === id);
+        if (repository?.kind === "code") return input.codePath !== undefined;
+        if (repository?.kind === "latex") return input.latexRepositories?.some((entry) => entry.id === id) === true;
+        return input.customRepositories?.some((entry) => entry.id === id && entry.path !== undefined) === true;
+      });
+      if (!explicitlyRepaired) {
+        return {
+          status: "conflict",
+          conflicts: persisted.issues.map((entry) => ({
+            code: entry.code,
+            message: `${entry.message} Supply an explicit safe replacement path for this repository before updating.`,
+            path: entry.path,
+          })),
+          summary: summaryFor(current, persisted.statuses),
+        };
+      }
+    }
 
     const hasStructuredChange = [
       input.topologyProfile,
@@ -683,6 +794,7 @@ export class ControlWorkspaceService {
       input.latexRepositories,
       input.customRepositories,
       input.customRelationships,
+      input.focusAreas,
       input.acceptManagedBlockDrift,
       input.acceptRemoteIdentityChanges,
     ].some((value) => value !== undefined);
@@ -696,7 +808,7 @@ export class ControlWorkspaceService {
             : "Describe what changed in the control workspace.",
           kind: "repositories",
         }],
-        summary: summaryFor(current, await repositoryStatuses(current, root)),
+        summary: summaryFor(current, persisted.statuses),
       };
     }
 
@@ -710,6 +822,7 @@ export class ControlWorkspaceService {
         current,
         input.acceptManagedBlockDrift === true,
         input.acceptRemoteIdentityChanges ?? [],
+        source,
       );
     } catch (error) {
       return conflict(error);
@@ -722,8 +835,80 @@ export class ControlWorkspaceService {
     if (input.agentsExistingStrategy === "preview-only") {
       prepared.summary.changes.push("Preview only: no repository or file mutation was authorized.");
     }
-    if (options.dryRun || input.agentsExistingStrategy === "preview-only") return { status: "applied", summary: prepared.summary };
+    if (options.dryRun) return { status: "applied", summary: prepared.summary };
+    if (input.agentsExistingStrategy === "preview-only") {
+      return {
+        status: "conflict",
+        conflicts: [{
+          code: "preview-only-no-apply",
+          message: "Preview-only was selected, so the workspace update was not applied.",
+          choices: ["inspect-preview", "apply-managed-update"],
+        }],
+        summary: prepared.summary,
+      };
+    }
     return applyPrepared(prepared, false);
+  }
+
+  private async inspectPersistedRepositories(
+    index: ControlIndex,
+    controlRoot: string,
+  ): Promise<{ statuses: RepositoryStatus[]; issues: ValidationIssue[] }> {
+    const statuses: RepositoryStatus[] = [];
+    const issues: ValidationIssue[] = [];
+    const workspaceParent = dirname(controlRoot);
+    for (const repository of index.repositories) {
+      let resolution;
+      try {
+        resolution = await resolveCanonicalPath(repository.path, controlRoot);
+      } catch (error) {
+        issues.push(issue(
+          "error",
+          "invalid-repository-path",
+          error instanceof Error ? error.message : String(error),
+          repository.path,
+          repository.id,
+        ));
+        statuses.push({
+          id: repository.id,
+          kind: repository.kind,
+          configuredPath: repository.path,
+          absolutePath: absoluteBinding(controlRoot, repository.path),
+          exists: false,
+          gitRoot: null,
+          branch: null,
+          dirty: null,
+          gitRemote: null,
+          remoteMatches: null,
+        });
+        continue;
+      }
+      if (!isAbsolute(repository.path)
+        && (!isWithin(workspaceParent, resolution.lexicalPath) || !isWithin(workspaceParent, resolution.canonicalPath))) {
+        issues.push(issue(
+          "error",
+          "relative-path-boundary-escape",
+          `${repository.id} uses a relative path that escapes the control workspace parent. Use an explicit absolute path for a special location.`,
+          repository.path,
+          repository.id,
+        ));
+        statuses.push({
+          id: repository.id,
+          kind: repository.kind,
+          configuredPath: repository.path,
+          absolutePath: resolution.canonicalPath,
+          exists: resolution.exists,
+          gitRoot: null,
+          branch: null,
+          dirty: null,
+          gitRemote: null,
+          remoteMatches: null,
+        });
+        continue;
+      }
+      statuses.push(await repositoryStatus(repository, controlRoot));
+    }
+    return { statuses, issues };
   }
 
   private async resolveControlRoot(controlPath?: string): Promise<string> {

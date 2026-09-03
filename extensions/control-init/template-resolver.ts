@@ -222,6 +222,18 @@ function selectProfile(input: InitWorkspaceInput): TemplateResolution | Topology
   const hasLatex = (input.latexRepositories?.length ?? 0) > 0;
   const explicit = input.topologyProfile;
 
+  if (input.focusAreas !== undefined && (explicit ? explicit !== "custom" : !hasCustom)) {
+    return {
+      status: "conflict",
+      profile: explicit,
+      conflicts: [{
+        code: "builtin-focus-customization",
+        message: "Built-in profiles use the complete V1 focus set; select custom to choose focus modules explicitly.",
+        choices: ["use-built-in-focus-set", "use-custom-profile"],
+      }],
+    };
+  }
+
   if (explicit && explicit !== "custom" && hasCustom) {
     return {
       status: "conflict",
@@ -349,7 +361,9 @@ function buildCustomIndex(
     policies: defaultPolicies(input.userRequirements ?? []),
     agents: {
       template_version: AGENTS_TEMPLATE_VERSION,
-      focus_areas: getBuiltInProfile("control-code").focus_areas,
+      focus_areas: input.focusAreas === undefined
+        ? getBuiltInProfile("control-code").focus_areas
+        : [...input.focusAreas],
       managed_block_hash: managedBlockHash,
     },
   };

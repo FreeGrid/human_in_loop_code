@@ -40,6 +40,7 @@ export const ControlInitParameters = Type.Object({
   workspaceId: Type.Optional(Type.String()),
   name: Type.Optional(Type.String()),
   userRequirements: Type.Optional(Type.Array(Type.String())),
+  focusAreas: Type.Optional(Type.Array(Type.String({ description: "Known AGENTS focus module name; custom topology only" }))),
   customRepositories: Type.Optional(Type.Array(CustomRepositorySchema)),
   customRelationships: Type.Optional(Type.Array(RelationshipSchema)),
   agentsExistingStrategy: Type.Optional(StringEnum(["append-managed-block", "preview-only"] as const)),

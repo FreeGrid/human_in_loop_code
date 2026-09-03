@@ -92,6 +92,8 @@ export interface InitWorkspaceInput {
   workspaceId?: string;
   name?: string;
   userRequirements?: string[];
+  /** Explicit focus-module selection; accepted only for custom topologies. */
+  focusAreas?: string[];
   customRepositories?: CustomRepositoryInput[];
   customRelationships?: RepositoryRelationship[];
   agentsExistingStrategy?: AgentsExistingStrategy;
@@ -153,6 +155,11 @@ export interface OperationSummary {
   incomplete?: string[];
   changes?: string[];
   index?: ControlIndex;
+  /** Exact marker-bounded content used by Human-UI previews. */
+  agentsPreview?: {
+    before: string | null;
+    after: string;
+  };
 }
 
 export type OperationResult =
@@ -161,6 +168,7 @@ export type OperationResult =
   | { status: "conflict"; conflicts: ConflictDetail[]; summary?: OperationSummary };
 
 export interface DoctorReport {
+  status: "applied" | "conflict";
   ok: boolean;
   issues: ValidationIssue[];
   summary: OperationSummary;
