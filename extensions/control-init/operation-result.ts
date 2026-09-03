@@ -77,10 +77,8 @@ export function renderDoctorReport(report: DoctorReport): string {
 export function toolResponse(result: OperationResult | DoctorReport): {
   content: Array<{ type: "text"; text: string }>;
   details: Record<string, unknown>;
-  isError?: boolean;
 } {
   const isDoctor = "ok" in result;
   const text = isDoctor ? renderDoctorReport(result) : renderOperationResult(result);
-  const isError = isDoctor ? !result.ok : result.status === "conflict";
-  return { content: [{ type: "text", text }], details: result as unknown as Record<string, unknown>, ...(isError ? { isError: true } : {}) };
+  return { content: [{ type: "text", text }], details: result as unknown as Record<string, unknown> };
 }
