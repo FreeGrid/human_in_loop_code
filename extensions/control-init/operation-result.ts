@@ -25,6 +25,25 @@ export function renderSummary(summary: OperationSummary): string {
   if (summary.repositories?.length) {
     lines.push("Repositories:", ...summary.repositories.map(renderRepository));
   }
+  if (summary.index) {
+    lines.push(
+      "Repository contracts:",
+      ...summary.index.repositories.map((repository) =>
+        `- ${repository.id}: ${repository.role}; owns ${repository.owns.join(", ")}`
+      ),
+      "Relationships:",
+      ...(summary.index.relationships.length
+        ? summary.index.relationships.map((relationship) => `- ${relationship.from} ${relationship.type} ${relationship.to}`)
+        : ["- none"]),
+      "Policies:",
+      `- runtime dependencies: ${summary.index.policies.runtime_dependency_direction.join(", ")}`,
+      `- dirty worktree: ${summary.index.policies.dirty_worktree}`,
+      `- task activation: ${summary.index.policies.task_activation}`,
+      `- Git workflow: ${summary.index.policies.agent_git_workflow}`,
+      `- merge/release: ${summary.index.policies.merge_and_release}`,
+      `- user requirements: ${summary.index.policies.user_requirements.length ? summary.index.policies.user_requirements.join(" | ") : "none"}`,
+    );
+  }
   if (summary.files?.length) {
     lines.push("Files:", ...summary.files.map((file) => `- ${file.action}: ${file.path}`));
   }

@@ -77,11 +77,16 @@ async function install(snapshot: Snapshot): Promise<"created" | "updated" | "unc
   await writeFile(snapshot.tempPath, desired, { flag: "wx", mode: snapshot.mode ?? 0o600 });
   if (snapshot.mode !== undefined) await chmod(snapshot.tempPath, snapshot.mode);
 
-  if (snapshot.write.createOnly) {
-    // link(2) gives exclusive-create semantics; rename would overwrite a racing writer.
+  if (!snapshot.existed) {
+    // link(2) gives exclusive-create semantics for every initially absent file;
+    // rename would overwrite a writer that appeared after preflight.
     await link(snapshot.tempPath, snapshot.write.path);
     await unlink(snapshot.tempPath);
   } else {
+    const current = await readFile(snapshot.write.path);
+    if (!snapshot.content || !sameBytes(current, snapshot.content)) {
+      throw new Error(`File changed during apply and will not be overwritten: ${snapshot.write.path}`);
+    }
     await rename(snapshot.tempPath, snapshot.write.path);
   }
   snapshot.applied = true;

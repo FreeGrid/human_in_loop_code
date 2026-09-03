@@ -154,16 +154,19 @@ function warningsFromStatuses(statuses: RepositoryStatus[]): string[] {
   for (const status of statuses) {
     if (status.dirty) warnings.push(`${status.id} has a dirty worktree; unrelated changes must be preserved.`);
     if (status.gitRemote === null) warnings.push(`${status.id} has no Git remote configured.`);
+    if (status.remoteMatches === false) warnings.push(`${status.id} Git remote differs from the recorded identity.`);
   }
   return warnings;
 }
 
 function incompleteFromStatuses(statuses: RepositoryStatus[]): string[] {
   return statuses.flatMap((status) => {
-    if (!status.exists) return [`${status.id} directory does not exist.`];
-    if (!status.gitRoot) return [`${status.id} is not a Git repository.`];
-    if (status.gitRoot !== status.absolutePath) return [`${status.id} is nested in Git root ${status.gitRoot}.`];
-    return [];
+    const incomplete: string[] = [];
+    if (!status.exists) incomplete.push(`${status.id} directory does not exist.`);
+    else if (!status.gitRoot) incomplete.push(`${status.id} is not a Git repository.`);
+    else if (status.gitRoot !== status.absolutePath) incomplete.push(`${status.id} is nested in Git root ${status.gitRoot}.`);
+    if (status.gitRemote === null) incomplete.push(`${status.id} has no remote identity yet.`);
+    return incomplete;
   });
 }
 
@@ -599,7 +602,14 @@ export class ControlWorkspaceService {
     try {
       const index = parseControlIndexJson(source);
       const statuses = await repositoryStatuses(index, root);
-      return { status: "applied", summary: summaryFor(index, statuses) };
+      const summary = summaryFor(index, statuses);
+      const agents = await readOptional(join(root, AGENTS_FILENAME));
+      if (agents === null) summary.incomplete?.push(`${AGENTS_FILENAME} is missing.`);
+      else {
+        const block = inspectManagedBlock(agents, index.agents.managed_block_hash);
+        if (block.status !== "valid") summary.warnings?.push(`Managed AGENTS block is ${block.status}; run control_workspace_doctor before updating.`);
+      }
+      return { status: "applied", summary };
     } catch (error) {
       return conflict(error, "invalid-control-index");
     }
@@ -626,6 +636,8 @@ export class ControlWorkspaceService {
     }
     const statuses = await repositoryStatuses(index, root);
     const issues = [...validateControlIndex(index)];
+    const nesting = nestedPathConflict(statuses.map((status) => ({ id: status.id, path: status.absolutePath })));
+    if (nesting) issues.push(issue("error", nesting.code, nesting.message, nesting.path));
     for (const status of statuses) {
       if (!status.exists) issues.push(issue("error", "repository-missing", `${status.id} path does not exist.`, status.absolutePath, status.id));
       else if (!status.gitRoot) issues.push(issue("error", "not-git-repository", `${status.id} is not a Git repository.`, status.absolutePath, status.id));
