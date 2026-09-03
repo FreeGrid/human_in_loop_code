@@ -676,9 +676,11 @@ before Git inspection, so an edited path cannot escape the workspace boundary
 or cause an outside repository to be inspected. File persistence uses temporary
 files, exclusive creation, a cross-process `.control-init.transaction.lock`,
 post-write parsing/doctor checks, and cross-file rollback. The lock is removed
-on normal success or failure; after an abrupt process termination, confirm that
-no control-init operation is running before manually removing a leftover lock
-and rerunning doctor. Bootstrap rollback
+on normal success or failure. If the authoritative files were applied and
+verified but lock cleanup alone fails, the result remains `applied` and carries
+a recovery warning instead of falsely reporting that the write failed. After an
+abrupt process termination, confirm that no control-init operation is running
+before manually removing a leftover lock and rerunning doctor. Bootstrap rollback
 removes only unchanged metadata or repositories created by the current
 operation; externally changed content is preserved and reported.
 
