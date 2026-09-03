@@ -334,7 +334,7 @@ export async function runInitWizard(ctx: WizardContext): Promise<void> {
     cancelled(ctx);
     return;
   }
-  const applied = await service.init(input);
+  const applied = await service.init(input, { expectedPreviewToken: preview.summary.previewToken });
   ctx.ui.notify(renderOperationResult(applied), applied.status === "applied" ? "info" : "error");
 }
 
@@ -477,6 +477,6 @@ export async function runUpdateWizard(ctx: WizardContext, controlPath = ctx.cwd)
     cancelled(ctx);
     return;
   }
-  const applied = await service.update(input);
+  const applied = await service.update(input, { expectedPreviewToken: preview.summary.previewToken });
   ctx.ui.notify(renderOperationResult(applied), applied.status === "applied" ? "info" : "error");
 }
