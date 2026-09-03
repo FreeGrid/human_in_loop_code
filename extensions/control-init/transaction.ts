@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { chmod, link, lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 
 export interface TransactionWrite {
@@ -31,7 +31,10 @@ function sameBytes(left: Buffer, right: Buffer): boolean {
 
 async function snapshot(write: TransactionWrite): Promise<Snapshot> {
   const parent = dirname(write.path);
-  await mkdir(parent, { recursive: true });
+  const parentStats = await lstat(parent);
+  if (parentStats.isSymbolicLink() || !parentStats.isDirectory()) {
+    throw new Error(`Transaction parent must be a real directory: ${parent}`);
+  }
   let content: Buffer | undefined;
   let mode: number | undefined;
   try {
