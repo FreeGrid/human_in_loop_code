@@ -160,6 +160,8 @@ export interface OperationSummary {
     before: string | null;
     after: string;
   };
+  /** Opaque compare token used by Human-UI preview/apply handoff. */
+  previewToken?: string;
 }
 
 export type OperationResult =

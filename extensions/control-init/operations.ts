@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { renderAgentsArtifacts } from "./agents-template.js";
@@ -35,6 +36,8 @@ export const AGENTS_FILENAME = "AGENTS.md";
 export interface OperationOptions {
   /** Build and validate the exact candidate without performing bootstrap or writes. */
   dryRun?: boolean;
+  /** Exact opaque token returned by the immediately preceding Human-UI preview. */
+  expectedPreviewToken?: string;
 }
 
 interface PreparedWorkspace {
@@ -141,7 +144,9 @@ async function repositoryStatus(repository: RepositoryBinding, controlRoot: stri
     branch: inspection.branch,
     dirty: inspection.dirty,
     gitRemote: inspection.remote,
-    remoteMatches: remotesMatch(repository.git_remote, inspection.remote),
+    remoteMatches: repository.git_remote === null
+      ? inspection.remote === null ? null : false
+      : inspection.remote === null ? false : remotesMatch(repository.git_remote, inspection.remote),
   };
 }
 
@@ -227,6 +232,19 @@ function applyConflict(error: unknown): OperationResult {
 function predictFileAction(source: string | null, output: string): "created" | "updated" | "unchanged" {
   if (source === null) return "created";
   return source === output ? "unchanged" : "updated";
+}
+
+function previewToken(prepared: PreparedWorkspace): string {
+  const source = JSON.stringify({
+    index: prepared.index,
+    agentsOutput: prepared.agentsOutput,
+    indexSource: prepared.indexSource,
+    agentsOriginal: prepared.agentsOriginal,
+    repositories: prepared.summary.repositories,
+    files: prepared.summary.files,
+    changes: prepared.summary.changes,
+  });
+  return `sha256:${createHash("sha256").update(source, "utf8").digest("hex")}`;
 }
 
 function controlEnteredPath(input: InitWorkspaceInput, index: ControlIndex): string {
@@ -538,7 +556,14 @@ async function applyPrepared(prepared: PreparedWorkspace, createIndex: boolean):
   const records: RepositoryBootstrapRecord[] = [];
   try {
     for (const plan of prepared.bootstrapPlans) records.push(await executeRepositoryBootstrap(plan));
-    prepared.index = await applyRepositoryRemotes(prepared.index, prepared.controlRoot);
+    const refreshedIndex = await applyRepositoryRemotes(prepared.index, prepared.controlRoot);
+    const changedRemote = refreshedIndex.repositories.find((repository) =>
+      repository.git_remote !== prepared.index.repositories.find((entry) => entry.id === repository.id)?.git_remote
+    );
+    if (changedRemote) {
+      throw new Error(`Repository identity changed after preview for ${changedRemote.id}; inspect current state and retry.`);
+    }
+    prepared.index = refreshedIndex;
     const artifacts = renderAgentsArtifacts(prepared.index);
     prepared.index = artifacts.index;
     prepared.agentsOutput = applyManagedBlock(prepared.agentsSource, artifacts.managedBlock, {
@@ -654,6 +679,19 @@ export class ControlWorkspaceService {
       return conflict(error);
     }
     if (!("index" in prepared)) return prepared;
+    const currentPreviewToken = previewToken(prepared);
+    prepared.summary.previewToken = currentPreviewToken;
+    if (options.expectedPreviewToken !== undefined && options.expectedPreviewToken !== currentPreviewToken) {
+      return {
+        status: "conflict",
+        conflicts: [{
+          code: "preview-stale",
+          message: "Workspace state changed after the Human preview; inspect the refreshed preview before applying.",
+          choices: ["show-refreshed-preview", "cancel"],
+        }],
+        summary: prepared.summary,
+      };
+    }
     if (options.dryRun) {
       return { status: "applied", summary: prepared.summary };
     }
@@ -893,6 +931,19 @@ export class ControlWorkspaceService {
     ];
     if (input.agentsExistingStrategy === "preview-only") {
       prepared.summary.changes.push("Preview only: no repository or file mutation was authorized.");
+    }
+    const currentPreviewToken = previewToken(prepared);
+    prepared.summary.previewToken = currentPreviewToken;
+    if (options.expectedPreviewToken !== undefined && options.expectedPreviewToken !== currentPreviewToken) {
+      return {
+        status: "conflict",
+        conflicts: [{
+          code: "preview-stale",
+          message: "Workspace state changed after the Human preview; inspect the refreshed preview before applying.",
+          choices: ["show-refreshed-preview", "cancel"],
+        }],
+        summary: prepared.summary,
+      };
     }
     if (options.dryRun) return { status: "applied", summary: prepared.summary };
     if (input.agentsExistingStrategy === "preview-only") {
