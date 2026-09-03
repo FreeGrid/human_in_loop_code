@@ -103,6 +103,8 @@ export interface UpdateWorkspaceInput extends InitWorkspaceInput {
   changeRequest?: string;
   /** Required before replacing a manually changed managed AGENTS block. */
   acceptManagedBlockDrift?: boolean;
+  /** Repository IDs whose newly inspected remote identity the human accepted. */
+  acceptRemoteIdentityChanges?: string[];
 }
 
 export interface InputQuestion {

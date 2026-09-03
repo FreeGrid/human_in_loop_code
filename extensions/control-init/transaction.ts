@@ -6,6 +6,8 @@ export interface TransactionWrite {
   path: string;
   content: string;
   createOnly?: boolean;
+  /** Exact preflight bytes, or null when absence is required. */
+  expectedContent?: string | null;
 }
 
 export interface TransactionResult {
@@ -46,6 +48,16 @@ async function snapshot(write: TransactionWrite): Promise<Snapshot> {
     mode = stats.mode;
   } catch (error) {
     if (!notFound(error)) throw error;
+  }
+
+  if (write.expectedContent === null && content !== undefined) {
+    throw new Error(`File appeared after preview and will not be overwritten: ${write.path}`);
+  }
+  if (typeof write.expectedContent === "string") {
+    const expected = Buffer.from(write.expectedContent, "utf8");
+    if (content === undefined || !sameBytes(content, expected)) {
+      throw new Error(`File changed after preview and will not be overwritten: ${write.path}`);
+    }
   }
 
   return {

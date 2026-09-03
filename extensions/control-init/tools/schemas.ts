@@ -50,6 +50,7 @@ export const ControlUpdateParameters = Type.Object({
   ...ControlInitParameters.properties,
   changeRequest: Type.Optional(Type.String({ description: "The user's original description of the desired change" })),
   acceptManagedBlockDrift: Type.Optional(Type.Boolean({ description: "True only after the user chose to regenerate a manually changed managed block" })),
+  acceptRemoteIdentityChanges: Type.Optional(Type.Array(Type.String({ description: "Repository ID whose current remote identity the user explicitly accepted" }))),
 }, { additionalProperties: false });
 
 export const ControlLocationParameters = Type.Object({
