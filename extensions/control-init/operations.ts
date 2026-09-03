@@ -422,6 +422,11 @@ async function prepareWorkspace(
   });
   const statuses = await repositoryStatuses(index, normalized.controlRoot);
   const summary = summaryFor(index, statuses);
+  summary.changes = bootstrap.plans.flatMap((plan) => {
+    if (plan.action === "create-and-init") return [`Create ${plan.targetPath}, then run local git init (no remote, commit, or push).`];
+    if (plan.action === "initialize-existing") return [`Preserve all existing files in ${plan.targetPath}, then run local git init (no remote, commit, or push).`];
+    return [];
+  });
   summary.files = [
     { path: agentsPath, action: predictFileAction(agentsOriginal, agentsOutput) },
     { path: indexPath, action: mode === "init" ? "created" : predictFileAction(onDiskIndex, serializeControlIndex(index)) },
@@ -698,7 +703,10 @@ export class ControlWorkspaceService {
       return conflict(error);
     }
     if (!("index" in prepared)) return prepared;
-    prepared.summary.changes = describeChanges(current, prepared.index, input.changeRequest);
+    prepared.summary.changes = [
+      ...describeChanges(current, prepared.index, input.changeRequest),
+      ...(prepared.summary.changes ?? []),
+    ];
     if (input.agentsExistingStrategy === "preview-only") {
       prepared.summary.changes.push("Preview only: no repository or file mutation was authorized.");
     }
