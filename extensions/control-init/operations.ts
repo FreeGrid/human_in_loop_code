@@ -681,7 +681,12 @@ export class ControlWorkspaceService {
       return conflict(error, "invalid-control-path");
     }
     const indexPath = join(root, CONTROL_INDEX_FILENAME);
-    const source = await readOptional(indexPath);
+    let source: string | null;
+    try {
+      source = await readOptional(indexPath);
+    } catch (error) {
+      return conflict(error, "invalid-control-index-file");
+    }
     if (source === null) {
       return { status: "needs_input", questions: [{ id: "initialize", prompt: `${CONTROL_INDEX_FILENAME} is missing. Initialize this control workspace first.`, kind: "confirmation" }] };
     }
@@ -699,7 +704,12 @@ export class ControlWorkspaceService {
       }
       const statuses = inspected.statuses;
       const summary = summaryFor(index, statuses);
-      const agents = await readOptional(join(root, AGENTS_FILENAME));
+      let agents: string | null;
+      try {
+        agents = await readOptional(join(root, AGENTS_FILENAME));
+      } catch (error) {
+        return conflict(error, "invalid-agents-file");
+      }
       if (agents === null) summary.incomplete?.push(`${AGENTS_FILENAME} is missing.`);
       else {
         const block = inspectManagedBlock(agents, index.agents.managed_block_hash);
@@ -720,7 +730,17 @@ export class ControlWorkspaceService {
     }
     const indexPath = join(root, CONTROL_INDEX_FILENAME);
     const agentsPath = join(root, AGENTS_FILENAME);
-    const source = await readOptional(indexPath);
+    let source: string | null;
+    try {
+      source = await readOptional(indexPath);
+    } catch (error) {
+      return {
+        status: "conflict",
+        ok: false,
+        issues: [issue("error", "invalid-control-index-file", error instanceof Error ? error.message : String(error), indexPath)],
+        summary: {},
+      };
+    }
     if (source === null) {
       return { status: "conflict", ok: false, issues: [issue("error", "index-missing", `${CONTROL_INDEX_FILENAME} is missing.`, indexPath)], summary: {} };
     }
@@ -748,9 +768,17 @@ export class ControlWorkspaceService {
       if (status.dirty) issues.push(issue("warning", "dirty-worktree", `${status.id} has unrelated worktree changes that must be preserved.`, status.absolutePath, status.id));
       if (status.gitRemote === null) issues.push(issue("warning", "missing-remote", `${status.id} does not have a remote.`, status.absolutePath, status.id));
     }
-    const agents = await readOptional(agentsPath);
-    if (agents === null) issues.push(issue("error", "agents-missing", `${AGENTS_FILENAME} is missing.`, agentsPath));
-    else {
+    let agents: string | null = null;
+    try {
+      agents = await readOptional(agentsPath);
+    } catch (error) {
+      issues.push(issue("error", "invalid-agents-file", error instanceof Error ? error.message : String(error), agentsPath));
+    }
+    if (agents === null) {
+      if (!issues.some((entry) => entry.code === "invalid-agents-file")) {
+        issues.push(issue("error", "agents-missing", `${AGENTS_FILENAME} is missing.`, agentsPath));
+      }
+    } else {
       const block = inspectManagedBlock(agents, index.agents.managed_block_hash);
       if (block.status !== "valid") issues.push(issue("error", `agents-${block.status}`, block.status === "invalid" ? block.message : `Managed AGENTS block is ${block.status}.`, agentsPath));
       try {
@@ -778,7 +806,13 @@ export class ControlWorkspaceService {
     } catch (error) {
       return conflict(error, "invalid-control-path");
     }
-    const source = await readOptional(join(root, CONTROL_INDEX_FILENAME));
+    const indexPath = join(root, CONTROL_INDEX_FILENAME);
+    let source: string | null;
+    try {
+      source = await readOptional(indexPath);
+    } catch (error) {
+      return conflict(error, "invalid-control-index-file");
+    }
     if (source === null) return { status: "conflict", conflicts: [{ code: "index-missing", message: `${CONTROL_INDEX_FILENAME} is missing; initialize first.` }] };
     let current: ControlIndex;
     try {
