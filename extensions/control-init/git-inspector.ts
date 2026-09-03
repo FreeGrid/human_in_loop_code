@@ -85,8 +85,7 @@ export function redactRemoteUrl(remote: string | null | undefined): string | nul
 
   try {
     const parsed = new URL(value);
-    const isHttp = parsed.protocol === "http:" || parsed.protocol === "https:";
-    if (isHttp && (parsed.username || parsed.password)) {
+    if (parsed.username || parsed.password) {
       parsed.username = "redacted";
       parsed.password = "";
     }
