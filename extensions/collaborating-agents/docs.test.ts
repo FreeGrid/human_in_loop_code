@@ -24,8 +24,8 @@ function expectSessionInspectionDocs(content: string): void {
 }
 
 describe("collaborating-agents public docs", () => {
-  test("README documents subagent session inspection workflow and validation", () => {
-    const readme = readRepoFile("README.md");
+  test("plugin guide documents subagent session inspection workflow and validation", () => {
+    const readme = readRepoFile("extensions/collaborating-agents/README.md");
 
     expectSessionInspectionDocs(readme);
     expect(readme).toContain("bun test extensions/collaborating-agents/index.test.ts --test-name-pattern");
