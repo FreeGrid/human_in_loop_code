@@ -205,6 +205,25 @@ function conflict(error: unknown, code = "workspace-preflight-failed"): Operatio
   };
 }
 
+function applyConflict(error: unknown): OperationResult {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = /rollback was incomplete/i.test(message)
+    ? "workspace-rollback-incomplete"
+    : /changed during apply|changed after preview|already exists/i.test(message)
+      ? "concurrent-workspace-change"
+      : "workspace-apply-failed";
+  return {
+    status: "conflict",
+    conflicts: [{
+      code,
+      message,
+      choices: code === "workspace-rollback-incomplete"
+        ? ["run-doctor", "inspect-authoritative-files", "retry-after-repair"]
+        : ["run-doctor", "inspect-current-state", "retry"],
+    }],
+  };
+}
+
 function predictFileAction(source: string | null, output: string): "created" | "updated" | "unchanged" {
   if (source === null) return "created";
   return source === output ? "unchanged" : "updated";
@@ -647,7 +666,11 @@ export class ControlWorkspaceService {
         summary: prepared.summary,
       };
     }
-    return applyPrepared(prepared, true);
+    try {
+      return await applyPrepared(prepared, true);
+    } catch (error) {
+      return applyConflict(error);
+    }
   }
 
   async status(controlPath?: string): Promise<OperationResult> {
@@ -847,7 +870,11 @@ export class ControlWorkspaceService {
         summary: prepared.summary,
       };
     }
-    return applyPrepared(prepared, false);
+    try {
+      return await applyPrepared(prepared, false);
+    } catch (error) {
+      return applyConflict(error);
+    }
   }
 
   private async inspectPersistedRepositories(
