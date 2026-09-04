@@ -20,9 +20,8 @@ async function newPlan(pi: ExtensionAPI, args: string, ctx: ExtensionCommandCont
     ctx.ui.notify("没有创建 Plan。你可以直接输入 `/plan 我想做什么...`，也可以只输入 `/plan` 打开引导输入。", "info");
     return;
   }
-  const result = await new TaskPlanService(ctx.cwd, state).start(brief);
-  notify(ctx, result);
-  if (result.status === "created") queueDraftFollowUp(pi, "what_why", result.path);
+  ctx.ui.notify("收到。我会先用当前模型把需求概括成短文件名，再创建 Plan 并起草 What / Why。", "info");
+  queueNewPlanFollowUp(pi, brief);
 }
 
 async function collectPlanBrief(args: string, ctx: ExtensionCommandContext): Promise<string | undefined> {
@@ -113,6 +112,11 @@ async function abandon(args: string, ctx: ExtensionCommandContext, state: TaskPl
 
 async function run(ctx: ExtensionCommandContext, state: TaskPlanSessionState, fn: (service: TaskPlanService) => Promise<Parameters<typeof notify>[1]>) {
   return notify(ctx, await fn(new TaskPlanService(ctx.cwd, state)));
+}
+
+function queueNewPlanFollowUp(pi: ExtensionAPI, brief: string): void {
+  const instruction = `Start a new Harness Plan for this original request:\n\n${brief}\n\nBefore calling plan_start, summarize the original request into one concise descriptive title for the plan filename. Requirements for the title: capture the actual subject, not conversational filler; prefer 2 to 8 English words or roughly 4 to 18 Chinese characters; do not include numbering, file extensions, quotes, markdown, punctuation wrappers, or explanations. Call plan_start with the full original request as goal and the concise title as title. Draft the What / Why exactly as a normal /plan follow-up would, including Open Questions instead of blocking when information is missing, then submit it. Stop after submission; do not advance to Plan. Final user-facing reply requirements, in Chinese: start by saying you are their Plan assistant and what you just helped organize; show the generated section content (the generated What / Why content) in the reply so the user can review without opening the file; then show the saved file path; then explain both edit paths: they can tell you natural-language changes such as “把 X 加进去/范围缩小一点”, or manually edit the Markdown file and say “我改好了，检查一下”; finally state the exact next phrase “继续” and explain that it will approve this What / Why and start drafting the Plan. Do not mention internal tool names.`;
+  pi.sendMessage({ customType: "pi-plan-guided-draft", content: instruction, display: false }, { triggerTurn: true, deliverAs: "followUp" });
 }
 
 function queueDraftFollowUp(pi: ExtensionAPI, stage: string, path?: string): void {

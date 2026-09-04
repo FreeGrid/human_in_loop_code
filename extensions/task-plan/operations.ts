@@ -25,10 +25,10 @@ export interface TaskPlanSessionState {
 export class TaskPlanService {
   constructor(private readonly cwd: string, private readonly sessionState: TaskPlanSessionState = {}) {}
 
-  async start(goal: string): Promise<PlanOperationResult> {
+  async start(goal: string, titleOverride?: string): Promise<PlanOperationResult> {
     if (!goal.trim()) return validation("Plan goal is required", []);
     try {
-      const doc = await createPlanSkeleton(this.cwd, goal.trim());
+      const doc = await createPlanSkeleton(this.cwd, goal.trim(), titleOverride);
       this.sessionState.currentPlanPath = doc.path;
       return { ...ok("created", "Created Harness Plan skeleton", doc), snapshot: snapshot(doc, this.sessionState.binding) };
     } catch (error) {

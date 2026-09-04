@@ -134,14 +134,14 @@ export function slugify(input: string): string {
   return input.toLowerCase().normalize("NFKD").replace(/[^\p{Letter}\p{Number}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "plan";
 }
 
-export async function createPlanSkeleton(root: string, goal: string): Promise<PlanDocument> {
+export async function createPlanSkeleton(root: string, goal: string, titleOverride?: string): Promise<PlanDocument> {
   const legacy = await detectLegacyWorkspaceConflict(root);
   if (legacy.length) throw new Error(`Legacy planning workspace conflict: ${legacy.join(", ")}`);
   const unfinished = await findUnfinishedHarnessPlans(root);
   if (unfinished.length) throw new Error(`Unfinished Harness Plan already exists: ${unfinished.join(", ")}`);
   const sequence = await nextPlanSequence(root);
   const planId = `P${String(sequence).padStart(3, "0")}`;
-  const title = planTitleFromGoal(goal);
+  const title = titleOverride?.trim() || planTitleFromGoal(goal);
   const path = join(root, "plans", `${String(sequence).padStart(3, "0")}-${slugify(title)}.md`);
   await mkdir(dirname(path), { recursive: true });
   const fh = await open(path, "wx");
