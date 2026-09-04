@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { toolResponse } from "../operation-result.js";
 import { ControlWorkspaceService } from "../operations.js";
 import { resolveCanonicalPath, type CanonicalPathResolution } from "../path-binding.js";
@@ -87,7 +87,14 @@ export function registerControlWorkspaceInitTool(pi: ExtensionAPI, sessionState?
       if ("status" in prepared) return toolResponse(prepared);
       const result = await new ControlWorkspaceService(ctx.cwd).init(prepared);
       rememberAppliedControlPath(result, sessionState);
-      return toolResponse(result);
+      const response = toolResponse(result);
+      if (result.status === "applied") {
+        const control = result.summary.repositories?.find((repository) => repository.kind === "control");
+        if (control && resolve(control.absolutePath) !== resolve(ctx.cwd)) {
+          response.content[0].text += "\nNext action: run /control:enter to continue Pi from the new control repository.";
+        }
+      }
+      return response;
     },
   });
 }

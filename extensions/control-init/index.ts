@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { handleControlDoctor } from "./commands/doctor.js";
+import { handleControlEnter } from "./commands/enter.js";
 import { handleControlInit } from "./commands/init.js";
 import { handleControlStatus } from "./commands/status.js";
 import { handleControlUpdate } from "./commands/update.js";
@@ -20,6 +21,10 @@ export default function controlInitExtension(pi: ExtensionAPI): void {
   pi.registerCommand("control:init", {
     description: "Interactively initialize a template-first control workspace",
     handler: (args, ctx) => handleControlInit(args, ctx, sessionState),
+  });
+  pi.registerCommand("control:enter", {
+    description: "Continue Pi from the initialized control repository",
+    handler: (args, ctx) => handleControlEnter(args, ctx, sessionState),
   });
   pi.registerCommand("control:status", {
     description: "Read the current control workspace state",
