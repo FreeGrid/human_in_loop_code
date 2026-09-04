@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Made `/control:init` explain repository paths and profile defaults, show missing-path candidates clearly, reject nested control/code paths immediately, and expose an explicit apply action after preview.
 - Added a template-first control workspace extension with four Agent tools, four Human-UI commands, versioned repository bindings, managed `AGENTS.md` rules, deterministic doctor checks, and explicitly authorized local Git bootstrap.
 - Hardened control workspace remote redaction, rebind identity checks, revisable Human previews and preview identity, cross-process stale-write rejection and exclusive transaction locking, persisted path boundaries, canonical AGENTS verification, preview result semantics, and new-file rollback.
 - Clarified generated Git governance so plans and plugins are split into reviewable delivery-slice PRs instead of being treated as one oversized feature PR.

@@ -31,16 +31,25 @@ retry. The `init` and `update` tools run sequentially so concurrent tool calls
 in one Pi process cannot race one another. Byte-for-byte index and AGENTS
 preconditions also reject stale writes from another process.
 
-The slash commands are the Human-UI fallback. `/control:init` shows the full
-profile contract, collects exact directories and one optional exception note,
-renders the candidate index plus the exact managed AGENTS content, and asks for
-final confirmation before any write. The confirmation is bound to that exact
-preview: if a bound path, Git remote, index, or AGENTS file changes while the
-dialog is open, the operation returns a `preview-stale` conflict and writes
-nothing. Rejecting the preview offers a choice to return to the answers and
-render a revised preview, or cancel without changes. Invalid custom JSON is
-returned to the editor with its draft preserved. Run the command again after a
-`preview-stale` conflict to review the refreshed external state.
+The slash commands are the Human-UI fallback. `/control:init` explains that the
+control path is the private management repository rather than the parent folder
+for the whole workspace. It shows the selected control path, suggests a safe
+sibling code path, explains where relative paths resolve, and immediately
+rejects identical or nested control/code paths with both resolved paths shown.
+When a requested path is missing, the choice screen says whether similar
+existing directories were found and lists every candidate it offers; the
+currently bound repository is never suggested as a replacement.
+
+Before asking about exceptions, the wizard displays the selected profile's
+default ownership, privacy, dependency, approval, delivery, and delegation
+rules. It then renders the candidate index plus the exact managed AGENTS
+content. The final screen provides three explicit actions: apply the shown
+initialization, return to modify answers, or cancel without changes. Applying is
+bound to that exact preview: if a path, Git remote, index, or AGENTS file changes
+after rendering, the operation returns a `preview-stale` conflict and writes
+nothing. Invalid custom JSON is returned to the editor with its draft
+preserved. Run the command again after a `preview-stale` conflict to review the
+refreshed external state.
 `/control:update` prints the current state first, retains the user's original
 change description, clarifies only the affected category, prints before and
 after state, and asks for final confirmation. It offers the same return-to-edit
