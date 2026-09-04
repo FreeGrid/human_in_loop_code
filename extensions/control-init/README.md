@@ -145,11 +145,18 @@ deletes its directory or Git data.
 
 ## Directory and Git safety
 
-Every directory must be explicit. The extension does not scan the home folder
-or infer a code/paper directory from its name. A missing path triggers at most
-three similar candidates from the specified parent's direct children. A
-candidate is never adopted automatically. If none is correct, the exact
-canonical path must be approved before directory creation and local `git init`.
+Except for the documented name-only local-creation flow, every directory must
+be explicit. The extension never scans the home folder. A request to create a
+local workspace by base name authorizes exactly two deterministic, previously
+missing sibling paths under Pi's current directory: `<name>_control` and
+`<name>_code`. It never adopts a directory that already exists or appears while
+that creation is being prepared or applied.
+
+Custom, existing, and paper repository paths are never inferred from a name. A
+missing explicit path triggers at most three similar candidates from the
+specified parent's direct children, and a candidate is never adopted
+automatically. If none is correct, the exact canonical path must be approved
+before directory creation and local `git init`.
 
 An existing non-Git directory can be initialized in place after confirmation;
 all existing files remain byte-for-byte unchanged. Preview includes the exact
