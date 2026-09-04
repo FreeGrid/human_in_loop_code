@@ -48,14 +48,22 @@ The advanced custom topology retains its explicit JSON editor. Missing paths
 introduced by custom or paper-repository input still require exact-path
 authorization; any similar-directory choices are listed explicitly.
 
-After initialization succeeds, the extension keeps the initialized control
-repository as the active target for the rest of the current Pi session.
-`/control:status`, `/control:doctor`, `/control:update`, and their Agent-tool
-counterparts therefore work without repeating the path, even when quick setup
-created the repositories below Pi's starting directory. An explicit path always
-takes precedence. In a later Pi session, start Pi inside the control repository
-or pass its exact path; when no index exists at the resolved location, status
-asks for that path instead of incorrectly asking you to initialize again.
+After interactive initialization succeeds, Pi continues the current history in
+a session whose real working directory is the initialized control repository.
+This reloads Pi's general file and shell tools, project instructions, system
+prompt, and footer against the correct repository instead of merely redirecting
+control-init commands. If session persistence is disabled, the wizard cannot
+safely replace Pi's working directory and displays an exact `cd ... && pi`
+restart command instead.
+
+The extension also keeps the initialized control repository as the active
+control-init target for the current extension session. Agent-tool initialization
+and follow-up `/control:status`, `/control:doctor`, `/control:update` operations
+therefore remain coherent even when an in-turn session switch is unavailable.
+An explicit path always takes precedence. In a later Pi session, start Pi inside
+the control repository or pass its exact path; when no index exists at the
+resolved location, status asks for that path instead of incorrectly asking you
+to initialize again.
 
 Before asking about exceptions, the wizard displays the selected profile's
 default ownership, privacy, dependency, approval, delivery, and delegation
