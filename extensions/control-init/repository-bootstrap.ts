@@ -31,6 +31,7 @@ export interface RepositoryBootstrapConflict {
   status: "conflict";
   code:
     | "bootstrap-authorization-required"
+    | "bootstrap-target-exists"
     | "path-inside-git-worktree"
     | "invalid-git-metadata";
   message: string;
@@ -131,6 +132,16 @@ export async function planRepositoryBootstrap(
   const target = await resolveCanonicalPath(targetPath);
 
   if (target.exists) {
+    if (await authorizedPathMatches(target.canonicalPath, authorization.create)) {
+      return {
+        status: "conflict",
+        code: "bootstrap-target-exists",
+        message: "Directory was authorized for creation but already exists; refuse to adopt or modify it",
+        path: target.canonicalPath,
+        plannedAction: "create-and-init",
+        requiredAuthorization: "create",
+      };
+    }
     const inspection = await inspectGitRepository(target.canonicalPath);
     if (inspection.gitRoot === target.canonicalPath) {
       return {
