@@ -1,25 +1,23 @@
 # Human-in-the-Loop Toolkit for Pi
 
-This package adds three complementary extensions to the
-[Pi coding agent](https://github.com/badlogic/pi-mono): durable workspace
-governance, human-gated planning, and coordinated multi-agent execution.
+This package adds Pi extensions for durable workspace governance and
+coordinated multi-agent execution.
 
 The extensions can be used independently, but together they address a common
-problem: an agent can produce changes quickly while the reasons for the work,
-the boundaries between repositories, the human approval points, and the
-execution history remain implicit. This toolkit makes those decisions visible,
-reviewable, and recoverable.
+problem: an agent can produce changes quickly while repository boundaries,
+human approval points, and execution history remain implicit. This toolkit makes
+those decisions visible, reviewable, and recoverable.
 
-## The three layers
+## The two layers
 
 ```text
-repository boundaries       approved work                 coordinated execution
-    control-init       ->       task-plan       ->       collaborating-agents
+repository boundaries       coordinated execution
+    control-init       ->       collaborating-agents
 ```
 
-The arrows show the recommended sequence, not a runtime dependency. Installing
-the package enables all three extensions, and each extension remains useful on
-its own.
+The arrow shows the recommended sequence, not a runtime dependency. Installing
+the package enables both extensions, and each extension remains useful on its
+own.
 
 ### 1. Control Init: make ownership and boundaries durable
 
@@ -37,22 +35,7 @@ runs product work by itself.
 
 [Read the Control Init guide](extensions/control-init/README.md)
 
-### 2. Task Plan: turn a rough goal into approved work
-
-**Why it matters.** A plausible implementation plan is not the same thing as
-human authorization to execute it. Without explicit stages, scope and
-acceptance criteria tend to blur together, and long-range ideas prematurely
-become detailed tasks.
-
-**What it does.** Task Plan converts one goal into a reviewable `spec.md` →
-`plan.md` → `tasks.md` workflow. Human approval separates every stage;
-deterministic validation checks structure and dependencies; convergence repairs
-task quality without approving it. Only the `Current` horizon becomes tasks,
-and the extension does not execute those tasks.
-
-[Read the Task Plan guide](extensions/task-plan/README.md)
-
-### 3. Collaborating Agents: coordinate execution without losing control
+### 2. Collaborating Agents: coordinate execution without losing control
 
 **Why it matters.** Parallel and specialized Agents are useful only when their
 identity, messages, write ownership, and results remain observable. Otherwise,
@@ -69,9 +52,9 @@ configurable specialist roles.
 
 ## Installation
 
-Choose one source below. A version of this package that contains the complete
-toolkit enables all three extensions and the bundled
-`collaborating-agents-system` skill with one installation.
+Choose one source below. A version of this package that contains the current
+toolkit enables both extensions and the bundled `collaborating-agents-system`
+skill with one installation.
 
 ### Option 1: npm
 
@@ -115,11 +98,10 @@ pi config
 Confirm that the following are enabled:
 
 - `collaborating-agents`
-- `task-plan`
 - `control-init`
 - `collaborating-agents-system`
 
-If one of the three extensions is absent, the selected source predates that
+If one of the extensions is absent, the selected source predates that
 extension; install this repository's current Git source or local checkout.
 
 Press `Esc` to leave the configuration screen. Start a new Pi session after
@@ -129,15 +111,13 @@ installing or updating the package so the extensions and skill are reloaded.
 
 1. Run `/control:init` or ask Pi in natural language to initialize the named
    repositories. Review the complete preview before approving any write.
-2. Run `/plan:new <goal>`. Review and explicitly approve the spec, plan, and
-   current tasks one stage at a time.
-3. Explicitly assign approved work. Use `/subagent` or let an orchestrator use
+2. Explicitly assign approved work. Use `/subagent` or let an orchestrator use
    the `subagent` tool when delegation or context isolation is worthwhile.
-4. Use `/agents` to inspect active Agents, messages, and file reservations;
+3. Use `/agents` to inspect active Agents, messages, and file reservations;
    verify the result before accepting delivery.
 
-Control Init does not automatically start planning, and Task Plan does not
-automatically spawn Agents. Those boundaries are intentional human gates.
+Control Init does not automatically spawn Agents or run product work. Those
+boundaries are intentional human gates.
 
 ## Updating and removing
 
@@ -151,10 +131,9 @@ pi remove https://github.com/baochunli/pi-collaborating-agents
 pi remove /absolute/path/to/human_in_loop_code
 ```
 
-Use only the matching line. Removing the package disables its runtime
-extensions but does not delete plans, `CONTROL_INDEX.json`, managed `AGENTS.md`
-content, repositories, commits, or other durable artifacts created while using
-it.
+Use only the matching line. Removing the package disables its runtime extensions but does not delete
+`CONTROL_INDEX.json`, managed `AGENTS.md` content, repositories, commits, or
+other durable artifacts created while using it.
 
 ## Safety and compatibility
 
@@ -162,10 +141,10 @@ Pi extensions run with high local privileges. Review third-party source before
 installing it, keep repository paths explicit, inspect Human Gate previews, and
 review changes before committing or publishing them.
 
-Task Plan and Control Init were verified against
-`@mariozechner/pi-coding-agent@0.73.1`; Control Init requires Node.js `>=20.6.0`.
-See each extension guide for its precise safety boundary, compatibility notes,
-configuration, commands, and validation procedures.
+Control Init was verified against `@mariozechner/pi-coding-agent@0.73.1` and
+requires Node.js `>=20.6.0`. See each extension guide for its precise safety
+boundary, compatibility notes, configuration, commands, and validation
+procedures.
 
 ## License
 
