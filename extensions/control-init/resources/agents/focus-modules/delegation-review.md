@@ -1,0 +1,22 @@
+### Subagent delegation, continuity and independent review
+
+- Treat an independent subagent as both a professional work unit and a context-isolation unit. Code exploration, interface implementation, data verification, literature retrieval, experiment execution, writing, and review may be assigned to separate Agents so local details remain in local Sessions.
+- Before spawning or reusing an Agent, the Controller must assess whether delegation provides meaningful specialization, parallelism, review independence, or context isolation relative to its coordination cost. Briefly state the decision as `spawn:fresh` or `reuse:<affinity_key>` and give the reason.
+- Do not spawn a subagent for a small, local, low-risk task that the current Agent can complete cleanly without exhausting context or compromising independent review.
+- Use parallel Agents only when dependencies are satisfied, write scopes do not conflict, permissions and data boundaries allow it, and each result can be accepted independently. Shared designs, overlapping files, and strongly dependent tasks should first receive explicit interfaces and then proceed serially where necessary.
+- An `affinity_key` is a stable logical workstream identifier, not an assumed tool parameter. Record or communicate it through the task packet, run state, or assignment prompt when the runtime does not expose a first-class affinity field.
+- Fixes for the same finding, adjacent functionality in the same module, the same data pipeline, one experiment series, or one paper subsection normally belong to the same workstream and may reuse a familiar Implementer.
+- Reuse a live Agent or explicitly resume the same recoverable Session only when all of the following remain true:
+  - the Agent still has an execution role rather than a review or acceptance role;
+  - the new task has the same `affinity_key`;
+  - the previous task has been accepted by the declared acceptance authority;
+  - the plan, interface, data, permission, and relevant repository baselines remain valid;
+  - Context Health remains within its configured threshold;
+  - the Agent has no repeated failures or evidence of incorrect anchoring;
+  - the intended worktree and write scope can be acquired or switched safely.
+- When no numeric Context Health signal exists, assess it conservatively from remaining context capacity, compaction loss, ability to restate the current goal and baselines, repeated failures, and anchoring. Uncertainty on a high-risk task means using a fresh Agent.
+- Reuse is an efficiency optimization, not a source of authority. A task is not accepted merely because the previous Agent reports success.
+- Reviewer, Auditor, Reproducer, Phase-Gate, security review, and any explicitly independent verification must use a fresh Session that does not inherit the Implementer transcript. The same Session must not both implement and adjudicate the same finding.
+- If any reuse condition fails, create a short Workstream Handoff Capsule containing only accepted facts, current interfaces, relevant commits and artifacts, known risks, validation commands, and the next task; then start a fresh Agent.
+- Reuse an existing live Agent only through the available continuation mechanism. Resume a completed Session only when the runtime provides an explicit recoverable-session capability; otherwise start fresh rather than simulating reuse by copying a full transcript.
+- Keep detailed logs and local reasoning in the owning Session. Return only a structured result capsule with outcome, acceptance evidence, risks, open questions, artifact links, and the next decision.

@@ -1,0 +1,42 @@
+{
+  "id": "control-code-latex",
+  "repositories": {
+    "control": {
+      "kind": "control",
+      "role": "private planning, tests, documents, verification and release control",
+      "visibility": "private",
+      "owns": ["tests", "fixtures", "tools", "docs", "plans", "evidence", "release-records"]
+    },
+    "code": {
+      "kind": "code",
+      "role": "delivered product runtime",
+      "visibility": "private-now-may-open-source",
+      "owns": ["runtime", "runtime-required-resources"]
+    },
+    "latex": {
+      "kind": "latex",
+      "role": "paper-specific writing and submission materials only",
+      "visibility": "private",
+      "owns": ["manuscript", "bibliography", "paper-figures", "submission-materials"]
+    }
+  },
+  "relationships": [
+    { "from": "control", "to": "code", "type": "manages" },
+    { "from": "control", "to": "code", "type": "tests" }
+  ],
+  "latex_relationship": { "to": "code", "type": "paper-about" },
+  "focus_areas": [
+    "repository-boundary",
+    "artifact-ownership",
+    "dirty-worktree-preservation",
+    "test-acceptance-authority",
+    "human-gates",
+    "commit-pr-traceability",
+    "privacy-boundaries",
+    "destructive-operations",
+    "delegation-review",
+    "long-term-recovery",
+    "context-evidence",
+    "release-checkpoint"
+  ]
+}

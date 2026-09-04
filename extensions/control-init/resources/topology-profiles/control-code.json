@@ -1,0 +1,35 @@
+{
+  "id": "control-code",
+  "repositories": {
+    "control": {
+      "kind": "control",
+      "role": "private planning, tests, documents, verification and release control",
+      "visibility": "private",
+      "owns": ["tests", "fixtures", "tools", "docs", "plans", "evidence", "release-records"]
+    },
+    "code": {
+      "kind": "code",
+      "role": "delivered product runtime",
+      "visibility": "private-now-may-open-source",
+      "owns": ["runtime", "runtime-required-resources"]
+    }
+  },
+  "relationships": [
+    { "from": "control", "to": "code", "type": "manages" },
+    { "from": "control", "to": "code", "type": "tests" }
+  ],
+  "focus_areas": [
+    "repository-boundary",
+    "artifact-ownership",
+    "dirty-worktree-preservation",
+    "test-acceptance-authority",
+    "human-gates",
+    "commit-pr-traceability",
+    "privacy-boundaries",
+    "destructive-operations",
+    "delegation-review",
+    "long-term-recovery",
+    "context-evidence",
+    "release-checkpoint"
+  ]
+}
