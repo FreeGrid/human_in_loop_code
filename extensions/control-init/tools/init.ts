@@ -91,7 +91,11 @@ export function registerControlWorkspaceInitTool(pi: ExtensionAPI, sessionState?
       if (result.status === "applied") {
         const control = result.summary.repositories?.find((repository) => repository.kind === "control");
         if (control && resolve(control.absolutePath) !== resolve(ctx.cwd)) {
-          response.content[0].text += "\nNext action: run /control:enter to continue Pi from the new control repository.";
+          response.content[0].text += [
+            "",
+            `Required next step: run /control:enter ${control.absolutePath}`,
+            "The Human-in-the-Loop workflow must continue from the control repository.",
+          ].join("\n");
         }
       }
       return response;
