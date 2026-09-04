@@ -121,6 +121,7 @@ export async function findUnfinishedHarnessPlans(root: string): Promise<string[]
 
 export function planTitleFromGoal(input: string): string {
   let title = input.trim().replace(/\s+/g, " ");
+  title = title.replace(/^(?:\/plan(?::new)?|plan|计划|规划)\s*[:：-]?\s*/iu, "");
   title = title.replace(/^(?:请|麻烦|帮我|帮忙|需要|我需要|我要|我想|想|我们要|先)?\s*(?:给我|给(?:这个|这件事|这个事情)?|把(?:这个|这件事|这个事情)?)?\s*(?:写(?:一个|个|一下)?|做(?:一个|个|一下)?|弄(?:一个|个|一下)?|搞(?:一个|个|一下)?|实现(?:一个|个|一下)?|构建(?:一个|个|一下)?|规划(?:一个|个|一下)?|拆(?:一个|个|一下)?|设计(?:一个|个|一下)?)\s*/u, "");
   title = title.replace(/[。！？.!?；;：:，,、\s]+$/u, "").trim();
   return title || input.trim() || "Plan";
