@@ -24,8 +24,9 @@ export function validateSections(text: string): ValidationResult {
 }
 
 export function validateWhatWhy(markdown: string): ValidationResult {
-  const required = ["Goal", "Desired Outcome", "Scope", "In", "Out", "Constraints", "Why", "Success", "Non-Goals", "Open Questions"];
+  const required = ["Goal", "Desired Outcome", "Scope", "In", "Out", "Constraints", "Success", "Non-Goals", "Open Questions"];
   const issues = required.filter((h) => !new RegExp(`^#{3,4} ${escapeRegExp(h)}\\s*$`, "m").test(markdown)).map((h) => error("missing_what_why_field", `Missing What / Why heading: ${h}`));
+  if (/^#{1,6} Why\s*$/m.test(markdown)) issues.push(error("what_why_contains_why", "What / Why should not include a separate Why heading; fold rationale into Goal or Desired Outcome."));
   if (/\bT\d{3}\b/.test(markdown)) issues.push(error("what_why_contains_task_id", "What / Why must not contain Task IDs"));
   return result(issues);
 }
@@ -63,12 +64,19 @@ export function validatePlan(markdown: string, round: number): ValidationResult 
 export function validateTasks(markdown: string, currentRound: number, options: { requireCurrentOpen?: boolean; historicalCompleted?: boolean } = {}): ValidationResult {
   const issues: ValidationIssue[] = [];
   const tasks = parseTasks(markdown);
+  if (/^### T\+\d+\b/m.test(markdown)) issues.push(error("tasks_contains_horizon_group", "Tasks must be listed directly as T001/T002 stages, without a T+0 grouping block"));
   if (tasks.length === 0) issues.push(error("missing_tasks", "Tasks section must contain at least one Task"));
   const ids = new Set<string>();
   for (const task of tasks) {
     if (ids.has(task.id)) issues.push(error("duplicate_task_id", `Duplicate ${task.id}`));
     ids.add(task.id);
     for (const field of taskRequiredFields()) if (!new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(task.definition)) issues.push(error("missing_task_field", `${task.id} missing ${field}`));
+    if (task.round === currentRound) {
+      for (const field of ["Round", "Outcome", "Why", "Inputs", "Work", "Outputs"]) {
+        if (new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(task.definition)) issues.push(error("verbose_task_field", `${task.id} should not include ${field}; keep only Tasks, Acceptance, and Depends On`));
+      }
+    }
+    validateSubtaskMarkers(task.definition, task.id).forEach((issue) => issues.push(issue));
     if (task.round < 0) issues.push(error("invalid_task_round", `${task.id} has invalid Round`));
     if (!new RegExp(`^### ${task.id} — .+ \\[(?: |x|X)\\]$`, "m").test(task.definition)) issues.push(error("invalid_completion", `${task.id} must have a heading completion marker: ### ${task.id} — Title [ ] or [x]`));
     if (task.acceptanceItems.length < 1) issues.push(error("missing_acceptance_checkbox", `${task.id} Acceptance needs at least one checkbox`));
@@ -120,6 +128,17 @@ function dependencyCycleIssues(tasks: ReturnType<typeof parseTasks>): Validation
     visited.add(id);
   }
   for (const task of tasks) visit(task.id, []);
+  return issues;
+}
+
+function validateSubtaskMarkers(definition: string, taskId: string): ValidationIssue[] {
+  const match = definition.match(/^#### Tasks\s*\n([\s\S]*?)(?=^#### |$)/m);
+  const lines = (match?.[1] ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const issues: ValidationIssue[] = [];
+  for (const line of lines) {
+    if (!line.startsWith("- ")) continue;
+    if (/^- \[(?: |x|X)\]/.test(line) || !/ \[(?: |x|X)\]$/.test(line)) issues.push(error("invalid_subtask_marker", `${taskId} subtasks must use trailing markers like: - Smaller task [ ]`));
+  }
   return issues;
 }
 

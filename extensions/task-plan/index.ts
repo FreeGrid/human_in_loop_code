@@ -31,7 +31,7 @@ export default function taskPlanExtension(pi: ExtensionAPI): void {
     const systemPrompt = `${event.systemPrompt}\n\n${PLAN_PROMPTS.system}`;
     if (!state.binding) return { systemPrompt };
     const task = state.binding.contract;
-    return { systemPrompt, message: { customType: "pi-plan-bound-task", display: false, content: `Bound Harness Task ${task.id} — ${task.title}\n\nOutcome:\n${field(task.definition, "Outcome")}\n\nWork:\n${field(task.definition, "Work")}\n\nOutputs:\n${field(task.definition, "Outputs")}\n\nAcceptance:\n${field(task.definition, "Acceptance")}\n\nDepends On:\n${field(task.definition, "Depends On")}\n\nBefore this execution turn ends, call plan_report_task_result with result in_progress, blocked, or completed. Do not infer completion from agent_end or final prose.` } };
+    return { systemPrompt, message: { customType: "pi-plan-bound-task", display: false, content: `Bound Harness Task ${task.id} — ${task.title}\n\nTasks:\n${field(task.definition, "Tasks")}\n\nAcceptance:\n${field(task.definition, "Acceptance")}\n\nDepends On:\n${field(task.definition, "Depends On")}\n\nBefore this execution turn ends, call plan_report_task_result with result in_progress, blocked, or completed. Do not infer completion from agent_end or final prose.` } };
   });
 
   pi.on("agent_end", async (_event, ctx) => {

@@ -18,7 +18,8 @@ export function canonicalTasksDefinitionHash(content: string): string {
   return sha256(content
     .replace(/\r\n/g, "\n")
     .replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/gm, "$1 [#]")
-    .replace(/- \[(?: |x|X)\]/g, "- [#]"));
+    .replace(/- \[(?: |x|X)\]/g, "- [#]")
+    .replace(/^(\s*- .+?) \[(?: |x|X)\]$/gm, "$1 [#]"));
 }
 
 export function parseFrontmatter(text: string): { metadata: PlanMetadata; body: string } {

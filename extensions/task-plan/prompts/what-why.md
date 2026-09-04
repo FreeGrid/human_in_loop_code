@@ -1,4 +1,4 @@
-Draft only the What / Why section using exactly these headings:
+Draft only the concise What / Why section using exactly these headings:
 
 ### Goal
 ### Desired Outcome
@@ -6,9 +6,8 @@ Draft only the What / Why section using exactly these headings:
 #### In
 #### Out
 ### Constraints
-### Why
 ### Success
 ### Non-Goals
 ### Open Questions
 
-Do not include Task IDs, task lists, implementation file lists, dependency graphs, or detailed execution steps.
+Keep it brief. Do not add a separate Why heading; capture rationale only when needed inside Goal or Desired Outcome. Do not include Task IDs, task lists, implementation file lists, dependency graphs, or detailed execution steps.

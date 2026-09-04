@@ -1,7 +1,7 @@
 import type { TaskBlock } from "./types.ts";
 
 const TASK_HEADER = /^### (T\d{3}) — (.+?) \[( |x|X)\]$/gm;
-const REQUIRED_FIELDS = ["Round", "Outcome", "Why", "Inputs", "Work", "Outputs", "Acceptance", "Depends On"];
+const REQUIRED_FIELDS = ["Tasks", "Acceptance", "Depends On"];
 
 export function parseTasks(markdown: string): TaskBlock[] {
   const headers = [...markdown.matchAll(TASK_HEADER)];
@@ -10,6 +10,7 @@ export function parseTasks(markdown: string): TaskBlock[] {
     const end = index + 1 < headers.length ? headers[index + 1]!.index! : markdown.length;
     const definition = markdown.slice(start, end).trimEnd();
     const roundMatch = definition.match(/^#### Round\s*\n\s*R(\d{3}) — T\+0\s*$/m);
+    const hiddenRoundMatch = definition.match(/^<!-- pi-plan:round:R(\d{3}) -->$/m);
     const completed = match[3] === "x" || match[3] === "X";
     const acceptanceMatch = definition.match(/^#### Acceptance\s*\n([\s\S]*?)(?=^#### |$)/m);
     const acceptanceItems = [...(acceptanceMatch?.[1] ?? "").matchAll(/^- \[(?: |x|X)\]\s+(.+)$/gm)].map((m) => m[1]!.trim());
@@ -19,7 +20,7 @@ export function parseTasks(markdown: string): TaskBlock[] {
     return {
       id: match[1]!,
       title: match[2]!.trim(),
-      round: roundMatch ? Number(roundMatch[1]) : -1,
+      round: hiddenRoundMatch ? Number(hiddenRoundMatch[1]) : roundMatch ? Number(roundMatch[1]) : 0,
       completed,
       completionLine: match[0]!,
       acceptanceItems,
@@ -38,5 +39,8 @@ export function taskRequiredFields(): readonly string[] {
 }
 
 export function taskDefinitionWithoutCheckboxState(task: TaskBlock): string {
-  return task.definition.replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/m, "$1 [#]").replace(/- \[(?: |x|X)\]/g, "- [#]");
+  return task.definition
+    .replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/m, "$1 [#]")
+    .replace(/- \[(?: |x|X)\]/g, "- [#]")
+    .replace(/^(\s*- .+?) \[(?: |x|X)\]$/gm, "$1 [#]");
 }
