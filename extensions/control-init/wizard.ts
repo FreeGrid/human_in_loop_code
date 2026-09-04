@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { renderOperationResult, renderSummary } from "./operation-result.js";
 import { ControlWorkspaceService } from "./operations.js";
@@ -24,6 +24,7 @@ interface PathSlot {
 const PROFILE_CONTROL_CODE = "Recommended — control + code";
 const PROFILE_WITH_LATEX = "Optional — control + code + one LaTeX repository per paper";
 const PROFILE_CUSTOM = "Advanced — custom topology";
+const APPLY_INITIALIZATION = "Apply the shown initialization";
 const RETURN_TO_MODIFY = "Return to modify answers";
 const CANCEL_WITHOUT_CHANGES = "Cancel without changes";
 
@@ -39,10 +40,80 @@ function requireUI(ctx: WizardContext, operation: string): boolean {
 }
 
 async function requestRevision(ctx: WizardContext): Promise<"revise" | "stop"> {
-  const choice = await ctx.ui.select("The preview was not applied", [RETURN_TO_MODIFY, CANCEL_WITHOUT_CHANGES]);
+  const choice = await ctx.ui.select("The operation could not continue. What would you like to do?", [RETURN_TO_MODIFY, CANCEL_WITHOUT_CHANGES]);
   if (choice === RETURN_TO_MODIFY) return "revise";
   cancelled(ctx);
   return "stop";
+}
+
+function repositoryLabel(id: string): string {
+  if (id === "control") return "Control repository";
+  if (id === "code") return "Code repository";
+  return `Repository "${id}"`;
+}
+
+function profileDefaultsText(profile: InitWorkspaceInput["topologyProfile"]): string {
+  const lines = [
+    "Selected profile defaults:",
+    "- Control is private and owns plans, tests, fixtures, verification evidence, implementation records, and release records.",
+    "- Code contains only delivered source, runtime resources, package metadata, and user-facing documentation; it may become public.",
+    "- Product runtime never reads from or depends on the control repository.",
+    "- Plan approval accepts plan text only; implementation starts only after a separate explicit assignment.",
+    "- Assigned work uses focused commits and a verified PR; merge and release remain human decisions.",
+    "- Delegation is used only when it adds value, and independent review uses a fresh Session.",
+  ];
+  if (profile === "control-code-latex") {
+    lines.push("- Each paper uses a separate private LaTeX repository that owns only its manuscript and submission artifacts.");
+  }
+  if (profile === "custom") {
+    lines.push("- Repository ownership and relationships come from the custom topology JSON entered above.");
+  }
+  return lines.join("\n");
+}
+
+function isSameOrNestedPath(left: string, right: string): boolean {
+  const fromLeft = relative(left, right);
+  const rightInsideLeft = fromLeft === "" || (fromLeft !== ".." && !fromLeft.startsWith(`..${sep}`) && !isAbsolute(fromLeft));
+  const fromRight = relative(right, left);
+  const leftInsideRight = fromRight === "" || (fromRight !== ".." && !fromRight.startsWith(`..${sep}`) && !isAbsolute(fromRight));
+  return rightInsideLeft || leftInsideRight;
+}
+
+function suggestedSiblingCodePath(controlPath: string): string {
+  const controlName = basename(controlPath);
+  let codeName: string;
+  if (/^control$/i.test(controlName)) {
+    codeName = "code";
+  } else if (/control$/i.test(controlName)) {
+    codeName = controlName.replace(/control$/i, "code");
+  } else {
+    codeName = `${controlName}-code`;
+  }
+  return join(dirname(controlPath), codeName);
+}
+
+async function chooseCodePath(controlPath: string, ctx: WizardContext): Promise<string | undefined> {
+  const canonicalControl = (await resolveCanonicalPath(controlPath, ctx.cwd)).canonicalPath;
+  const suggestion = suggestedSiblingCodePath(canonicalControl);
+  ctx.ui.notify([
+    `Selected control repository: ${canonicalControl}`,
+    "The code repository must be separate from the control repository; neither directory may contain the other.",
+    `Suggested sibling path: ${suggestion}`,
+    `Relative paths are resolved from: ${ctx.cwd}`,
+  ].join("\n"), "info");
+
+  for (;;) {
+    const entered = await ctx.ui.input("Enter the code repository path", suggestion);
+    if (entered === undefined || !entered.trim()) return undefined;
+    const canonicalCode = (await resolveCanonicalPath(entered.trim(), ctx.cwd)).canonicalPath;
+    if (!isSameOrNestedPath(canonicalControl, canonicalCode)) return entered.trim();
+    ctx.ui.notify([
+      "The control and code repositories must be separate directories.",
+      `Control: ${canonicalControl}`,
+      `Code: ${canonicalCode}`,
+      `Choose a sibling path such as: ${suggestion}`,
+    ].join("\n"), "warning");
+  }
 }
 
 function pathSlots(input: InitWorkspaceInput, partial: boolean): PathSlot[] {
@@ -90,8 +161,11 @@ async function collectBootstrapAuthorization(
       const entered = slot.get()?.trim();
       if (!entered) return cancelled(ctx);
       let canonical: string;
+      let nearestExistingParent: string;
       try {
-        canonical = (await resolveCanonicalPath(entered, ctx.cwd)).canonicalPath;
+        const resolution = await resolveCanonicalPath(entered, ctx.cwd);
+        canonical = resolution.canonicalPath;
+        nearestExistingParent = resolution.nearestExistingParent;
       } catch (error) {
         ctx.ui.notify(`${slot.id}: ${error instanceof Error ? error.message : String(error)}`, "error");
         const replacement = await ctx.ui.input(`Enter another directory for ${slot.id}`);
@@ -103,12 +177,29 @@ async function collectBootstrapAuthorization(
       const planned = await planRepositoryBootstrap(canonical, authorization);
       if (planned.status === "ready") break;
       if (planned.code === "bootstrap-authorization-required" && planned.plannedAction === "create-and-init") {
-        const candidates = await findSimilarPaths(canonical);
-        const candidateOptions = candidates.map((candidate) => `Use existing candidate: ${candidate.path}`);
-        const createOption = `None are correct — create ${canonical} and run local git init`;
-        const reenterOption = "Enter a different directory";
+        const otherRepositoryPaths: string[] = [];
+        for (const other of pathSlots(input, false)) {
+          const otherPath = other.get()?.trim();
+          if (other.id === slot.id || !otherPath) continue;
+          try {
+            otherRepositoryPaths.push((await resolveCanonicalPath(otherPath, ctx.cwd)).canonicalPath);
+          } catch {
+            // The other slot will show its own path error when it is processed.
+          }
+        }
+        const candidates = (await findSimilarPaths(canonical))
+          .filter((candidate) => !otherRepositoryPaths.some((other) => isSameOrNestedPath(other, candidate.path)));
+        const label = repositoryLabel(slot.id);
+        const candidateOptions = candidates.map((candidate) => `Use existing directory: ${candidate.path}`);
+        const createOption = `Create this directory and initialize local Git: ${canonical}`;
+        const reenterOption = "Enter a different path";
+        const prompt = candidates.length > 0
+          ? `${label} path does not exist:\n${canonical}\n\n${candidates.length} similar existing ${candidates.length === 1 ? "directory is" : "directories are"} listed below.`
+          : dirname(canonical) === nearestExistingParent
+            ? `${label} path does not exist:\n${canonical}\n\nNo similar existing directories were found in ${dirname(canonical)}.`
+            : `${label} path does not exist:\n${canonical}\n\nIts parent directory also does not exist, so there are no existing sibling directories to suggest.`;
         const choice = await ctx.ui.select(
-          `${slot.id} does not exist. Similar direct-child directories are suggestions only.`,
+          prompt,
           [...candidateOptions, createOption, reenterOption],
         );
         if (choice === undefined) return cancelled(ctx);
@@ -187,12 +278,12 @@ async function resolveInitConflict(
 
 async function chooseControlPath(ctx: WizardContext): Promise<string | undefined> {
   const choice = await ctx.ui.select(
-    "Control repository directory",
-    [`Use current directory: ${ctx.cwd}`, "Enter another directory"],
+    "Choose or enter the control repository path",
+    [`Use current directory as the control repository: ${ctx.cwd}`, "Enter a control repository path"],
   );
-  if (choice?.startsWith("Use current directory:")) return ctx.cwd;
-  if (choice === "Enter another directory") {
-    const entered = await ctx.ui.editor("Control repository directory", ctx.cwd);
+  if (choice?.startsWith("Use current directory as the control repository:")) return ctx.cwd;
+  if (choice === "Enter a control repository path") {
+    const entered = await ctx.ui.editor("Enter the control repository path", ctx.cwd);
     return entered?.trim() || undefined;
   }
   return undefined;
@@ -271,15 +362,15 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | void
       cancelled(ctx);
       return;
     }
-    const codePath = await ctx.ui.input("Exact code repository directory (no automatic discovery)");
-    if (codePath === undefined || !codePath.trim()) {
+    const codePath = await chooseCodePath(controlPath, ctx);
+    if (!codePath) {
       cancelled(ctx);
       return;
     }
     input = {
       topologyProfile: profileChoice === PROFILE_WITH_LATEX ? "control-code-latex" : "control-code",
       controlPath,
-      codePath: codePath.trim(),
+      codePath,
     };
     if (profileChoice === PROFILE_WITH_LATEX) {
       const countSource = await ctx.ui.input("Number of independent paper repositories", "1");
@@ -301,10 +392,8 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | void
     }
   }
 
-  const exceptions = await ctx.ui.editor(
-    "Do the defaults fit? Enter all special directory, responsibility, privacy, or collaboration requirements; leave empty for none",
-    "",
-  );
+  ctx.ui.notify(profileDefaultsText(input.topologyProfile), "info");
+  const exceptions = await ctx.ui.editor("Optional requirements (leave empty to accept the displayed profile defaults)", "");
   if (exceptions === undefined) {
     cancelled(ctx);
     return;
@@ -334,12 +423,18 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | void
   }
 
   ctx.ui.notify(previewText(preview), "info");
-  const approved = await ctx.ui.confirm(
-    "Apply this control workspace initialization?",
-    "Create only the listed local repositories/Git metadata and write the shown CONTROL_INDEX.json plus managed AGENTS block? No remote, commit, push, merge, or release will run.",
+  const action = await ctx.ui.select(
+    [
+      "Preview ready — choose the next action.",
+      "Apply creates only the shown local directories, Git metadata, CONTROL_INDEX.json, and managed AGENTS block.",
+      "It does not create a remote, commit, push, merge, or release.",
+    ].join("\n"),
+    [APPLY_INITIALIZATION, RETURN_TO_MODIFY, CANCEL_WITHOUT_CHANGES],
   );
-  if (!approved) {
-    return (await requestRevision(ctx)) === "revise" ? "revise" : undefined;
+  if (action === RETURN_TO_MODIFY) return "revise";
+  if (action !== APPLY_INITIALIZATION) {
+    cancelled(ctx);
+    return;
   }
   const applied = await service.init(input, { expectedPreviewToken: preview.summary.previewToken });
   ctx.ui.notify(renderOperationResult(applied), applied.status === "applied" ? "info" : "error");
@@ -348,7 +443,7 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | void
 export async function runInitWizard(ctx: WizardContext): Promise<void> {
   if (!requireUI(ctx, "/control:init")) return;
   ctx.ui.notify(
-    "Built-in profiles keep control private, code delivery-only and potentially public, tests/plans/evidence in control, dependencies one-way, focused commits pushed to a verified PR after explicit task assignment, and merge/release human-controlled. The paper profile adds one independent private LaTeX repository per paper.",
+    "Choose a workspace topology. The recommended profile creates separate control and code repositories; the LaTeX profile also adds one private repository per paper.",
     "info",
   );
   while (await runInitWizardAttempt(ctx) === "revise") {
