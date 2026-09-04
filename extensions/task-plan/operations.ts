@@ -30,7 +30,7 @@ export class TaskPlanService {
     try {
       const doc = await createPlanSkeleton(this.cwd, goal.trim());
       this.sessionState.currentPlanPath = doc.path;
-      return ok("created", "Created Harness Plan skeleton", doc);
+      return { ...ok("created", "Created Harness Plan skeleton", doc), snapshot: snapshot(doc, this.sessionState.binding) };
     } catch (error) {
       return conflict(String((error as Error).message ?? error));
     }

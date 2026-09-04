@@ -119,6 +119,13 @@ export async function findUnfinishedHarnessPlans(root: string): Promise<string[]
   return found.sort();
 }
 
+export function planTitleFromGoal(input: string): string {
+  let title = input.trim().replace(/\s+/g, " ");
+  title = title.replace(/^(?:请|麻烦|帮我|帮忙|需要|我需要|我要|我想|想|我们要|先)?\s*(?:给我|给(?:这个|这件事|这个事情)?|把(?:这个|这件事|这个事情)?)?\s*(?:写(?:一个|个|一下)?|做(?:一个|个|一下)?|弄(?:一个|个|一下)?|搞(?:一个|个|一下)?|实现(?:一个|个|一下)?|构建(?:一个|个|一下)?|规划(?:一个|个|一下)?|拆(?:一个|个|一下)?|设计(?:一个|个|一下)?)\s*/u, "");
+  title = title.replace(/[。！？.!?；;：:，,、\s]+$/u, "").trim();
+  return title || input.trim() || "Plan";
+}
+
 export function slugify(input: string): string {
   return input.toLowerCase().normalize("NFKD").replace(/[^\p{Letter}\p{Number}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "plan";
 }
@@ -130,15 +137,16 @@ export async function createPlanSkeleton(root: string, goal: string): Promise<Pl
   if (unfinished.length) throw new Error(`Unfinished Harness Plan already exists: ${unfinished.join(", ")}`);
   const sequence = await nextPlanSequence(root);
   const planId = `P${String(sequence).padStart(3, "0")}`;
-  const path = join(root, "plans", `${String(sequence).padStart(3, "0")}-${slugify(goal)}.md`);
+  const title = planTitleFromGoal(goal);
+  const path = join(root, "plans", `${String(sequence).padStart(3, "0")}-${slugify(title)}.md`);
   await mkdir(dirname(path), { recursive: true });
   const fh = await open(path, "wx");
-  try { await fh.writeFile(renderSkeleton(planId, goal), "utf8"); } finally { await fh.close(); }
+  try { await fh.writeFile(renderSkeleton(planId, goal, title), "utf8"); } finally { await fh.close(); }
   return readPlanDocument(path);
 }
 
-function renderSkeleton(planId: string, goal: string): string {
-  return `${renderFrontmatter({ harness: HARNESS, plan_id: planId, round: 0, stage: "what_why", stage_status: "drafting" })}\n# ${planId} — ${goal}\n\n## Original Request\n\n${goal}\n\n---\n\n## What / Why\n\n<!-- pi-plan:what-why:start -->\n\nPending.\n\n<!-- pi-plan:what-why:end -->\n\n---\n\n## Plan\n\n<!-- pi-plan:plan:start -->\n\nPending approval of What / Why.\n\n<!-- pi-plan:plan:end -->\n\n---\n\n## Tasks\n\n<!-- pi-plan:tasks:start -->\n\nPending approval of Plan.\n\n<!-- pi-plan:tasks:end -->\n\n## Review\n\n<!-- pi-plan:review:start -->\n\nNot run.\n\n<!-- pi-plan:review:end -->\n`;
+function renderSkeleton(planId: string, goal: string, title = planTitleFromGoal(goal)): string {
+  return `${renderFrontmatter({ harness: HARNESS, plan_id: planId, round: 0, stage: "what_why", stage_status: "drafting" })}\n# ${planId} — ${title}\n\n## Original Request\n\n${goal}\n\n---\n\n## What / Why\n\n<!-- pi-plan:what-why:start -->\n\nPending.\n\n<!-- pi-plan:what-why:end -->\n\n---\n\n## Plan\n\n<!-- pi-plan:plan:start -->\n\nPending approval of What / Why.\n\n<!-- pi-plan:plan:end -->\n\n---\n\n## Tasks\n\n<!-- pi-plan:tasks:start -->\n\nPending approval of Plan.\n\n<!-- pi-plan:tasks:end -->\n\n## Review\n\n<!-- pi-plan:review:start -->\n\nNot run.\n\n<!-- pi-plan:review:end -->\n`;
 }
 
 async function exists(path: string): Promise<boolean> {

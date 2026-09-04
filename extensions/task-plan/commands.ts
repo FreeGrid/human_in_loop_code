@@ -4,13 +4,19 @@ import { reminderForStage } from "./prompts.ts";
 import { TaskPlanService, type TaskPlanSessionState } from "./operations.ts";
 
 export function registerTaskPlanCommands(pi: ExtensionAPI, state: TaskPlanSessionState): void {
-  pi.registerCommand("plan:new", { description: "Create a new one-file Harness Plan skeleton", handler: (args, ctx) => run(ctx, state, (s) => s.start(args)) });
+  pi.registerCommand("plan:new", { description: "Create a new one-file Harness Plan skeleton, then ask the Agent to draft What / Why", handler: (args, ctx) => newPlan(pi, args, ctx, state) });
   pi.registerCommand("plan:status", { description: "Show current Harness Plan status", handler: (args, ctx) => run(ctx, state, (s) => s.status(args.trim() || undefined)) });
   pi.registerCommand("plan:edit", { description: "Submit Markdown content for the current Harness Plan stage", handler: (args, ctx) => edit(args, ctx, state) });
-  pi.registerCommand("plan:approve", { description: "Apply the current Human approval gate", handler: (args, ctx) => approve(args, ctx, state) });
+  pi.registerCommand("plan:approve", { description: "Apply the current Human approval gate", handler: (args, ctx) => approve(pi, args, ctx, state) });
   pi.registerCommand("plan:review", { description: "Review the current Harness Plan stage", handler: (args, ctx) => review(args, ctx, state) });
   pi.registerCommand("plan:task", { description: "Bind or mark a current-round Task: <id> <start|done|open>", handler: (args, ctx) => task(args, ctx, state) });
   pi.registerCommand("plan:abandon", { description: "Abandon the current Harness Plan with a reason", handler: (args, ctx) => abandon(args, ctx, state) });
+}
+
+async function newPlan(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+  const result = await new TaskPlanService(ctx.cwd, state).start(args);
+  notify(ctx, result);
+  if (result.status === "created") queueDraftFollowUp(pi, "what_why", result.path);
 }
 
 async function edit(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
@@ -20,7 +26,7 @@ async function edit(args: string, ctx: ExtensionCommandContext, state: TaskPlanS
   return notify(ctx, await service.submitSection({ expected_document_hash: current.document_hash, content: args }));
 }
 
-async function approve(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+async function approve(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
   const service = new TaskPlanService(ctx.cwd, state);
   const current = await service.get();
   if (!current.document_hash) return notify(ctx, current);
@@ -33,7 +39,10 @@ async function approve(args: string, ctx: ExtensionCommandContext, state: TaskPl
     if (trimmed === "next" || trimmed === "next_round") action = "next_round";
     else { action = "complete"; reason = trimmed; }
   }
-  return notify(ctx, await service.advance({ expected_document_hash: current.document_hash, action, reason }));
+  const result = await service.advance({ expected_document_hash: current.document_hash, action, reason });
+  notify(ctx, result);
+  const nextStage = (result.snapshot as { metadata?: { stage?: string } } | undefined)?.metadata?.stage;
+  if (result.status === "applied" && (nextStage === "plan" || nextStage === "tasks")) queueDraftFollowUp(pi, nextStage, result.path);
 }
 
 async function review(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
@@ -67,6 +76,15 @@ async function abandon(args: string, ctx: ExtensionCommandContext, state: TaskPl
 
 async function run(ctx: ExtensionCommandContext, state: TaskPlanSessionState, fn: (service: TaskPlanService) => Promise<Parameters<typeof notify>[1]>) {
   return notify(ctx, await fn(new TaskPlanService(ctx.cwd, state)));
+}
+
+function queueDraftFollowUp(pi: ExtensionAPI, stage: string, path?: string): void {
+  const instruction = stage === "what_why"
+    ? `请继续当前 Harness Plan${path ? `（${path}）` : ""}：先调用 plan_get 读取 snapshot，然后根据 Original Request 起草 What / Why，调用 plan_submit_section 提交。提交成功后停止，不要推进到 Plan，并用简短中文提示我可以修改或说“继续”。`
+    : stage === "plan"
+      ? `请继续当前 Harness Plan${path ? `（${path}）` : ""}：先调用 plan_get，基于已批准 What / Why 起草 Plan，调用 plan_submit_section 提交。提交成功后停止，不要拆 Tasks，并提示我检查后可说“继续”。`
+      : `请继续当前 Harness Plan${path ? `（${path}）` : ""}：先调用 plan_get，基于已批准 Plan 的 T+0 起草当前 round Tasks，调用 plan_submit_section 提交。提交成功后停止，不要 Review，并提示我可以说“检查一下这些任务”。`;
+  pi.sendUserMessage(instruction, { deliverAs: "followUp" });
 }
 
 function notify(ctx: ExtensionCommandContext, result: { status: string; snapshot?: unknown }) {
