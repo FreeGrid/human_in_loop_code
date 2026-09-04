@@ -37,6 +37,7 @@ export function validatePlan(markdown: string, round: number): ValidationResult 
   }
   const horizons = [...markdown.matchAll(/^### T\+(\d+) — (.+)$/gm)].map((m) => ({ n: Number(m[1]), title: m[2] }));
   if (!horizons.some((h) => h.n === 0)) issues.push(error("missing_t0", "Plan must include T+0"));
+  if (!horizons.some((h) => h.n === 1)) issues.push(error("missing_t1", "Plan must include T+1 as the next horizon"));
   const seen = new Set<number>();
   for (const h of horizons) {
     if (seen.has(h.n)) issues.push(error("duplicate_horizon", `Duplicate T+${h.n}`));

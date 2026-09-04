@@ -22,4 +22,4 @@ Use rolling-wave horizons:
 ### Risks / Unknowns
 ### Replan Conditions
 
-T+0 is detailed enough for Tasks. T+1 is provisional. T+2+ stays conditional. Do not generate executable Tasks or Task IDs.
+T+0 is detailed enough for Tasks. T+1 is mandatory and provisional. Include T+2 when there is any meaningful later direction; keep T+2+ conditional rather than detailed. Do not generate executable Tasks or Task IDs.
