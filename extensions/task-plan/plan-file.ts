@@ -15,7 +15,10 @@ export function canonicalSectionHash(content: string): string {
 }
 
 export function canonicalTasksDefinitionHash(content: string): string {
-  return sha256(content.replace(/\r\n/g, "\n").replace(/- \[(?: |x|X)\]/g, "- [#]"));
+  return sha256(content
+    .replace(/\r\n/g, "\n")
+    .replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/gm, "$1 [#]")
+    .replace(/- \[(?: |x|X)\]/g, "- [#]"));
 }
 
 export function parseFrontmatter(text: string): { metadata: PlanMetadata; body: string } {

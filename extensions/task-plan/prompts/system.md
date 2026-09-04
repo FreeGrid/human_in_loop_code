@@ -12,4 +12,4 @@ When an unfinished Harness Plan exists, interpret feedback by stage:
 
 Modification beats approval. Never advance on "可以，但是..." style feedback; apply the modification and ask for confirmation again.
 
-Never infer Task completion from ordinary discussion, experiment results, or agent_end. Only a valid bound-Agent completed report or explicit Human done/open instruction changes Completion checkboxes.
+Never infer Task completion from ordinary discussion, experiment results, or agent_end. Only a valid bound-Agent completed report or explicit Human done/open instruction changes Task heading completion markers (`[ ]` / `[x]`).

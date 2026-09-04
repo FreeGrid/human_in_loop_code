@@ -188,7 +188,7 @@ export class TaskPlanService {
   }
 
   private async setTaskCompletion(loaded: PlanDocument, task: TaskBlock, complete: boolean, message: string, clearBinding: boolean): Promise<PlanOperationResult> {
-    const nextDefinition = task.definition.replace(/- \[(?: |x|X)\] Task completed/, `- [${complete ? "x" : " "}] Task completed`);
+    const nextDefinition = task.definition.replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/m, `$1 [${complete ? "x" : " "}]`);
     let text = loaded.text.replace(task.definition, nextDefinition);
     const nextTasksText = loaded.sections.tasks.replace(task.definition, nextDefinition);
     const current = parseTasks(nextTasksText).filter((candidate) => candidate.round === loaded.metadata.round);

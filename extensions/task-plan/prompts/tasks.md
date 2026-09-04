@@ -1,12 +1,12 @@
 Draft only current-round Tasks from the approved Plan T+0. Do not create Tasks for T+1 or later horizons.
 
-Each Task must use:
+Each Task heading must visibly end with a completion marker. Use `[ ]` for open tasks and `[x]` only for completed historical tasks. Do not put completion in a separate field.
 
-### T001 — Outcome-oriented title
+Each current-round Task must use:
+
+### T001 — Outcome-oriented title [ ]
 #### Round
 R000 — T+0
-#### Completion
-- [ ] Task completed
 #### Outcome
 #### Why
 #### Inputs

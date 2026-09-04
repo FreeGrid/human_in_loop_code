@@ -70,8 +70,7 @@ export function validateTasks(markdown: string, currentRound: number, options: {
     ids.add(task.id);
     for (const field of taskRequiredFields()) if (!new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(task.definition)) issues.push(error("missing_task_field", `${task.id} missing ${field}`));
     if (task.round < 0) issues.push(error("invalid_task_round", `${task.id} has invalid Round`));
-    const completionBoxes = task.definition.match(/- \[(?: |x|X)\] Task completed/g) ?? [];
-    if (completionBoxes.length !== 1) issues.push(error("invalid_completion", `${task.id} must have exactly one Task completed checkbox`));
+    if (!new RegExp(`^### ${task.id} — .+ \\[(?: |x|X)\\]$`, "m").test(task.definition)) issues.push(error("invalid_completion", `${task.id} must have a heading completion marker: ### ${task.id} — Title [ ] or [x]`));
     if (task.acceptanceItems.length < 1) issues.push(error("missing_acceptance_checkbox", `${task.id} Acceptance needs at least one checkbox`));
     if (task.dependsOn.includes(task.id)) issues.push(error("self_dependency", `${task.id} depends on itself`));
     if (options.requireCurrentOpen && task.round === currentRound && task.completed) issues.push(error("current_round_precompleted", `${task.id} must be open before execution`));

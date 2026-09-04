@@ -8,4 +8,4 @@ The What / Why and Plan sections are frozen. Review only current-round Tasks for
 5. Verifiability
 6. Scope
 
-Make the smallest required Task changes. Do not modify prior-round Tasks, Completion checkboxes, What / Why, Plan, or future horizons.
+Make the smallest required Task changes. Do not modify prior-round Tasks, heading completion markers (`[ ]` / `[x]`), What / Why, Plan, or future horizons.
