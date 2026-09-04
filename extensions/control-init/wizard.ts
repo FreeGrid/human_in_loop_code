@@ -12,6 +12,7 @@ import type {
   OperationResult,
   UpdateWorkspaceInput,
 } from "./types.js";
+import { workspaceNameError } from "./workspace-name.js";
 
 export type WizardContext = Pick<ExtensionCommandContext, "cwd" | "hasUI" | "ui">;
 
@@ -86,16 +87,6 @@ interface StandardRepositoryPaths {
   controlPath: string;
   codePath: string;
   bootstrap?: BootstrapAuthorization;
-}
-
-function workspaceNameError(name: string): string | undefined {
-  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
-    return "Use only letters, numbers, dots, underscores, and hyphens, starting with a letter or number.";
-  }
-  if (/(?:^|[._-])(control|code)$/i.test(name)) {
-    return "Enter the base workspace name without a control or code suffix; the wizard adds both suffixes.";
-  }
-  return undefined;
 }
 
 async function createRepositoryPathsFromName(ctx: WizardContext): Promise<StandardRepositoryPaths | undefined> {
@@ -488,6 +479,7 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | { co
       "Preview ready — choose the next action.",
       "Apply creates only the shown local directories, Git metadata, CONTROL_INDEX.json, and managed AGENTS block.",
       "It does not create a remote, commit, push, merge, or release.",
+      "After successful initialization, Pi continues this session from the control repository when session persistence is available; otherwise it shows the exact restart command.",
     ].join("\n"),
     [APPLY_INITIALIZATION, RETURN_TO_MODIFY, CANCEL_WITHOUT_CHANGES],
   );

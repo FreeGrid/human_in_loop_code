@@ -21,6 +21,7 @@ The code repository moved to ../my-app-v2; update its binding.
 | Agent tool | Human command | Behavior |
 | --- | --- | --- |
 | `control_workspace_init` | `/control:init` | Initialize `CONTROL_INDEX.json`, a managed `AGENTS.md` block, and any explicitly approved local Git repositories. |
+| — | `/control:enter [control-path]` | Continue Pi in the initialized control repository after Agent-tool initialization. The remembered path makes the argument optional in the same Session. |
 | `control_workspace_status` | `/control:status [control-path]` | Read repository bindings, Git state, policies, warnings, and incomplete items. |
 | `control_workspace_doctor` | `/control:doctor [control-path]` | Deterministically check schema, canonical paths, Git roots, remote identity, repository boundaries, and managed-block drift. |
 | `control_workspace_update` | `/control:update [control-path]` | Preview and apply binding, topology, policy, requirement, or managed-block changes while preserving unaffected state. |
@@ -30,6 +31,23 @@ Structured tools never open dialogs. They return one of `applied`,
 retry. The `init` and `update` tools run sequentially so concurrent tool calls
 in one Pi process cannot race one another. Byte-for-byte index and AGENTS
 preconditions also reject stale writes from another process.
+
+For a natural-language request such as “create local control and code
+repositories named `test2`,” the Agent init tool needs only the base name. With
+no explicit paths, it deterministically uses Pi's current directory as the
+parent and creates `test2_control` plus `test2_code`; the user does not need to
+expand those paths manually. The same safe-name and no-overwrite rules used by
+the interactive wizard apply. Providing either repository path opts out of
+name-only derivation, so partial custom/existing bindings still ask for the
+missing exact path instead of guessing it.
+
+Agent tools cannot replace a Pi Session safely while the model is still in a
+tool-execution turn. After a successful name-only Agent initialization, the
+result therefore marks `/control:enter` as a required next step, includes the
+command without a long path that may wrap in the terminal, and explains that
+the Human-in-the-Loop workflow continues from the remembered control
+repository. In a later Session where that binding is unavailable, use
+`/control:enter /exact/path/to/name_control`.
 
 The slash commands are the Human-UI fallback. For the recommended and LaTeX
 profiles, `/control:init` first offers two setup paths:
@@ -48,14 +66,22 @@ The advanced custom topology retains its explicit JSON editor. Missing paths
 introduced by custom or paper-repository input still require exact-path
 authorization; any similar-directory choices are listed explicitly.
 
-After initialization succeeds, the extension keeps the initialized control
-repository as the active target for the rest of the current Pi session.
-`/control:status`, `/control:doctor`, `/control:update`, and their Agent-tool
-counterparts therefore work without repeating the path, even when quick setup
-created the repositories below Pi's starting directory. An explicit path always
-takes precedence. In a later Pi session, start Pi inside the control repository
-or pass its exact path; when no index exists at the resolved location, status
-asks for that path instead of incorrectly asking you to initialize again.
+After interactive initialization succeeds, Pi continues the current history in
+a session whose real working directory is the initialized control repository.
+This reloads Pi's general file and shell tools, project instructions, system
+prompt, and footer against the correct repository instead of merely redirecting
+control-init commands. If session persistence is disabled, the wizard cannot
+safely replace Pi's working directory and displays an exact `cd ... && pi`
+restart command instead.
+
+The extension also keeps the initialized control repository as the active
+control-init target for the current extension session. Agent-tool initialization
+and follow-up `/control:status`, `/control:doctor`, `/control:update` operations
+therefore remain coherent even when an in-turn session switch is unavailable.
+An explicit path always takes precedence. In a later Pi session, start Pi inside
+the control repository or pass its exact path; when no index exists at the
+resolved location, status asks for that path instead of incorrectly asking you
+to initialize again.
 
 Before asking about exceptions, the wizard displays the selected profile's
 default ownership, privacy, dependency, approval, delivery, and delegation
@@ -128,11 +154,18 @@ deletes its directory or Git data.
 
 ## Directory and Git safety
 
-Every directory must be explicit. The extension does not scan the home folder
-or infer a code/paper directory from its name. A missing path triggers at most
-three similar candidates from the specified parent's direct children. A
-candidate is never adopted automatically. If none is correct, the exact
-canonical path must be approved before directory creation and local `git init`.
+Except for the documented name-only local-creation flow, every directory must
+be explicit. The extension never scans the home folder. A request to create a
+local workspace by base name authorizes exactly two deterministic, previously
+missing sibling paths under Pi's current directory: `<name>_control` and
+`<name>_code`. It never adopts a directory that already exists or appears while
+that creation is being prepared or applied.
+
+Custom, existing, and paper repository paths are never inferred from a name. A
+missing explicit path triggers at most three similar candidates from the
+specified parent's direct children, and a candidate is never adopted
+automatically. If none is correct, the exact canonical path must be approved
+before directory creation and local `git init`.
 
 An existing non-Git directory can be initialized in place after confirmation;
 all existing files remain byte-for-byte unchanged. Preview includes the exact
