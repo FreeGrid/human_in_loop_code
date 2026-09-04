@@ -1,19 +1,19 @@
 Draft only the Plan section after What / Why approval.
 
-Use rolling-wave horizons:
+Use stage-oriented rolling-wave planning. The visible third-level headings are the stage IDs:
 
 ### Strategy
-### T+0 — Current Horizon
+### T001 — Current stage title
 #### Outcome
 #### Work Areas
 #### Ordering
 #### Exit Condition
-### T+1 — Next Horizon
+### T002 — Next stage title
 #### Expected Outcome
-#### Dependencies on T+0
+#### Dependencies on T001
 #### Candidate Work
 #### Promotion Condition
-### T+2 — Later Horizon
+### T003 — Later stage title
 #### Goal
 #### Conditional Direction
 #### Dependencies / Assumptions
@@ -22,4 +22,4 @@ Use rolling-wave horizons:
 ### Risks / Unknowns
 ### Replan Conditions
 
-T+0 is detailed enough for Tasks. T+1 is mandatory and provisional. Include T+2 when there is any meaningful later direction; keep T+2+ conditional rather than detailed. Do not generate executable Tasks or Task IDs.
+T001 is the current stage and should be detailed enough to expand into executable tasks. T002 is mandatory but more provisional. Include T003+ only when there is meaningful later direction; keep later stages increasingly fuzzy and conditional. Do not add completion markers or executable subsections (`#### Tasks`, `#### Acceptance`, `#### Depends On`) in the Plan section.
