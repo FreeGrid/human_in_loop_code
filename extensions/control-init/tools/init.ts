@@ -93,8 +93,8 @@ export function registerControlWorkspaceInitTool(pi: ExtensionAPI, sessionState?
         if (control && resolve(control.absolutePath) !== resolve(ctx.cwd)) {
           response.content[0].text += [
             "",
-            `Required next step: run /control:enter ${control.absolutePath}`,
-            "The Human-in-the-Loop workflow must continue from the control repository.",
+            "Required next step: run /control:enter",
+            "The command uses the remembered control repository so the Human-in-the-Loop workflow can continue there.",
           ].join("\n");
         }
       }
