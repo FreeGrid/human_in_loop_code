@@ -43,10 +43,11 @@ missing exact path instead of guessing it.
 
 Agent tools cannot replace a Pi Session safely while the model is still in a
 tool-execution turn. After a successful name-only Agent initialization, the
-result therefore shows `Next action: /control:enter`. Run that command once—no
-path is needed in the same Session—to validate the remembered control binding
-and continue Pi with that repository as its real cwd. In a later Session, use
-`/control:enter /exact/path/to/name_control`.
+result therefore marks `/control:enter` as a required next step, includes the
+exact initialized control path in the command, and explains that the
+Human-in-the-Loop workflow must continue from the control repository. The path
+is also remembered in the same Session, but displaying it makes the target
+explicit and keeps the command reusable in a later Session.
 
 The slash commands are the Human-UI fallback. For the recommended and LaTeX
 profiles, `/control:init` first offers two setup paths:
