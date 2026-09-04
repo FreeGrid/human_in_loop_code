@@ -9,6 +9,14 @@ type SessionNavigationContext = ControlCommandContext & Partial<Pick<
 
 export type ControlNavigationResult = "already-current" | "switched" | "unavailable" | "cancelled";
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function restartCommand(controlPath: string): string {
+  return `cd ${shellQuote(controlPath)} && pi`;
+}
+
 export async function continueSessionInControlRepository(
   ctx: SessionNavigationContext,
   controlPath: string,
@@ -20,15 +28,27 @@ export async function continueSessionInControlRepository(
     ctx.ui.notify([
       `Workspace initialized successfully at: ${controlPath}`,
       "Pi could not switch directories automatically because this session is not persisted.",
-      `Restart from the control repository: cd ${JSON.stringify(controlPath)} && pi`,
+      `Restart from the control repository: ${restartCommand(controlPath)}`,
+    ].join("\n"), "warning");
+    return "unavailable";
+  }
+
+  let continuedSessionFile: string;
+  try {
+    const continued = SessionManager.forkFrom(currentSessionFile, controlPath);
+    const createdSessionFile = continued.getSessionFile();
+    if (!createdSessionFile) throw new Error("Pi did not create a persisted continuation session.");
+    continuedSessionFile = createdSessionFile;
+  } catch (error) {
+    ctx.ui.notify([
+      `Workspace initialized successfully at: ${controlPath}`,
+      `Pi could not prepare a control-repository session: ${error instanceof Error ? error.message : String(error)}`,
+      `Restart from the control repository: ${restartCommand(controlPath)}`,
     ].join("\n"), "warning");
     return "unavailable";
   }
 
   try {
-    const continued = SessionManager.forkFrom(currentSessionFile, controlPath);
-    const continuedSessionFile = continued.getSessionFile();
-    if (!continuedSessionFile) throw new Error("Pi did not create a persisted continuation session.");
     const switched = await ctx.switchSession(continuedSessionFile, {
       withSession: async (nextCtx) => {
         nextCtx.ui.notify([
@@ -45,12 +65,9 @@ export async function continueSessionInControlRepository(
       return "cancelled";
     }
     return "switched";
-  } catch (error) {
-    ctx.ui.notify([
-      `Workspace initialized successfully at: ${controlPath}`,
-      `Pi could not switch to the control repository: ${error instanceof Error ? error.message : String(error)}`,
-      `Restart from the control repository: cd ${JSON.stringify(controlPath)} && pi`,
-    ].join("\n"), "warning");
+  } catch {
+    // switchSession may reject after invalidating ctx. The Pi host reports the
+    // replacement failure; touching the old command context here is unsafe.
     return "unavailable";
   }
 }
