@@ -1,48 +1,31 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { interpolateResource } from "./templates.js";
-import type { ActiveWork, PlanningStage } from "./types.js";
 
-const PROMPT_ROOT = join(dirname(fileURLToPath(import.meta.url)), "resources", "prompts");
+const here = dirname(fileURLToPath(import.meta.url));
 
-type PromptName = "specify" | "plan" | "tasks" | "converge";
+export const PLAN_PROMPTS = {
+  system: readPrompt("system.md"),
+  whatWhy: readPrompt("what-why.md"),
+  plan: readPrompt("plan.md"),
+  tasks: readPrompt("tasks.md"),
+  review: readPrompt("review.md"),
+};
 
-function renderPrompt(name: PromptName, variables: Record<string, string>): string {
-  return interpolateResource(readFileSync(join(PROMPT_ROOT, `${name}.md`), "utf8"), variables);
+export function reminderForStage(stage: string): string {
+  switch (stage) {
+    case "what_why": return "我是你的 Plan 助手，会先带你理清楚要做什么、为什么做、边界和成功标准。What / Why 整理好后，你可以直接修改 Markdown，或告诉我继续调整；确认后说“继续”。";
+    case "plan": return "Plan 已生成，尚未拆 Tasks。请检查 T001/T002/T003 阶段路线图；确认后说“继续”或“开始拆任务”。";
+    case "tasks": return "当前 T001 阶段已展开成具体 Tasks。请检查粒度和 Acceptance；方向正确后可以说“检查一下这些任务”。";
+    case "awaiting_execution_approval": return "本轮 Tasks 已完成 Review，处于 awaiting_execution_approval。可修改并重新 Review，或说“确认本轮”进入 executing。";
+    case "executing": return "当前 round 正在 executing。可以让 Pi Agent 开始某个 Task，或由 Human 明确标记 done/open。";
+    case "awaiting_round_decision": return "当前 round 已完成。可以进入下一轮、重新打开 Task，或说明原因后完成 Plan。";
+    case "completed": return "Plan 已 completed。";
+    case "abandoned": return "Plan 已 abandoned。";
+    default: return "请检查当前 Harness Plan 状态。";
+  }
 }
 
-export function buildSpecifyPrompt(work: ActiveWork): string {
-  return renderPrompt("specify", { TARGET_PATH: work.specPath });
-}
-
-export function buildPlanPrompt(work: ActiveWork): string {
-  return renderPrompt("plan", { SPEC_PATH: work.specPath, TARGET_PATH: work.planPath });
-}
-
-export function buildTasksPrompt(work: ActiveWork): string {
-  return renderPrompt("tasks", {
-    SPEC_PATH: work.specPath,
-    PLAN_PATH: work.planPath,
-    TARGET_PATH: work.tasksPath,
-  });
-}
-
-export function buildConvergePrompt(work: ActiveWork): string {
-  return renderPrompt("converge", {
-    SPEC_PATH: work.specPath,
-    PLAN_PATH: work.planPath,
-    TASKS_PATH: work.tasksPath,
-  });
-}
-
-export function buildRevisionPrompt(work: ActiveWork, stage: PlanningStage, instruction: string): string {
-  let contract: string;
-  if (stage === "spec") contract = buildSpecifyPrompt(work);
-  else if (stage === "plan") contract = buildPlanPrompt(work);
-  else contract = buildTasksPrompt(work);
-
-  return `${contract.trimEnd()}\n\nThis is a revision of the existing ${stage} artifact, not a new stage.\n` +
-    "Keep its current status unchanged. Make only changes required by this human instruction:\n\n" +
-    `${instruction.trim()}\n`;
+function readPrompt(name: string): string {
+  return readFileSync(join(here, "prompts", name), "utf8");
 }

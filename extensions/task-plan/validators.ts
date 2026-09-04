@@ -1,332 +1,157 @@
-import { parseArtifact } from "./frontmatter.js";
-import {
-  parseDependencies,
-  parseTasks,
-  scanHeadings,
-  sectionContent,
-  stripFencedCode,
-  type MarkdownHeading,
-} from "./task-parser.js";
-import type { PlanningStage, ValidationIssue, ValidationResult } from "./types.js";
+import { canonicalSectionHash, canonicalTasksDefinitionHash } from "./plan-file.ts";
+import { extractAllSections } from "./sections.ts";
+import { parseTasks, taskRequiredFields } from "./tasks.ts";
+import { HARNESS, STAGE_STATUS, type PlanDocument, type ValidationIssue, type ValidationResult } from "./types.ts";
 
-export interface ValidationOptions {
-  forApproval?: boolean;
-}
+function result(issues: ValidationIssue[]): ValidationResult { return { ok: issues.every((i) => i.severity !== "error"), issues }; }
+function error(code: string, message: string): ValidationIssue { return { severity: "error", code, message }; }
+function warn(code: string, message: string): ValidationIssue { return { severity: "warning", code, message }; }
 
-const SPEC_HEADINGS = [
-  "# What",
-  "## Goal",
-  "## Desired Outcome",
-  "## Scope",
-  "### In",
-  "### Out",
-  "## Constraints",
-  "# Why",
-  "## Motivation",
-  "## Problem",
-  "## Success",
-  "## Non-Goals",
-  "## Open Questions",
-];
-
-const PLAN_HEADINGS = [
-  "# Approach",
-  "## Strategy",
-  "## Planning Horizon",
-  "### Current",
-  "#### Outcome",
-  "#### Work Areas",
-  "#### Ordering",
-  "### Next",
-  "#### Expected Outcome",
-  "#### Entry Condition",
-  "#### Candidate Work",
-  "### Later",
-  "#### Goal",
-  "#### Conditional Direction",
-  "#### Replan Triggers",
-  "## Key Decisions",
-  "## Risks / Unknowns",
-  "## Replan Conditions",
-];
-
-const TASK_SECTIONS = ["Outcome", "Why", "Inputs", "Work", "Outputs", "Acceptance", "Depends On"];
-const VAGUE_ACCEPTANCE = new Set(["done", "completed", "works", "quality is good", "完成", "正常", "符合要求"]);
-
-function marker(heading: MarkdownHeading): string {
-  return `${"#".repeat(heading.level)} ${heading.title}`;
-}
-
-function result(issues: ValidationIssue[]): ValidationResult {
-  return { valid: !issues.some((issue) => issue.severity === "error"), issues };
-}
-
-function commonValidation(
-  content: string,
-  expectedStage: PlanningStage,
-  expectedWorkId: string,
-  path: string,
-  options: ValidationOptions,
-): { body?: string; issues: ValidationIssue[] } {
+export function validateFrontmatter(document: PlanDocument): ValidationResult {
+  const m = document.metadata;
   const issues: ValidationIssue[] = [];
-  let parsed;
-  try {
-    parsed = parseArtifact(content);
-  } catch (error) {
-    issues.push({
-      severity: "error",
-      code: "invalid_frontmatter",
-      message: error instanceof Error ? error.message : String(error),
-      path,
-    });
-    return { issues };
-  }
-
-  if (parsed.metadata.work_id !== expectedWorkId) {
-    issues.push({ severity: "error", code: "work_id_mismatch", message: `work_id must be ${expectedWorkId}`, path });
-  }
-  if (parsed.metadata.stage !== expectedStage) {
-    issues.push({ severity: "error", code: "stage_mismatch", message: `stage must be ${expectedStage}`, path });
-  }
-  if (!parsed.body.trim()) {
-    issues.push({ severity: "error", code: "empty_body", message: "Markdown body is empty", path });
-  }
-
-  const visibleBody = stripFencedCode(parsed.body);
-  const placeholderSeverity = options.forApproval ? "error" : "warning";
-  if (/\b(?:TODO|TBD)\b/i.test(visibleBody) || /填这里/.test(visibleBody) || /^\s*\.\.\.\s*$/m.test(visibleBody)) {
-    issues.push({
-      severity: placeholderSeverity,
-      code: "placeholder",
-      message: options.forApproval ? "Placeholder content must be resolved before approval" : "Draft contains placeholder content",
-      path,
-    });
-  }
-  return { body: parsed.body, issues };
+  if (m.harness !== HARNESS) issues.push(error("invalid_harness", `harness must be ${HARNESS}`));
+  if (!/^P\d{3}$/.test(String(m.plan_id ?? ""))) issues.push(error("invalid_plan_id", "plan_id must use PNNN"));
+  if (!Number.isInteger(m.round) || m.round < 0) issues.push(error("invalid_round", "round must be an integer >= 0"));
+  if (!(m.stage in STAGE_STATUS)) issues.push(error("invalid_stage", "stage is not recognized"));
+  else if (!STAGE_STATUS[m.stage].includes(m.stage_status)) issues.push(error("invalid_stage_status", `${m.stage}/${m.stage_status} is not allowed`));
+  if ((m.stage === "completed" || m.stage === "abandoned") && !m.closure_reason) issues.push(warn("missing_closure_reason", "terminal plans should record closure_reason"));
+  return result(issues);
 }
 
-function validateRequiredHeadings(body: string, required: string[], path: string, issues: ValidationIssue[]): void {
-  const headings = scanHeadings(body);
-  const counts = new Map<string, number>();
-  for (const heading of headings) counts.set(marker(heading), (counts.get(marker(heading)) ?? 0) + 1);
-  for (const requiredHeading of required) {
-    const count = counts.get(requiredHeading) ?? 0;
-    if (count === 0) {
-      issues.push({ severity: "error", code: "missing_heading", message: `Missing heading: ${requiredHeading}`, path });
-    } else if (count > 1) {
-      issues.push({ severity: "error", code: "duplicate_heading", message: `Duplicate heading: ${requiredHeading}`, path });
-    }
-  }
+export function validateSections(text: string): ValidationResult {
+  try { extractAllSections(text); return result([]); } catch (e) { return result([error("invalid_sections", (e as Error).message)]); }
 }
 
-function requireSectionContent(body: string, headingMarker: string, path: string, issues: ValidationIssue[]): void {
-  const headings = scanHeadings(body);
-  const heading = headings.find((candidate) => marker(candidate) === headingMarker);
-  if (heading && !sectionContent(body, heading, headings)) {
-    issues.push({ severity: "error", code: "empty_section", message: `Section is empty: ${headingMarker}`, path });
-  }
+export function validateWhatWhy(markdown: string): ValidationResult {
+  const required = ["Goal", "Desired Outcome", "Scope", "In", "Out", "Constraints", "Success", "Non-Goals", "Open Questions"];
+  const issues = required.filter((h) => !new RegExp(`^#{3,4} ${escapeRegExp(h)}\\s*$`, "m").test(markdown)).map((h) => error("missing_what_why_field", `Missing What / Why heading: ${h}`));
+  if (/^#{1,6} Why\s*$/m.test(markdown)) issues.push(error("what_why_contains_why", "What / Why should not include a separate Why heading; fold rationale into Goal or Desired Outcome."));
+  if (/\bT\d{3}\b/.test(markdown)) issues.push(error("what_why_contains_task_id", "What / Why must not contain Task IDs"));
+  return result(issues);
 }
 
-export function validateSpec(
-  content: string,
-  expectedWorkId: string,
-  path = "spec.md",
-  options: ValidationOptions = {},
-): ValidationResult {
-  const common = commonValidation(content, "spec", expectedWorkId, path, options);
-  if (!common.body) return result(common.issues);
-  const issues = common.issues;
-  validateRequiredHeadings(common.body, SPEC_HEADINGS, path, issues);
-  for (const section of ["### In", "### Out", "## Success", "## Non-Goals"]) {
-    requireSectionContent(common.body, section, path, issues);
+export function validatePlan(markdown: string, round: number): ValidationResult {
+  const issues: ValidationIssue[] = [];
+  for (const h of ["Strategy", "Key Decisions", "Risks / Unknowns", "Replan Conditions"]) {
+    if (!new RegExp(`^### ${escapeRegExp(h)}\\s*$`, "m").test(markdown)) issues.push(error("missing_plan_field", `Missing Plan heading: ${h}`));
   }
-
-  const visibleBody = stripFencedCode(common.body);
-  if (/^##\s+Tasks\s*$/m.test(visibleBody)) {
-    issues.push({ severity: "error", code: "tasks_in_spec", message: "spec.md must not contain a Tasks section", path });
+  if (/^### T\+\d+\b/m.test(markdown)) issues.push(error("plan_contains_horizon_group", "Plan must use T001/T002 stage headings, not T+0/T+1 horizons"));
+  const stages = [...markdown.matchAll(/^### T(\d{3}) — (.+)$/gm)].map((m) => ({ n: Number(m[1]), title: m[2] }));
+  if (!stages.some((s) => s.n === 1)) issues.push(error("missing_t001", "Plan must include T001 as the current stage"));
+  if (!stages.some((s) => s.n === 2)) issues.push(error("missing_t002", "Plan must include T002 as the next stage"));
+  const seen = new Set<number>();
+  for (const stage of stages) {
+    if (seen.has(stage.n)) issues.push(error("duplicate_stage", `Duplicate T${String(stage.n).padStart(3, "0")}`));
+    seen.add(stage.n);
+    if (/\[(?: |x|X)\]\s*$/.test(stage.title)) issues.push(error("plan_stage_has_completion", `T${String(stage.n).padStart(3, "0")} in Plan must not include a completion marker`));
   }
-  if (/\bT\d{3}\b/.test(visibleBody)) {
-    issues.push({ severity: "error", code: "task_id_in_spec", message: "spec.md must not contain task IDs", path });
+  if (stages.length) {
+    const sorted = [...seen].sort((a, b) => a - b);
+    for (let i = 0; i < sorted.length; i++) if (sorted[i] !== i + 1) issues.push(error("non_contiguous_stage", "Plan stages must be contiguous from T001"));
   }
-  if (/^###\s+Depends On\s*$/m.test(visibleBody)) {
-    issues.push({ severity: "error", code: "dependency_in_spec", message: "spec.md must not contain dependencies", path });
+  if (!Number.isInteger(round) || round < 0) issues.push(error("invalid_round", "round must start at 0 and stay non-negative"));
+  if (/^#### (Tasks|Acceptance|Depends On|Round|Why|Inputs|Work|Outputs)\s*$/m.test(markdown)) issues.push(error("plan_contains_task_structure", "Plan must not contain executable Task structure"));
+  const t001 = sectionForPlanStage(markdown, 1);
+  for (const h of ["Outcome", "Work Areas", "Ordering", "Exit Condition"]) if (t001 && !new RegExp(`^#### ${escapeRegExp(h)}\\s*$`, "m").test(t001)) issues.push(error("missing_t001_field", `T001 missing ${h}`));
+  const t002 = sectionForPlanStage(markdown, 2);
+  for (const h of ["Expected Outcome", "Dependencies on T001", "Candidate Work", "Promotion Condition"]) if (t002 && !new RegExp(`^#### ${escapeRegExp(h)}\\s*$`, "m").test(t002)) issues.push(error("missing_t002_field", `T002 missing ${h}`));
+  for (const stage of stages.filter((s) => s.n >= 3)) {
+    const section = sectionForPlanStage(markdown, stage.n) ?? "";
+    for (const field of ["Goal", "Conditional Direction", "Dependencies / Assumptions", "Replan Triggers"]) if (!new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(section)) issues.push(error("missing_later_stage_field", `T${String(stage.n).padStart(3, "0")} missing ${field}`));
   }
   return result(issues);
 }
 
-export function validatePlan(
-  content: string,
-  expectedWorkId: string,
-  path = "plan.md",
-  options: ValidationOptions = {},
-): ValidationResult {
-  const common = commonValidation(content, "plan", expectedWorkId, path, options);
-  if (!common.body) return result(common.issues);
-  const issues = common.issues;
-  validateRequiredHeadings(common.body, PLAN_HEADINGS, path, issues);
-  for (const section of ["#### Outcome", "#### Work Areas", "#### Entry Condition", "#### Replan Triggers"]) {
-    requireSectionContent(common.body, section, path, issues);
-  }
-
-  const visibleBody = stripFencedCode(common.body);
-  if (/\bT\d{3}\b/.test(visibleBody)) {
-    issues.push({ severity: "error", code: "task_id_in_plan", message: "plan.md must not contain task IDs", path });
-  }
-  if (/^###\s+Acceptance\s*$/m.test(visibleBody)) {
-    issues.push({ severity: "error", code: "acceptance_in_plan", message: "plan.md must not contain task acceptance sections", path });
-  }
-  if (/^\s*-\s*\[[ xX]\]\s+/m.test(visibleBody)) {
-    issues.push({
-      severity: "warning",
-      code: "executable_tasks_in_plan",
-      message: "Checkbox list may be an executable task list; keep plan.md at approach level",
-      path,
-    });
-  }
-  return result(issues);
-}
-
-export function validateTasks(
-  content: string,
-  expectedWorkId: string,
-  path = "tasks.md",
-  options: ValidationOptions = {},
-): ValidationResult {
-  const common = commonValidation(content, "tasks", expectedWorkId, path, options);
-  if (!common.body) return result(common.issues);
-  const issues = common.issues;
-  const body = common.body;
-  const headings = scanHeadings(body);
-  const tasks = parseTasks(body);
-
-  if (!headings.some((heading) => marker(heading) === "# Tasks")) {
-    issues.push({ severity: "error", code: "missing_heading", message: "Missing heading: # Tasks", path });
-  }
-  if (tasks.length === 0) {
-    issues.push({ severity: "error", code: "missing_tasks", message: "At least one task is required", path });
-  }
-
-  for (const heading of headings.filter((candidate) => candidate.level === 2 && /^T/i.test(candidate.title))) {
-    if (!/^T\d{3}\s+[—-]\s+\S/.test(heading.title)) {
-      issues.push({ severity: "error", code: "invalid_task_heading", message: `Invalid task heading on line ${heading.line}`, path });
-    }
-  }
-
+export function validateTasks(markdown: string, currentRound: number, options: { requireCurrentOpen?: boolean; historicalCompleted?: boolean } = {}): ValidationResult {
+  const issues: ValidationIssue[] = [];
+  const tasks = parseTasks(markdown);
+  if (/^### T\+\d+\b/m.test(markdown)) issues.push(error("tasks_contains_horizon_group", "Tasks must be listed directly as T001/T002 stages, without a T+0 grouping block"));
+  if (tasks.length === 0) issues.push(error("missing_tasks", "Tasks section must contain at least one Task"));
   const ids = new Set<string>();
-  const titles = new Set<string>();
-  const taskOrder = new Map<string, number>();
-  tasks.forEach((task, index) => taskOrder.set(task.id, index));
-  const dependencyGraph = new Map<string, string[]>();
-
   for (const task of tasks) {
-    if (ids.has(task.id)) {
-      issues.push({ severity: "error", code: "duplicate_task_id", message: `Duplicate task ID: ${task.id}`, path, taskId: task.id });
-    }
+    if (ids.has(task.id)) issues.push(error("duplicate_task_id", `Duplicate ${task.id}`));
     ids.add(task.id);
-    const expectedId = `T${String(ids.size).padStart(3, "0")}`;
-    if (task.id !== expectedId) {
-      issues.push({ severity: "error", code: "task_id_sequence", message: `Expected ${expectedId} at this position`, path, taskId: task.id });
-    }
-    const normalizedTitle = task.title.toLocaleLowerCase();
-    if (titles.has(normalizedTitle)) {
-      issues.push({ severity: "error", code: "duplicate_task_title", message: `Duplicate task title: ${task.title}`, path, taskId: task.id });
-    }
-    titles.add(normalizedTitle);
-
-    for (const sectionName of TASK_SECTIONS) {
-      const entries = task.sections.get(sectionName) ?? [];
-      if (entries.length === 0) {
-        issues.push({ severity: "error", code: "missing_task_section", message: `Missing section: ${sectionName}`, path, taskId: task.id });
-      } else if (entries.length > 1) {
-        issues.push({ severity: "error", code: "duplicate_task_section", message: `Duplicate section: ${sectionName}`, path, taskId: task.id });
-      } else if (!entries[0]?.content.trim()) {
-        issues.push({ severity: "error", code: "empty_task_section", message: `Empty section: ${sectionName}`, path, taskId: task.id });
+    for (const field of taskRequiredFields()) if (!new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(task.definition)) issues.push(error("missing_task_field", `${task.id} missing ${field}`));
+    if (task.round === currentRound) {
+      for (const field of ["Round", "Outcome", "Why", "Inputs", "Work", "Outputs"]) {
+        if (new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(task.definition)) issues.push(error("verbose_task_field", `${task.id} should not include ${field}; keep only Tasks, Acceptance, and Depends On`));
       }
     }
-
-    const acceptance = task.sections.get("Acceptance")?.[0]?.content ?? "";
-    const checks = Array.from(acceptance.matchAll(/^\s*-\s*\[ \]\s+(.+?)\s*$/gm), (match) => match[1] ?? "");
-    if (checks.length === 0) {
-      issues.push({ severity: "error", code: "missing_acceptance_checkbox", message: "Acceptance needs at least one unchecked checkbox", path, taskId: task.id });
-    } else {
-      const allVague = checks.every((check) => VAGUE_ACCEPTANCE.has(check.toLocaleLowerCase().replace(/[.!。！]+$/g, "").trim()));
-      if (allVague) {
-        issues.push({ severity: "error", code: "vague_acceptance", message: "Acceptance criteria are not concretely verifiable", path, taskId: task.id });
-      }
-    }
-
-    const dependencyContent = task.sections.get("Depends On")?.[0]?.content ?? "";
-    const dependencyResult = parseDependencies(dependencyContent);
-    if (!dependencyResult.valid) {
-      issues.push({ severity: "error", code: "invalid_dependencies", message: "Depends On must be 'None.' or a task-ID bullet list", path, taskId: task.id });
-    }
-    dependencyGraph.set(task.id, dependencyResult.dependencies);
+    validateSubtaskMarkers(task.definition, task.id).forEach((issue) => issues.push(issue));
+    if (task.round < 0) issues.push(error("invalid_task_round", `${task.id} has invalid Round`));
+    if (!new RegExp(`^### ${task.id} — .+ \\[(?: |x|X)\\]$`, "m").test(task.definition)) issues.push(error("invalid_completion", `${task.id} must have a heading completion marker: ### ${task.id} — Title [ ] or [x]`));
+    if (task.acceptanceItems.length < 1) issues.push(error("missing_acceptance_checkbox", `${task.id} Acceptance needs at least one checkbox`));
+    if (task.dependsOn.includes(task.id)) issues.push(error("self_dependency", `${task.id} depends on itself`));
+    if (options.requireCurrentOpen && task.round === currentRound && task.completed) issues.push(error("current_round_precompleted", `${task.id} must be open before execution`));
+    if (options.historicalCompleted && task.round < currentRound && !task.completed) issues.push(error("historical_task_open", `${task.id} belongs to history and must remain complete`));
   }
+  for (const task of tasks) for (const dep of task.dependsOn) if (!ids.has(dep)) issues.push(error("unknown_dependency", `${task.id} depends on missing ${dep}`));
+  issues.push(...dependencyCycleIssues(tasks));
+  const numeric = tasks.map((t) => Number(t.id.slice(1))).sort((a, b) => a - b);
+  for (let i = 1; i < numeric.length; i++) if (numeric[i] === numeric[i - 1] || numeric[i]! <= numeric[i - 1]!) issues.push(error("invalid_task_order", "Task IDs must be globally increasing"));
+  return result(issues);
+}
 
-  for (const [taskId, dependencies] of dependencyGraph) {
-    for (const dependency of dependencies) {
-      if (!ids.has(dependency)) {
-        issues.push({ severity: "error", code: "unknown_dependency", message: `Unknown dependency: ${dependency}`, path, taskId });
-      } else if (dependency === taskId) {
-        issues.push({ severity: "error", code: "self_dependency", message: "Task cannot depend on itself", path, taskId });
-      } else if ((taskOrder.get(dependency) ?? Number.MAX_SAFE_INTEGER) >= (taskOrder.get(taskId) ?? -1)) {
-        issues.push({ severity: "error", code: "dependency_order", message: `Dependency must appear before task: ${dependency}`, path, taskId });
-      }
-    }
+export function validateApprovalHashes(document: PlanDocument): ValidationResult {
+  const issues: ValidationIssue[] = [];
+  const { metadata: m, sections } = document;
+  if (m.approved_what_why_hash && m.approved_what_why_hash !== canonicalSectionHash(sections.what_why)) issues.push(error("what_why_hash_mismatch", "What / Why changed after approval"));
+  if (m.approved_plan_hash && m.approved_plan_hash !== canonicalSectionHash(sections.plan)) issues.push(error("plan_hash_mismatch", "Plan changed after approval"));
+  if (m.reviewed_tasks_hash && m.reviewed_tasks_hash !== canonicalTasksDefinitionHash(sections.tasks)) issues.push(error("tasks_hash_mismatch", "Task definitions changed after review"));
+  return result(issues);
+}
+
+export function validateProgress(document: PlanDocument): ValidationResult {
+  const issues: ValidationIssue[] = [];
+  const tasks = parseTasks(document.sections.tasks).filter((t) => t.round === document.metadata.round);
+  if (document.metadata.stage === "executing") {
+    if (tasks.length === 0) issues.push(error("no_current_round_tasks", "executing requires current round Tasks"));
+    if (tasks.every((t) => t.completed)) issues.push(error("executing_all_done", "executing cannot have all current round Tasks complete"));
   }
+  if (document.metadata.stage === "awaiting_round_decision") {
+    if (tasks.length === 0) issues.push(error("no_current_round_tasks", "awaiting_round_decision requires current round Tasks"));
+    if (tasks.some((t) => !t.completed)) issues.push(error("awaiting_decision_open_tasks", "awaiting_round_decision requires all current round Tasks complete"));
+  }
+  return result(issues);
+}
 
+function dependencyCycleIssues(tasks: ReturnType<typeof parseTasks>): ValidationIssue[] {
+  const byId = new Map(tasks.map((t) => [t.id, t]));
   const visiting = new Set<string>();
   const visited = new Set<string>();
-  const cycleMembers = new Set<string>();
-  const visit = (taskId: string): boolean => {
-    if (visiting.has(taskId)) {
-      cycleMembers.add(taskId);
-      return true;
-    }
-    if (visited.has(taskId)) return false;
-    visiting.add(taskId);
-    let cyclic = false;
-    for (const dependency of dependencyGraph.get(taskId) ?? []) {
-      if (ids.has(dependency) && visit(dependency)) {
-        cyclic = true;
-        cycleMembers.add(taskId);
-      }
-    }
-    visiting.delete(taskId);
-    visited.add(taskId);
-    return cyclic;
-  };
-  for (const taskId of ids) visit(taskId);
-  if (cycleMembers.size > 0) {
-    issues.push({
-      severity: "error",
-      code: "dependency_cycle",
-      message: `Dependency cycle detected: ${Array.from(cycleMembers).sort().join(", ")}`,
-      path,
-    });
+  const issues: ValidationIssue[] = [];
+  function visit(id: string, path: string[]) {
+    if (visiting.has(id)) { issues.push(error("dependency_cycle", `Dependency cycle: ${[...path, id].join(" -> ")}`)); return; }
+    if (visited.has(id)) return;
+    visiting.add(id);
+    for (const dep of byId.get(id)?.dependsOn ?? []) if (byId.has(dep)) visit(dep, [...path, id]);
+    visiting.delete(id);
+    visited.add(id);
   }
-  return result(issues);
+  for (const task of tasks) visit(task.id, []);
+  return issues;
 }
 
-export function validateForStage(
-  content: string,
-  stage: PlanningStage,
-  expectedWorkId: string,
-  path: string,
-  options: ValidationOptions = {},
-): ValidationResult {
-  if (stage === "spec") return validateSpec(content, expectedWorkId, path, options);
-  if (stage === "plan") return validatePlan(content, expectedWorkId, path, options);
-  return validateTasks(content, expectedWorkId, path, options);
+function validateSubtaskMarkers(definition: string, taskId: string): ValidationIssue[] {
+  const match = definition.match(/^#### Tasks\s*\n([\s\S]*?)(?=^#### |$)/m);
+  const lines = (match?.[1] ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const issues: ValidationIssue[] = [];
+  for (const line of lines) {
+    if (!line.startsWith("- ")) continue;
+    if (/^- \[(?: |x|X)\]/.test(line) || !/ \[(?: |x|X)\]$/.test(line)) issues.push(error("invalid_subtask_marker", `${taskId} subtasks must use trailing markers like: - Smaller task [ ]`));
+  }
+  return issues;
 }
 
-export function formatValidation(validation: ValidationResult): string {
-  if (validation.issues.length === 0) return "Validation passed: 0 errors, 0 warnings.";
-  const errors = validation.issues.filter((issue) => issue.severity === "error").length;
-  const warnings = validation.issues.length - errors;
-  const details = validation.issues.map((issue) => {
-    const task = issue.taskId ? ` [${issue.taskId}]` : "";
-    return `- ${issue.severity.toUpperCase()} ${issue.code}${task}: ${issue.message}`;
-  });
-  return [`Validation: ${errors} error(s), ${warnings} warning(s).`, ...details].join("\n");
+function sectionForPlanStage(markdown: string, n: number): string | undefined {
+  const id = `T${String(n).padStart(3, "0")}`;
+  const re = new RegExp(`^### ${id} — .*$`, "m");
+  const match = markdown.match(re);
+  if (!match || match.index === undefined) return undefined;
+  const rest = markdown.slice(match.index);
+  const next = rest.slice(1).search(/^### T\d{3} — /m);
+  return next < 0 ? rest : rest.slice(0, next + 1);
 }
+
+function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
