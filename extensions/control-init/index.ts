@@ -7,28 +7,30 @@ import { registerControlWorkspaceDoctorTool } from "./tools/doctor.js";
 import { registerControlWorkspaceInitTool } from "./tools/init.js";
 import { registerControlWorkspaceStatusTool } from "./tools/status.js";
 import { registerControlWorkspaceUpdateTool } from "./tools/update.js";
+import type { ControlWorkspaceSessionState } from "./session-state.js";
 
 /** Registration only: importing/loading the extension performs no filesystem I/O. */
 export default function controlInitExtension(pi: ExtensionAPI): void {
-  registerControlWorkspaceInitTool(pi);
-  registerControlWorkspaceStatusTool(pi);
-  registerControlWorkspaceDoctorTool(pi);
-  registerControlWorkspaceUpdateTool(pi);
+  const sessionState: ControlWorkspaceSessionState = {};
+  registerControlWorkspaceInitTool(pi, sessionState);
+  registerControlWorkspaceStatusTool(pi, sessionState);
+  registerControlWorkspaceDoctorTool(pi, sessionState);
+  registerControlWorkspaceUpdateTool(pi, sessionState);
 
   pi.registerCommand("control:init", {
     description: "Interactively initialize a template-first control workspace",
-    handler: handleControlInit,
+    handler: (args, ctx) => handleControlInit(args, ctx, sessionState),
   });
   pi.registerCommand("control:status", {
     description: "Read the current control workspace state",
-    handler: handleControlStatus,
+    handler: (args, ctx) => handleControlStatus(args, ctx, sessionState),
   });
   pi.registerCommand("control:doctor", {
     description: "Run deterministic read-only control workspace checks",
-    handler: handleControlDoctor,
+    handler: (args, ctx) => handleControlDoctor(args, ctx, sessionState),
   });
   pi.registerCommand("control:update", {
     description: "Interactively update repository bindings or governance",
-    handler: handleControlUpdate,
+    handler: (args, ctx) => handleControlUpdate(args, ctx, sessionState),
   });
 }

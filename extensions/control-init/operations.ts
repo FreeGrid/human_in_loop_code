@@ -728,7 +728,14 @@ export class ControlWorkspaceService {
       return conflict(error, "invalid-control-index-file");
     }
     if (source === null) {
-      return { status: "needs_input", questions: [{ id: "initialize", prompt: `${CONTROL_INDEX_FILENAME} is missing. Initialize this control workspace first.`, kind: "confirmation" }] };
+      return {
+        status: "needs_input",
+        questions: [{
+          id: "control_path",
+          prompt: `${CONTROL_INDEX_FILENAME} was not found at ${root}. Enter the initialized control repository path, or run /control:init if this workspace has not been initialized.`,
+          kind: "path",
+        }],
+      };
     }
     try {
       const index = parseControlIndexJson(source);

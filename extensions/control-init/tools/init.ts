@@ -2,8 +2,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { toolResponse } from "../operation-result.js";
 import { ControlWorkspaceService } from "../operations.js";
 import { ControlInitParameters } from "./schemas.js";
+import { rememberAppliedControlPath, type ControlWorkspaceSessionState } from "../session-state.js";
 
-export function registerControlWorkspaceInitTool(pi: ExtensionAPI): void {
+export function registerControlWorkspaceInitTool(pi: ExtensionAPI, sessionState?: ControlWorkspaceSessionState): void {
   pi.registerTool({
     name: "control_workspace_init",
     label: "Initialize Control Workspace",
@@ -18,7 +19,9 @@ export function registerControlWorkspaceInitTool(pi: ExtensionAPI): void {
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) throw new Error("Control workspace initialization was aborted");
-      return toolResponse(await new ControlWorkspaceService(ctx.cwd).init(params));
+      const result = await new ControlWorkspaceService(ctx.cwd).init(params);
+      rememberAppliedControlPath(result, sessionState);
+      return toolResponse(result);
     },
   });
 }

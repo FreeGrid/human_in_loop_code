@@ -404,7 +404,7 @@ async function collectCustomInput(ctx: WizardContext): Promise<InitWorkspaceInpu
   }
 }
 
-async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | void> {
+async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | { controlPath: string } | void> {
   const profileChoice = await ctx.ui.select("Choose a topology", [PROFILE_CONTROL_CODE, PROFILE_WITH_LATEX, PROFILE_CUSTOM]);
   if (profileChoice === undefined) {
     cancelled(ctx);
@@ -498,16 +498,25 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | void
   }
   const applied = await service.init(input, { expectedPreviewToken: preview.summary.previewToken });
   ctx.ui.notify(renderOperationResult(applied), applied.status === "applied" ? "info" : "error");
+  if (applied.status === "applied") {
+    const control = applied.summary.repositories?.find((repository) => repository.kind === "control");
+    if (control) return { controlPath: control.absolutePath };
+  }
 }
 
-export async function runInitWizard(ctx: WizardContext): Promise<void> {
+export async function runInitWizard(ctx: WizardContext): Promise<string | undefined> {
   if (!requireUI(ctx, "/control:init")) return;
   ctx.ui.notify(
     "Choose a workspace topology. Quick setup asks for one workspace name, then creates separate <name>_control and <name>_code repositories under the current directory. The LaTeX profile also adds one private repository per paper.",
     "info",
   );
-  while (await runInitWizardAttempt(ctx) === "revise") {
-    ctx.ui.notify("Returning to initialization answers. Review the new preview before applying.", "info");
+  for (;;) {
+    const outcome = await runInitWizardAttempt(ctx);
+    if (outcome === "revise") {
+      ctx.ui.notify("Returning to initialization answers. Review the new preview before applying.", "info");
+      continue;
+    }
+    return outcome?.controlPath;
   }
 }
 
