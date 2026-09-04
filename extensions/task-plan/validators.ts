@@ -33,30 +33,32 @@ export function validateWhatWhy(markdown: string): ValidationResult {
 
 export function validatePlan(markdown: string, round: number): ValidationResult {
   const issues: ValidationIssue[] = [];
-  for (const h of ["Strategy", "T+0 — Current Horizon", "Key Decisions", "Risks / Unknowns", "Replan Conditions"]) {
+  for (const h of ["Strategy", "Key Decisions", "Risks / Unknowns", "Replan Conditions"]) {
     if (!new RegExp(`^### ${escapeRegExp(h)}\\s*$`, "m").test(markdown)) issues.push(error("missing_plan_field", `Missing Plan heading: ${h}`));
   }
-  const horizons = [...markdown.matchAll(/^### T\+(\d+) — (.+)$/gm)].map((m) => ({ n: Number(m[1]), title: m[2] }));
-  if (!horizons.some((h) => h.n === 0)) issues.push(error("missing_t0", "Plan must include T+0"));
-  if (!horizons.some((h) => h.n === 1)) issues.push(error("missing_t1", "Plan must include T+1 as the next horizon"));
+  if (/^### T\+\d+\b/m.test(markdown)) issues.push(error("plan_contains_horizon_group", "Plan must use T001/T002 stage headings, not T+0/T+1 horizons"));
+  const stages = [...markdown.matchAll(/^### T(\d{3}) — (.+)$/gm)].map((m) => ({ n: Number(m[1]), title: m[2] }));
+  if (!stages.some((s) => s.n === 1)) issues.push(error("missing_t001", "Plan must include T001 as the current stage"));
+  if (!stages.some((s) => s.n === 2)) issues.push(error("missing_t002", "Plan must include T002 as the next stage"));
   const seen = new Set<number>();
-  for (const h of horizons) {
-    if (seen.has(h.n)) issues.push(error("duplicate_horizon", `Duplicate T+${h.n}`));
-    seen.add(h.n);
+  for (const stage of stages) {
+    if (seen.has(stage.n)) issues.push(error("duplicate_stage", `Duplicate T${String(stage.n).padStart(3, "0")}`));
+    seen.add(stage.n);
+    if (/\[(?: |x|X)\]\s*$/.test(stage.title)) issues.push(error("plan_stage_has_completion", `T${String(stage.n).padStart(3, "0")} in Plan must not include a completion marker`));
   }
-  if (horizons.length) {
+  if (stages.length) {
     const sorted = [...seen].sort((a, b) => a - b);
-    for (let i = 0; i < sorted.length; i++) if (sorted[i] !== i) issues.push(error("non_contiguous_horizon", "Horizons must be contiguous from T+0"));
+    for (let i = 0; i < sorted.length; i++) if (sorted[i] !== i + 1) issues.push(error("non_contiguous_stage", "Plan stages must be contiguous from T001"));
   }
   if (!Number.isInteger(round) || round < 0) issues.push(error("invalid_round", "round must start at 0 and stay non-negative"));
-  if (/^### T\d{3} — /m.test(markdown) || /^#### (Acceptance|Depends On)\s*$/m.test(markdown)) issues.push(error("plan_contains_task_structure", "Plan must not contain executable Task structure"));
-  const t0 = sectionForHorizon(markdown, 0);
-  for (const h of ["Outcome", "Work Areas", "Ordering", "Exit Condition"]) if (t0 && !new RegExp(`^#### ${escapeRegExp(h)}\\s*$`, "m").test(t0)) issues.push(error("missing_t0_field", `T+0 missing ${h}`));
-  const t1 = sectionForHorizon(markdown, 1);
-  for (const h of ["Expected Outcome", "Dependencies on T+0", "Candidate Work", "Promotion Condition"]) if (t1 && !new RegExp(`^#### ${escapeRegExp(h)}\\s*$`, "m").test(t1)) issues.push(error("missing_t1_field", `T+1 missing ${h}`));
-  for (const h of horizons.filter((h) => h.n >= 2)) {
-    const section = sectionForHorizon(markdown, h.n) ?? "";
-    for (const field of ["Goal", "Conditional Direction", "Dependencies / Assumptions", "Replan Triggers"]) if (!new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(section)) issues.push(error("missing_later_horizon_field", `T+${h.n} missing ${field}`));
+  if (/^#### (Tasks|Acceptance|Depends On|Round|Why|Inputs|Work|Outputs)\s*$/m.test(markdown)) issues.push(error("plan_contains_task_structure", "Plan must not contain executable Task structure"));
+  const t001 = sectionForPlanStage(markdown, 1);
+  for (const h of ["Outcome", "Work Areas", "Ordering", "Exit Condition"]) if (t001 && !new RegExp(`^#### ${escapeRegExp(h)}\\s*$`, "m").test(t001)) issues.push(error("missing_t001_field", `T001 missing ${h}`));
+  const t002 = sectionForPlanStage(markdown, 2);
+  for (const h of ["Expected Outcome", "Dependencies on T001", "Candidate Work", "Promotion Condition"]) if (t002 && !new RegExp(`^#### ${escapeRegExp(h)}\\s*$`, "m").test(t002)) issues.push(error("missing_t002_field", `T002 missing ${h}`));
+  for (const stage of stages.filter((s) => s.n >= 3)) {
+    const section = sectionForPlanStage(markdown, stage.n) ?? "";
+    for (const field of ["Goal", "Conditional Direction", "Dependencies / Assumptions", "Replan Triggers"]) if (!new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(section)) issues.push(error("missing_later_stage_field", `T${String(stage.n).padStart(3, "0")} missing ${field}`));
   }
   return result(issues);
 }
@@ -142,12 +144,13 @@ function validateSubtaskMarkers(definition: string, taskId: string): ValidationI
   return issues;
 }
 
-function sectionForHorizon(markdown: string, n: number): string | undefined {
-  const re = new RegExp(`^### T\\+${n} — .*$`, "m");
+function sectionForPlanStage(markdown: string, n: number): string | undefined {
+  const id = `T${String(n).padStart(3, "0")}`;
+  const re = new RegExp(`^### ${id} — .*$`, "m");
   const match = markdown.match(re);
   if (!match || match.index === undefined) return undefined;
   const rest = markdown.slice(match.index);
-  const next = rest.slice(1).search(/^### T\+\d+ — /m);
+  const next = rest.slice(1).search(/^### T\d{3} — /m);
   return next < 0 ? rest : rest.slice(0, next + 1);
 }
 

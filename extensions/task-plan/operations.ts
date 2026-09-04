@@ -258,13 +258,13 @@ function validateExecutionReadiness(document: PlanDocument) {
 }
 
 function upsertReview(existing: string, round: number, summary: string): string {
-  const heading = `### R${String(round).padStart(3, "0")} — T+0 Task Review`;
+  const heading = `### R${String(round).padStart(3, "0")} — Current Stage Task Review`;
   const entry = `${heading}\n\n${summary.trim()}`;
   const re = new RegExp(`^${escapeRegExp(heading)}[\\s\\S]*?(?=^### R\\d{3} — T\\+0 Task Review|$)`, "m");
   return re.test(existing) ? existing.replace(re, entry) : `${existing.trim() === "Not run." ? "" : existing.trim() + "\n\n"}${entry}`;
 }
 
-function hasFutureHorizon(plan: string): boolean { return /^### T\+[1-9]\d* — /m.test(plan); }
+function hasFutureHorizon(plan: string): boolean { return /^### T(?:00[2-9]|0[1-9]\d|[1-9]\d{2}) — /m.test(plan); }
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function snapshot(document: PlanDocument, binding?: TaskBinding) { return { path: document.path, document_hash: document.document_hash, metadata: document.metadata, sections: document.sections, binding }; }
 function ok(status: PlanOperationResult["status"], message: string, document: PlanDocument): PlanOperationResult { return { status, message, path: document.path, document_hash: document.document_hash }; }

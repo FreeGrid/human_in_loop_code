@@ -1,10 +1,10 @@
-Draft only current-round stage Tasks from the approved Plan T+0. Do not create stage Tasks for T+1 or later horizons.
+Draft only the current stage's executable Tasks from the approved Plan, normally replacing/expanding the Plan's `T001` current stage. Do not expand T002 or later stages yet.
 
-List stage Tasks directly as T001/T002 headings; do not add a separate T+0 grouping block. Each Txxx item should be a meaningful larger stage or delivery unit, and its smaller work items should be listed under `#### Tasks`.
+Use the same stage ID as the Plan current stage and add the completion marker only here. The smaller executable tasks go under `#### Tasks`.
 
 Use this concise structure:
 
-### T001 — Stage-oriented title [ ]
+### T001 — Current stage title [ ]
 #### Tasks
 - Smaller task or step [ ]
 - Smaller task or step [ ]
@@ -12,14 +12,6 @@ Use this concise structure:
 - [ ] Checkable stage-level criterion
 #### Depends On
 None.
-
-### T002 — Next stage [ ]
-#### Tasks
-- Smaller task or step [ ]
-#### Acceptance
-- [ ] Checkable stage-level criterion
-#### Depends On
-- T001
 
 Use `[ ]` for open stage Tasks and `[x]` only for completed historical stage Tasks. Use the same trailing marker style for smaller tasks under `#### Tasks`, for example `- Smaller task [ ]`; do not use leading checkboxes like `- [ ] Smaller task`. Do not put completion in a separate field.
 
