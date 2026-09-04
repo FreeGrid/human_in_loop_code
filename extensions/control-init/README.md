@@ -44,10 +44,10 @@ missing exact path instead of guessing it.
 Agent tools cannot replace a Pi Session safely while the model is still in a
 tool-execution turn. After a successful name-only Agent initialization, the
 result therefore marks `/control:enter` as a required next step, includes the
-exact initialized control path in the command, and explains that the
-Human-in-the-Loop workflow must continue from the control repository. The path
-is also remembered in the same Session, but displaying it makes the target
-explicit and keeps the command reusable in a later Session.
+command without a long path that may wrap in the terminal, and explains that
+the Human-in-the-Loop workflow continues from the remembered control
+repository. In a later Session where that binding is unavailable, use
+`/control:enter /exact/path/to/name_control`.
 
 The slash commands are the Human-UI fallback. For the recommended and LaTeX
 profiles, `/control:init` first offers two setup paths:

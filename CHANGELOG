@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Added `/control:enter` as the required one-action handoff after Agent-tool initialization, displaying the exact control path and explaining that the Human-in-the-Loop workflow continues from the control repository.
+- Added `/control:enter` as the required one-action handoff after Agent-tool initialization, using the remembered control path so the command stays short and the Human-in-the-Loop workflow continues from the control repository.
 - Added name-only Agent initialization: a local creation request with a workspace name now derives `<cwd>/<name>_control` and `<cwd>/<name>_code` without asking the user to supply redundant absolute paths.
 - Added a name-first `/control:init` path that creates `<name>_control` and `<name>_code` together, plus a separate existing-repositories path with immediate validation, visible profile defaults, and an explicit final apply action.
 - Fixed post-initialization commands to keep using the newly created control repository for the current Pi session; missing-index status now asks for an initialized control path instead of incorrectly requesting initialization again.
