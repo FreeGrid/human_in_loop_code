@@ -66,9 +66,15 @@ async function approve(pi: ExtensionAPI, args: string, ctx: ExtensionCommandCont
     else { action = "complete"; reason = trimmed; }
   }
   const result = await service.advance({ expected_document_hash: current.document_hash, action, reason });
-  notify(ctx, result);
   const nextStage = (result.snapshot as { metadata?: { stage?: string } } | undefined)?.metadata?.stage;
-  if (result.status === "applied" && (nextStage === "plan" || nextStage === "tasks")) queueDraftFollowUp(pi, nextStage, result.path);
+  if (result.status === "applied" && (nextStage === "plan" || nextStage === "tasks")) {
+    ctx.ui.notify(nextStage === "plan"
+      ? "收到“继续”。我会基于已确认的 What / Why 直接起草 Plan，完成后把 Plan 内容贴出来请你审批。"
+      : "收到“继续”。我会基于已确认的 Plan 直接拆当前轮 Tasks，完成后把任务列表贴出来请你审批。", "info");
+    queueDraftFollowUp(pi, nextStage, result.path);
+    return;
+  }
+  notify(ctx, result);
 }
 
 async function review(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
