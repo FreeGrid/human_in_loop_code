@@ -1,10 +1,13 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { registerTaskPlanCommands } from "./commands.ts";
 import { isCurrentHarnessPlanPath, type TaskPlanSessionState } from "./operations.ts";
+import { PLAN_PROMPTS } from "./prompts.ts";
 import { registerTaskPlanTools } from "./tools.ts";
 
 export * from "./operation-result.ts";
 export * from "./operations.ts";
 export * from "./plan-file.ts";
+export * from "./prompts.ts";
 export * from "./sections.ts";
 export * from "./state.ts";
 export * from "./tasks.ts";
@@ -14,6 +17,7 @@ export * from "./validators.ts";
 export default function taskPlanExtension(pi: ExtensionAPI): void {
   const state: TaskPlanSessionState = {};
   registerTaskPlanTools(pi, state);
+  registerTaskPlanCommands(pi, state);
 
   pi.on("session_start", async (_event, ctx) => {
     const entry = [...ctx.sessionManager.getEntries()].reverse().find((candidate: { type: string; customType?: string }) => candidate.type === "custom" && candidate.customType === "pi-plan-task-binding") as { data?: TaskPlanSessionState } | undefined;
@@ -23,10 +27,11 @@ export default function taskPlanExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_start", async () => { state.reportedThisTurn = false; });
 
-  pi.on("before_agent_start", async () => {
-    if (!state.binding) return;
+  pi.on("before_agent_start", async (event) => {
+    const systemPrompt = `${event.systemPrompt}\n\n${PLAN_PROMPTS.system}`;
+    if (!state.binding) return { systemPrompt };
     const task = state.binding.contract;
-    return { message: { customType: "pi-plan-bound-task", display: false, content: `Bound Harness Task ${task.id} — ${task.title}\n\nOutcome:\n${field(task.definition, "Outcome")}\n\nWork:\n${field(task.definition, "Work")}\n\nOutputs:\n${field(task.definition, "Outputs")}\n\nAcceptance:\n${field(task.definition, "Acceptance")}\n\nDepends On:\n${field(task.definition, "Depends On")}\n\nBefore this execution turn ends, call plan_report_task_result with result in_progress, blocked, or completed. Do not infer completion from agent_end or final prose.` } };
+    return { systemPrompt, message: { customType: "pi-plan-bound-task", display: false, content: `Bound Harness Task ${task.id} — ${task.title}\n\nOutcome:\n${field(task.definition, "Outcome")}\n\nWork:\n${field(task.definition, "Work")}\n\nOutputs:\n${field(task.definition, "Outputs")}\n\nAcceptance:\n${field(task.definition, "Acceptance")}\n\nDepends On:\n${field(task.definition, "Depends On")}\n\nBefore this execution turn ends, call plan_report_task_result with result in_progress, blocked, or completed. Do not infer completion from agent_end or final prose.` } };
   });
 
   pi.on("agent_end", async (_event, ctx) => {
