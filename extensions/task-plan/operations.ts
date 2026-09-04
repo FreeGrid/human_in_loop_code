@@ -168,13 +168,23 @@ export class TaskPlanService {
     return this.setTaskCompletion(loaded, task, params.status === "completed", `Task ${task.id} marked ${params.status} by Human`, false);
   }
 
-  async abandon(params: { expected_document_hash: string; reason: string; planPath?: string }): Promise<PlanOperationResult> {
+  async abandon(params: { expected_document_hash: string; reason?: string; planPath?: string }): Promise<PlanOperationResult> {
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
-    if (!params.reason.trim()) return validation("Abandon requires an explicit reason", []);
     if (["completed", "abandoned"].includes(loaded.metadata.stage)) return validation("Terminal plans cannot be abandoned again", []);
-    return this.write(loaded, replaceFrontmatter(loaded.text, abandonPlan(loaded.metadata, params.reason.trim())), "Plan abandoned");
+    const reason = params.reason?.trim() || "No reason provided.";
+    return this.write(loaded, replaceFrontmatter(loaded.text, abandonPlan(loaded.metadata, reason)), "Plan abandoned");
+  }
+
+  async updateClosureReason(params: { expected_document_hash: string; reason: string; planPath?: string }): Promise<PlanOperationResult> {
+    const loaded = await this.load(params.planPath);
+    if ("status" in loaded) return loaded;
+    if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
+    if (loaded.metadata.stage !== "abandoned" && loaded.metadata.stage !== "completed") return validation("Closure reason can only be updated on a terminal plan", []);
+    const reason = params.reason.trim();
+    if (!reason) return validation("Closure reason update requires non-empty text", []);
+    return this.write(loaded, replaceFrontmatter(loaded.text, { ...loaded.metadata, closure_reason: reason }), "Updated closure reason");
   }
 
   private async setTaskCompletion(loaded: PlanDocument, task: TaskBlock, complete: boolean, message: string, clearBinding: boolean): Promise<PlanOperationResult> {

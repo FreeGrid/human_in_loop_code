@@ -10,7 +10,7 @@ export function registerTaskPlanCommands(pi: ExtensionAPI, state: TaskPlanSessio
   pi.registerCommand("plan:approve", { description: "Apply the current Human approval gate", handler: (args, ctx) => approve(pi, args, ctx, state) });
   pi.registerCommand("plan:review", { description: "Review the current Harness Plan stage", handler: (args, ctx) => review(args, ctx, state) });
   pi.registerCommand("plan:task", { description: "Bind or mark a current-round Task: <id> <start|done|open>", handler: (args, ctx) => task(args, ctx, state) });
-  pi.registerCommand("plan:abandon", { description: "Abandon the current Harness Plan with a reason", handler: (args, ctx) => abandon(args, ctx, state) });
+  pi.registerCommand("plan:abandon", { description: "Abandon the current Harness Plan, optionally recording a reason", handler: (args, ctx) => abandon(args, ctx, state) });
 }
 
 async function newPlan(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
@@ -71,7 +71,12 @@ async function abandon(args: string, ctx: ExtensionCommandContext, state: TaskPl
   const service = new TaskPlanService(ctx.cwd, state);
   const current = await service.get();
   if (!current.document_hash) return notify(ctx, current);
-  return notify(ctx, await service.abandon({ expected_document_hash: current.document_hash, reason: args }));
+  const result = await service.abandon({ expected_document_hash: current.document_hash, reason: args.trim() || undefined });
+  notify(ctx, result);
+  if (result.status !== "applied" || args.trim() || !result.document_hash || !ctx.hasUI) return;
+  const reason = await ctx.ui.input("可选：为什么放弃这个 Plan？", "不想填写可以直接按 Esc 或留空");
+  if (!reason?.trim()) return;
+  notify(ctx, await service.updateClosureReason({ expected_document_hash: result.document_hash, reason }));
 }
 
 async function run(ctx: ExtensionCommandContext, state: TaskPlanSessionState, fn: (service: TaskPlanService) => Promise<Parameters<typeof notify>[1]>) {

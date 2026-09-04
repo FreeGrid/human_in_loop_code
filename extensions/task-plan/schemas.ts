@@ -32,5 +32,5 @@ export type PlanReportTaskResultParams = Static<typeof PlanReportTaskResultParam
 export const PlanSetTaskStatusParameters = Type.Object({ expected_document_hash: ExpectedHash, task_id: Type.String({ pattern: "^T\\d{3}$" }), status: StringEnum(["open", "completed"] as const), planPath: PlanPath });
 export type PlanSetTaskStatusParams = Static<typeof PlanSetTaskStatusParameters>;
 
-export const PlanAbandonParameters = Type.Object({ expected_document_hash: ExpectedHash, reason: Type.String(), planPath: PlanPath });
+export const PlanAbandonParameters = Type.Object({ expected_document_hash: ExpectedHash, reason: Type.Optional(Type.String()), planPath: PlanPath });
 export type PlanAbandonParams = Static<typeof PlanAbandonParameters>;
