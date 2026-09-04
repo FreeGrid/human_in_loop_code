@@ -3,7 +3,10 @@ import { StringEnum, Type, type Static } from "@mariozechner/pi-ai";
 export const PlanPath = Type.Optional(Type.String({ description: "Optional Harness Plan path. Defaults to the only unfinished Harness Plan in the current workspace." }));
 export const ExpectedHash = Type.String({ description: "document_hash from the latest plan_get/plan_status/previous mutating tool result." });
 
-export const PlanStartParameters = Type.Object({ goal: Type.String() });
+export const PlanStartParameters = Type.Object({
+  goal: Type.String(),
+  title: Type.Optional(Type.String({ description: "Optional concise model-summarized plan title used for the Markdown heading and filename. The full goal is still preserved in Original Request." })),
+});
 export type PlanStartParams = Static<typeof PlanStartParameters>;
 
 export const PlanGetParameters = Type.Object({ planPath: PlanPath });
