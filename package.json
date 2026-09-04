@@ -37,6 +37,7 @@
   "pi": {
     "extensions": [
       "./extensions/collaborating-agents/index.ts",
+      "./extensions/task-plan/index.ts",
       "./extensions/control-init/index.ts"
     ],
     "skills": [
