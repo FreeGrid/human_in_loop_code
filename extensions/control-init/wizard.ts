@@ -488,6 +488,7 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | { co
       "Preview ready — choose the next action.",
       "Apply creates only the shown local directories, Git metadata, CONTROL_INDEX.json, and managed AGENTS block.",
       "It does not create a remote, commit, push, merge, or release.",
+      "After successful initialization, Pi continues this session from the control repository when session persistence is available; otherwise it shows the exact restart command.",
     ].join("\n"),
     [APPLY_INITIALIZATION, RETURN_TO_MODIFY, CANCEL_WITHOUT_CHANGES],
   );
