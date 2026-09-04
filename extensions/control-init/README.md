@@ -21,6 +21,7 @@ The code repository moved to ../my-app-v2; update its binding.
 | Agent tool | Human command | Behavior |
 | --- | --- | --- |
 | `control_workspace_init` | `/control:init` | Initialize `CONTROL_INDEX.json`, a managed `AGENTS.md` block, and any explicitly approved local Git repositories. |
+| — | `/control:enter [control-path]` | Continue Pi in the initialized control repository after Agent-tool initialization. The remembered path makes the argument optional in the same Session. |
 | `control_workspace_status` | `/control:status [control-path]` | Read repository bindings, Git state, policies, warnings, and incomplete items. |
 | `control_workspace_doctor` | `/control:doctor [control-path]` | Deterministically check schema, canonical paths, Git roots, remote identity, repository boundaries, and managed-block drift. |
 | `control_workspace_update` | `/control:update [control-path]` | Preview and apply binding, topology, policy, requirement, or managed-block changes while preserving unaffected state. |
@@ -39,6 +40,13 @@ expand those paths manually. The same safe-name and no-overwrite rules used by
 the interactive wizard apply. Providing either repository path opts out of
 name-only derivation, so partial custom/existing bindings still ask for the
 missing exact path instead of guessing it.
+
+Agent tools cannot replace a Pi Session safely while the model is still in a
+tool-execution turn. After a successful name-only Agent initialization, the
+result therefore shows `Next action: /control:enter`. Run that command once—no
+path is needed in the same Session—to validate the remembered control binding
+and continue Pi with that repository as its real cwd. In a later Session, use
+`/control:enter /exact/path/to/name_control`.
 
 The slash commands are the Human-UI fallback. For the recommended and LaTeX
 profiles, `/control:init` first offers two setup paths:
