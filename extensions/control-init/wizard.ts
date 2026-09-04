@@ -1,4 +1,4 @@
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { renderOperationResult, renderSummary } from "./operation-result.js";
 import { ControlWorkspaceService } from "./operations.js";
@@ -24,6 +24,8 @@ interface PathSlot {
 const PROFILE_CONTROL_CODE = "Recommended — control + code";
 const PROFILE_WITH_LATEX = "Optional — control + code + one LaTeX repository per paper";
 const PROFILE_CUSTOM = "Advanced — custom topology";
+const CREATE_FROM_NAME = "Recommended — create new sibling repositories from a workspace name";
+const USE_EXISTING_PATHS = "Use existing repository directories";
 const APPLY_INITIALIZATION = "Apply the shown initialization";
 const RETURN_TO_MODIFY = "Return to modify answers";
 const CANCEL_WITHOUT_CHANGES = "Cancel without changes";
@@ -79,41 +81,115 @@ function isSameOrNestedPath(left: string, right: string): boolean {
   return rightInsideLeft || leftInsideRight;
 }
 
-function suggestedSiblingCodePath(controlPath: string): string {
-  const controlName = basename(controlPath);
-  let codeName: string;
-  if (/^control$/i.test(controlName)) {
-    codeName = "code";
-  } else if (/control$/i.test(controlName)) {
-    codeName = controlName.replace(/control$/i, "code");
-  } else {
-    codeName = `${controlName}-code`;
-  }
-  return join(dirname(controlPath), codeName);
+interface StandardRepositoryPaths {
+  name?: string;
+  controlPath: string;
+  codePath: string;
+  bootstrap?: BootstrapAuthorization;
 }
 
-async function chooseCodePath(controlPath: string, ctx: WizardContext): Promise<string | undefined> {
-  const canonicalControl = (await resolveCanonicalPath(controlPath, ctx.cwd)).canonicalPath;
-  const suggestion = suggestedSiblingCodePath(canonicalControl);
+function workspaceNameError(name: string): string | undefined {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+    return "Use only letters, numbers, dots, underscores, and hyphens, starting with a letter or number.";
+  }
+  if (/(?:^|[._-])(control|code)$/i.test(name)) {
+    return "Enter the base workspace name without a control or code suffix; the wizard adds both suffixes.";
+  }
+  return undefined;
+}
+
+async function createRepositoryPathsFromName(ctx: WizardContext): Promise<StandardRepositoryPaths | undefined> {
   ctx.ui.notify([
-    `Selected control repository: ${canonicalControl}`,
-    "The code repository must be separate from the control repository; neither directory may contain the other.",
-    `Suggested sibling path: ${suggestion}`,
-    `Relative paths are resolved from: ${ctx.cwd}`,
+    "Quick setup creates two sibling Git repositories in the current directory:",
+    `- <name>_control — private plans, tests, evidence, and workflow records`,
+    `- <name>_code — delivered source, runtime resources, and public-facing documentation`,
+    `Parent directory: ${ctx.cwd}`,
+    "Workspace names may contain letters, numbers, dots, underscores, and hyphens. Do not add the _control or _code suffix.",
   ].join("\n"), "info");
 
   for (;;) {
-    const entered = await ctx.ui.input("Enter the code repository path", suggestion);
+    const entered = await ctx.ui.input("Enter a workspace name");
     if (entered === undefined || !entered.trim()) return undefined;
-    const canonicalCode = (await resolveCanonicalPath(entered.trim(), ctx.cwd)).canonicalPath;
-    if (!isSameOrNestedPath(canonicalControl, canonicalCode)) return entered.trim();
+    const name = entered.trim();
+    const error = workspaceNameError(name);
+    if (error) {
+      ctx.ui.notify(`Invalid workspace name: ${name}\n${error}`, "warning");
+      continue;
+    }
+    const control = await resolveCanonicalPath(join(ctx.cwd, `${name}_control`), ctx.cwd);
+    const code = await resolveCanonicalPath(join(ctx.cwd, `${name}_code`), ctx.cwd);
+    const existing = [control, code].filter((entry) => entry.exists);
+    if (existing.length > 0) {
+      ctx.ui.notify([
+        `The workspace name "${name}" cannot be used because ${existing.length === 1 ? "this directory already exists" : "these directories already exist"}:`,
+        ...existing.map((entry) => `- ${entry.canonicalPath}`),
+        "Enter another workspace name, or choose the existing-repositories option.",
+      ].join("\n"), "warning");
+      continue;
+    }
     ctx.ui.notify([
-      "The control and code repositories must be separate directories.",
-      `Control: ${canonicalControl}`,
-      `Code: ${canonicalCode}`,
-      `Choose a sibling path such as: ${suggestion}`,
+      "New workspace repositories:",
+      `- Control: ${control.canonicalPath}`,
+      `- Code: ${code.canonicalPath}`,
+      "Both directories will be created and initialized as local Git repositories only after you apply the final preview.",
+    ].join("\n"), "info");
+    return {
+      name,
+      controlPath: control.canonicalPath,
+      codePath: code.canonicalPath,
+      bootstrap: { create: [control.canonicalPath, code.canonicalPath] },
+    };
+  }
+}
+
+async function chooseExistingRepositoryPath(kind: "control" | "code", ctx: WizardContext): Promise<string | undefined> {
+  const label = kind === "control" ? "control" : "code";
+  for (;;) {
+    const entered = await ctx.ui.input(`Enter the existing ${label} repository path`);
+    if (entered === undefined || !entered.trim()) return undefined;
+    try {
+      const resolution = await resolveCanonicalPath(entered.trim(), ctx.cwd);
+      if (resolution.exists) return resolution.canonicalPath;
+      ctx.ui.notify([
+        `The ${label} repository directory does not exist:`,
+        resolution.canonicalPath,
+        "Enter an existing directory path.",
+      ].join("\n"), "warning");
+    } catch (error) {
+      ctx.ui.notify(`Invalid ${label} repository path: ${error instanceof Error ? error.message : String(error)}`, "warning");
+    }
+  }
+}
+
+async function chooseExistingRepositoryPaths(ctx: WizardContext): Promise<StandardRepositoryPaths | undefined> {
+  ctx.ui.notify([
+    "Existing-repository setup uses two directories that already exist.",
+    "Control is the private management repository; code is the delivered product repository.",
+    `Relative paths are resolved from: ${ctx.cwd}`,
+  ].join("\n"), "info");
+  const controlPath = await chooseExistingRepositoryPath("control", ctx);
+  if (!controlPath) return undefined;
+  for (;;) {
+    const codePath = await chooseExistingRepositoryPath("code", ctx);
+    if (!codePath) return undefined;
+    if (!isSameOrNestedPath(controlPath, codePath)) return { controlPath, codePath };
+    ctx.ui.notify([
+      "The control and code repositories must be separate directories; neither may contain the other.",
+      `Control: ${controlPath}`,
+      `Code: ${codePath}`,
+      "Enter a different existing code repository path.",
     ].join("\n"), "warning");
   }
+}
+
+async function chooseStandardRepositoryPaths(ctx: WizardContext): Promise<StandardRepositoryPaths | undefined> {
+  const choice = await ctx.ui.select(
+    "How would you like to set up the control and code repositories?",
+    [CREATE_FROM_NAME, USE_EXISTING_PATHS],
+  );
+  if (choice === CREATE_FROM_NAME) return createRepositoryPathsFromName(ctx);
+  if (choice === USE_EXISTING_PATHS) return chooseExistingRepositoryPaths(ctx);
+  return undefined;
 }
 
 function pathSlots(input: InitWorkspaceInput, partial: boolean): PathSlot[] {
@@ -276,19 +352,6 @@ async function resolveInitConflict(
   return requestRevision(ctx);
 }
 
-async function chooseControlPath(ctx: WizardContext): Promise<string | undefined> {
-  const choice = await ctx.ui.select(
-    "Choose or enter the control repository path",
-    [`Use current directory as the control repository: ${ctx.cwd}`, "Enter a control repository path"],
-  );
-  if (choice?.startsWith("Use current directory as the control repository:")) return ctx.cwd;
-  if (choice === "Enter a control repository path") {
-    const entered = await ctx.ui.editor("Enter the control repository path", ctx.cwd);
-    return entered?.trim() || undefined;
-  }
-  return undefined;
-}
-
 async function collectCustomInput(ctx: WizardContext): Promise<InitWorkspaceInput | undefined> {
   const prefill = JSON.stringify({
     repositories: [
@@ -357,20 +420,17 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | void
     }
     input = custom;
   } else {
-    const controlPath = await chooseControlPath(ctx);
-    if (!controlPath) {
-      cancelled(ctx);
-      return;
-    }
-    const codePath = await chooseCodePath(controlPath, ctx);
-    if (!codePath) {
+    const repositories = await chooseStandardRepositoryPaths(ctx);
+    if (!repositories) {
       cancelled(ctx);
       return;
     }
     input = {
       topologyProfile: profileChoice === PROFILE_WITH_LATEX ? "control-code-latex" : "control-code",
-      controlPath,
-      codePath,
+      name: repositories.name,
+      controlPath: repositories.controlPath,
+      codePath: repositories.codePath,
+      bootstrap: repositories.bootstrap,
     };
     if (profileChoice === PROFILE_WITH_LATEX) {
       const countSource = await ctx.ui.input("Number of independent paper repositories", "1");
@@ -443,7 +503,7 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | void
 export async function runInitWizard(ctx: WizardContext): Promise<void> {
   if (!requireUI(ctx, "/control:init")) return;
   ctx.ui.notify(
-    "Choose a workspace topology. The recommended profile creates separate control and code repositories; the LaTeX profile also adds one private repository per paper.",
+    "Choose a workspace topology. Quick setup asks for one workspace name, then creates separate <name>_control and <name>_code repositories under the current directory. The LaTeX profile also adds one private repository per paper.",
     "info",
   );
   while (await runInitWizardAttempt(ctx) === "revise") {
