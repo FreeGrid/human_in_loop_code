@@ -31,6 +31,15 @@ retry. The `init` and `update` tools run sequentially so concurrent tool calls
 in one Pi process cannot race one another. Byte-for-byte index and AGENTS
 preconditions also reject stale writes from another process.
 
+For a natural-language request such as “create local control and code
+repositories named `test2`,” the Agent init tool needs only the base name. With
+no explicit paths, it deterministically uses Pi's current directory as the
+parent and creates `test2_control` plus `test2_code`; the user does not need to
+expand those paths manually. The same safe-name and no-overwrite rules used by
+the interactive wizard apply. Providing either repository path opts out of
+name-only derivation, so partial custom/existing bindings still ask for the
+missing exact path instead of guessing it.
+
 The slash commands are the Human-UI fallback. For the recommended and LaTeX
 profiles, `/control:init` first offers two setup paths:
 
