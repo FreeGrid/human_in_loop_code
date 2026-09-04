@@ -31,14 +31,22 @@ retry. The `init` and `update` tools run sequentially so concurrent tool calls
 in one Pi process cannot race one another. Byte-for-byte index and AGENTS
 preconditions also reject stale writes from another process.
 
-The slash commands are the Human-UI fallback. `/control:init` explains that the
-control path is the private management repository rather than the parent folder
-for the whole workspace. It shows the selected control path, suggests a safe
-sibling code path, explains where relative paths resolve, and immediately
-rejects identical or nested control/code paths with both resolved paths shown.
-When a requested path is missing, the choice screen says whether similar
-existing directories were found and lists every candidate it offers; the
-currently bound repository is never suggested as a replacement.
+The slash commands are the Human-UI fallback. For the recommended and LaTeX
+profiles, `/control:init` first offers two setup paths:
+
+- **Create from a workspace name** asks for one safe base name and creates
+  `<name>_control` plus `<name>_code` as sibling local Git repositories under
+  the current directory. It displays the naming rule, both exact paths, and the
+  role of each repository before the final preview. Existing names are never
+  overwritten; invalid, suffixed, or colliding names are explained and asked
+  for again.
+- **Use existing repository directories** asks for existing control and code
+  paths. Missing, invalid, identical, or nested paths are explained immediately
+  and asked for again. Relative paths are resolved from the current directory.
+
+The advanced custom topology retains its explicit JSON editor. Missing paths
+introduced by custom or paper-repository input still require exact-path
+authorization; any similar-directory choices are listed explicitly.
 
 Before asking about exceptions, the wizard displays the selected profile's
 default ownership, privacy, dependency, approval, delivery, and delegation
