@@ -2,8 +2,9 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { toolResponse } from "../operation-result.js";
 import { ControlWorkspaceService } from "../operations.js";
 import { ControlUpdateParameters } from "./schemas.js";
+import { preferredControlPath, rememberAppliedControlPath, type ControlWorkspaceSessionState } from "../session-state.js";
 
-export function registerControlWorkspaceUpdateTool(pi: ExtensionAPI): void {
+export function registerControlWorkspaceUpdateTool(pi: ExtensionAPI, sessionState?: ControlWorkspaceSessionState): void {
   pi.registerTool({
     name: "control_workspace_update",
     label: "Update Control Workspace",
@@ -18,7 +19,12 @@ export function registerControlWorkspaceUpdateTool(pi: ExtensionAPI): void {
     executionMode: "sequential",
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       if (signal?.aborted) throw new Error("Control workspace update was aborted");
-      return toolResponse(await new ControlWorkspaceService(ctx.cwd).update(params));
+      const result = await new ControlWorkspaceService(ctx.cwd).update({
+        ...params,
+        controlPath: preferredControlPath(params.controlPath, sessionState),
+      });
+      rememberAppliedControlPath(result, sessionState);
+      return toolResponse(result);
     },
   });
 }

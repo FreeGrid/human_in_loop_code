@@ -55,7 +55,7 @@ export const ControlUpdateParameters = Type.Object({
 }, { additionalProperties: false });
 
 export const ControlLocationParameters = Type.Object({
-  controlPath: Type.Optional(Type.String({ description: "Control repository directory; defaults to the tool working directory" })),
+  controlPath: Type.Optional(Type.String({ description: "Explicit control repository directory; omit it to use the control repository initialized in the current Pi session, falling back to the tool working directory when no session target exists" })),
 }, { additionalProperties: false });
 
 export type ControlInitParams = Static<typeof ControlInitParameters>;
