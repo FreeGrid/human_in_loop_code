@@ -111,11 +111,11 @@ async function run(ctx: ExtensionCommandContext, state: TaskPlanSessionState, fn
 
 function queueDraftFollowUp(pi: ExtensionAPI, stage: string, path?: string): void {
   const instruction = stage === "what_why"
-    ? `请继续当前 Harness Plan${path ? `（${path}）` : ""}：先调用 plan_get 读取 snapshot，然后像贴心的规划助理一样，根据 Original Request 中的目标、why、约束、边界和实现建议起草 What / Why，调用 plan_submit_section 提交。信息不足时不要卡住，把不确定点放入 Open Questions，并在回复里引导用户补充。提交成功后停止，不要推进到 Plan，并用简短中文提示我可以继续修改或说“继续”。`
+    ? `Continue the current Harness Plan${path ? ` at ${path}` : ""}. Use plan_get to read the snapshot. Draft the What / Why from Original Request, including goal, why, constraints, boundaries, success criteria, and any implementation ideas as non-binding context. Use plan_submit_section to submit it. If information is missing, continue with explicit Open Questions instead of blocking. Stop after submission; do not advance to Plan. In the final user-facing reply, speak naturally in Chinese as their Plan assistant and briefly explain that you have helped organize What / Why and they can revise or say “继续”. Do not mention internal tool names.`
     : stage === "plan"
-      ? `请继续当前 Harness Plan${path ? `（${path}）` : ""}：先调用 plan_get，基于已批准 What / Why 起草 Plan，调用 plan_submit_section 提交。提交成功后停止，不要拆 Tasks，并提示我检查后可说“继续”。`
-      : `请继续当前 Harness Plan${path ? `（${path}）` : ""}：先调用 plan_get，基于已批准 Plan 的 T+0 起草当前 round Tasks，调用 plan_submit_section 提交。提交成功后停止，不要 Review，并提示我可以说“检查一下这些任务”。`;
-  pi.sendUserMessage(instruction, { deliverAs: "followUp" });
+      ? `Continue the current Harness Plan${path ? ` at ${path}` : ""}. Use plan_get, draft the Plan from approved What / Why, and use plan_submit_section. Stop after submission; do not create Tasks. In the final user-facing reply, speak naturally in Chinese and explain the next review step. Do not mention internal tool names.`
+      : `Continue the current Harness Plan${path ? ` at ${path}` : ""}. Use plan_get, draft current-round Tasks only from approved Plan T+0, and use plan_submit_section. Stop after submission; do not run Review. In the final user-facing reply, speak naturally in Chinese and invite the user to check the task list. Do not mention internal tool names.`;
+  pi.sendMessage({ customType: "pi-plan-guided-draft", content: instruction, display: false }, { triggerTurn: true, deliverAs: "followUp" });
 }
 
 function notify(ctx: ExtensionCommandContext, result: { status: string; snapshot?: unknown }) {
