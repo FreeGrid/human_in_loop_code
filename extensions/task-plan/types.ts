@@ -1,3 +1,5 @@
+import type { ExecutionNote } from "./execution-notes.ts";
+
 export const HARNESS = "pi-plan/v1";
 
 export type PlanStage =
@@ -52,6 +54,7 @@ export interface TaskChecklistItem {
   id: string;
   text: string;
   completed: boolean;
+  note?: ExecutionNote;
 }
 
 export interface TaskBlock {

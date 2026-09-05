@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { extractAllSections } from "./sections.ts";
+import { canonicalTaskDefinition } from "./tasks.ts";
 import { HARNESS, type PlanDocument, type PlanMetadata } from "./types.ts";
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
@@ -15,11 +16,7 @@ export function canonicalSectionHash(content: string): string {
 }
 
 export function canonicalTasksDefinitionHash(content: string): string {
-  return sha256(content
-    .replace(/\r\n/g, "\n")
-    .replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/gm, "$1 [#]")
-    .replace(/- \[(?: |x|X)\]/g, "- [#]")
-    .replace(/^(\s*- .+?) \[(?: |x|X)\]$/gm, "$1 [#]"));
+  return sha256(canonicalTaskDefinition(content));
 }
 
 export function parseFrontmatter(text: string): { metadata: PlanMetadata; body: string } {

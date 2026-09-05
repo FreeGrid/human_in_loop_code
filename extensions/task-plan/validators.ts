@@ -1,4 +1,5 @@
 import { canonicalSectionHash, canonicalTasksDefinitionHash } from "./plan-file.ts";
+import { inspectExecutionNotes } from "./execution-notes.ts";
 import { extractAllSections } from "./sections.ts";
 import { parseTasks, taskField, taskRequiredFields } from "./tasks.ts";
 import { HARNESS, STAGE_STATUS, type PlanDocument, type ValidationIssue, type ValidationResult } from "./types.ts";
@@ -66,6 +67,7 @@ export function validatePlan(markdown: string, round: number): ValidationResult 
 export function validateTasks(markdown: string, currentRound: number, options: { requireCurrentOpen?: boolean; historicalCompleted?: boolean } = {}): ValidationResult {
   const issues: ValidationIssue[] = [];
   const tasks = parseTasks(markdown);
+  for (const message of inspectExecutionNotes(markdown).errors) issues.push(error("invalid_execution_note", message));
   if (/^### T\+\d+\b/m.test(markdown)) issues.push(error("tasks_contains_horizon_group", "Tasks must be listed directly as T001/T002 stages, without a T+0 grouping block"));
   if (tasks.length === 0) issues.push(error("missing_tasks", "Tasks section must contain at least one Task"));
   const ids = new Set<string>();
@@ -77,6 +79,11 @@ export function validateTasks(markdown: string, currentRound: number, options: {
       for (const field of ["Round", "Outcome", "Why", "Inputs", "Work", "Outputs"]) {
         if (new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(task.definition)) issues.push(error("verbose_task_field", `${task.id} should not include ${field}; keep only Tasks, Acceptance, and Depends On`));
       }
+    }
+    for (const heading of task.definition.matchAll(/^(#{1,4}) (.+)$/gm)) {
+      if (heading[0] === task.completionLine) continue;
+      const field = heading[2]!.trim();
+      if (heading[1] !== "####" || ![...taskRequiredFields(), "Round"].includes(field)) issues.push(error("unsupported_task_heading", `${task.id} contains unsupported heading: ${heading[0]}`));
     }
     validateSubtaskMarkers(task.definition, task.id).forEach((issue) => issues.push(issue));
     if (task.workItems.length === 0) issues.push(error("missing_work_items", `${task.id} Tasks needs at least one work item`));

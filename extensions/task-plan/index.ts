@@ -5,6 +5,7 @@ import { modelSwitchEntryData, normalizeTaskPlanModelConfig, switchTaskPlanModel
 import { PLAN_PROMPTS } from "./prompts.ts";
 import { registerTaskPlanTools } from "./tools.ts";
 
+export * from "./execution-notes.ts";
 export * from "./model-switch.ts";
 export * from "./operation-result.ts";
 export * from "./operations.ts";

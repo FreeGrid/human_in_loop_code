@@ -1,4 +1,5 @@
 import type { TaskBlock, TaskChecklistItem } from "./types.ts";
+import { inspectExecutionNotes } from "./execution-notes.ts";
 
 const TASK_HEADER = /^### (T\d{3}) — (.+?) \[( |x|X)\]$/gm;
 const REQUIRED_FIELDS = ["Tasks", "Acceptance", "Depends On"];
@@ -12,8 +13,10 @@ export function parseTasks(markdown: string): TaskBlock[] {
     const roundMatch = definition.match(/^#### Round\s*\n\s*R(\d{3}) — T\+0\s*$/m);
     const hiddenRoundMatch = definition.match(/^<!-- pi-plan:round:R(\d{3}) -->$/m);
     const completed = match[3] === "x" || match[3] === "X";
-    const workItems = parseChecklist(taskField(definition, "Tasks"), match[1]!, "W");
-    const acceptance = parseChecklist(taskField(definition, "Acceptance"), match[1]!, "A");
+    const execution = inspectExecutionNotes(definition);
+    const workItems = parseChecklist(taskField(execution.definition, "Tasks"), match[1]!, "W");
+    for (const item of workItems) if (execution.notes[item.id]) item.note = execution.notes[item.id];
+    const acceptance = parseChecklist(taskField(execution.definition, "Acceptance"), match[1]!, "A");
     const acceptanceItems = acceptance.map((item) => item.text);
     const dependsText = taskField(definition, "Depends On").trim();
     const dependsOn = dependsText === "None." || dependsText === "None" ? [] : [...dependsText.matchAll(/\bT\d{3}\b/g)].map((m) => m[0]);
@@ -44,8 +47,9 @@ export function taskField(definition: string, field: string): string {
 function parseChecklist(content: string, taskId: string, kind: "W" | "A"): TaskChecklistItem[] {
   const items: TaskChecklistItem[] = [];
   let current: TaskChecklistItem | undefined;
-  for (const line of content.split("\n")) {
-    const match = kind === "W" ? line.match(/^\s*- (.+?) \[( |x|X)\]$/) : line.match(/^\s*- \[( |x|X)\] (.+)$/);
+  for (const rawLine of content.split("\n")) {
+    const line = rawLine.trimEnd();
+    const match = kind === "W" ? line.match(/^[ \t]*- (.+?) \[( |x|X)\]$/) : line.match(/^[ \t]*- \[( |x|X)\] (.+)$/);
     if (match) {
       const marker = match[kind === "W" ? 2 : 1];
       current = { id: `${taskId}.${kind}${String(items.length + 1).padStart(3, "0")}`, text: match[kind === "W" ? 1 : 2]!.trim(), completed: marker !== " " };
@@ -67,9 +71,13 @@ export function taskRequiredFields(): readonly string[] {
   return REQUIRED_FIELDS;
 }
 
+export function canonicalTaskDefinition(content: string): string {
+  return inspectExecutionNotes(content).definition
+    .replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/gm, "$1 [#]")
+    .replace(/^([ \t]*- )\[(?: |x|X)\]/gm, "$1[#]")
+    .replace(/^([ \t]*- .+?) \[(?: |x|X)\]([ \t]*)$/gm, "$1 [#]$2");
+}
+
 export function taskDefinitionWithoutCheckboxState(task: TaskBlock): string {
-  return task.definition
-    .replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/m, "$1 [#]")
-    .replace(/- \[(?: |x|X)\]/g, "- [#]")
-    .replace(/^(\s*- .+?) \[(?: |x|X)\]$/gm, "$1 [#]");
+  return canonicalTaskDefinition(task.definition);
 }
