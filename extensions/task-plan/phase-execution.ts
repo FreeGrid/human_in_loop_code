@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { inspectExecutionNotes, upsertExecutionNote, validateExecutionNote, type ExecutionNote } from "./execution-notes.ts";
 import { readHumanDecision, type HumanDecisionToken, type PhaseDependencies, type PhaseRecord } from "./phase-contracts.ts";
 import { inspectPhaseRecords, upsertPhaseRecord, validatePhaseRecord } from "./phase-record.ts";
-import { canonicalSectionHash, canonicalTasksDefinitionHash, readPlanDocument, replaceFrontmatter, phaseExecutionDefinitionHash, writeIfDocumentHash } from "./plan-file.ts";
+import { acquirePhaseFinalizeLock, canonicalSectionHash, canonicalTasksDefinitionHash, readPlanDocument, replaceFrontmatter, phaseExecutionDefinitionHash, writeIfDocumentHash } from "./plan-file.ts";
 import { replaceSection } from "./sections.ts";
 import { parseTasks } from "./tasks.ts";
 import type { PlanDocument, TaskBlock } from "./types.ts";
@@ -54,7 +54,7 @@ export class PhaseExecutionService {
       const d = await this.current(document);
       const { task, records } = this.select(d, params.task_id);
       const record = records[task.id] ?? fail("execution_missing: start the phase before reporting");
-      await this.verify(d, task, record);
+      const contentVersion = await this.verify(d, task, record);
       const itemId = params.work_item_id ?? (task.workItems.length === 1 ? task.workItems[0]!.id : fail("work_item_required: select a stable work_item_id"));
       if (!task.workItems.some(w => w.id === itemId)) fail("unknown_work_item");
       const note: ExecutionNote = { version: 1, status: params.result === "completed" ? "pending_finalize" : params.result, summary: params.summary, files: params.files ?? [], change_types: params.change_types ?? [] };
@@ -69,7 +69,7 @@ export class PhaseExecutionService {
         if (seen.has(id)) fail("duplicate_acceptance");
         seen.add(id);
         record.acceptance = record.acceptance.filter(a => a.id !== id);
-        record.acceptance.push({ id, satisfied: evidence.satisfied, summary: params.summary });
+        record.acceptance.push({ id, satisfied: evidence.satisfied, summary: params.summary, content_version: contentVersion });
       }
       delete record.last_finalize;
       // The note helper sees only task definitions and notes, never phase-record JSON.
@@ -96,6 +96,13 @@ export class PhaseExecutionService {
   }
 
   async finalize(document: PlanDocument, task_id: string): Promise<PlanOperationResult> {
+    return this.operation(document, async () => {
+      const release = await acquirePhaseFinalizeLock(document.path, task_id);
+      try { return await this.finalizeLocked(document, task_id); } finally { await release(); }
+    });
+  }
+
+  private async finalizeLocked(document: PlanDocument, task_id: string): Promise<PlanOperationResult> {
     let attempt: { document: PlanDocument; record: PhaseRecord } | undefined;
     return this.operation(document, async () => {
       const d = await this.current(document);
@@ -105,6 +112,7 @@ export class PhaseExecutionService {
       const version = await this.verify(d, task, record);
       if (task.workItems.some(w => w.note?.status !== "pending_finalize")) fail("work_pending: every work item must be pending_finalize");
       if (task.acceptance.some(a => !record.acceptance.find(e => e.id === a.id)?.satisfied)) fail("acceptance_incomplete: all Acceptance evidence must be satisfied");
+      if (record.acceptance.some(evidence => evidence.content_version !== version)) fail("acceptance_stale: repository changed after Acceptance verification; reverify every criterion");
       let finalized: NonNullable<PhaseRecord["finalized"]>;
       if (!record.docsync.enabled) {
         finalized = { check: "skipped", summary: "Documentation check explicitly disabled by Human; Task Acceptance verified.", content_version: version, debt_refs: [], human_exceptions: [] };
@@ -133,7 +141,7 @@ export class PhaseExecutionService {
       let field = "";
       const completed = block.map((line, i) => {
         if (i === 0) return line.replace(/ \[ \]$/, " [x]");
-        if (/^#### /.test(line)) field = line;
+        if (/^#### /.test(line)) field = line.trimEnd();
         if (field === "#### Tasks" && /^[ \t]*- .+ \[ \][ \t]*$/.test(line)) return line.replace(/ \[ \]([ \t]*)$/, " [x]$1");
         if (field === "#### Acceptance" && /^[ \t]*- \[ \] /.test(line)) return line.replace("- [ ] ", "- [x] ");
         return line;
@@ -141,6 +149,8 @@ export class PhaseExecutionService {
       markdown = markdown.slice(0, start) + completed + markdown.slice(end);
       records[task.id] = record;
       for (const [id, r] of Object.entries(records)) markdown = upsertPhaseRecord(markdown, id, r);
+      const completedTask = parseTasks(markdown).find(item => item.id === task.id);
+      if (!completedTask?.completed || completedTask.workItems.some(item => !item.completed) || completedTask.acceptance.some(item => !item.completed) || canonicalTasksDefinitionHash(markdown) !== d.metadata.reviewed_tasks_hash || !validateTasks(markdown, d.metadata.round).ok) fail("incomplete_batch: refusing a partial or definition-changing completion write");
       const allDone = parseTasks(markdown).filter(t => t.round === d.metadata.round).every(t => t.completed);
       let text = replaceSection(d.text, "tasks", markdown);
       text = replaceFrontmatter(text, { ...d.metadata, stage: allDone ? "awaiting_round_decision" : "executing", stage_status: allDone ? "awaiting_human" : "in_progress" });

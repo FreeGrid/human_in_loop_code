@@ -101,6 +101,20 @@ export async function writeIfDocumentHash(path: string, expectedHash: string, co
   }
 }
 
+/** Serialize an entire finalize attempt, including its potentially mutating documentation gate. */
+export async function acquirePhaseFinalizeLock(path: string, taskId: string): Promise<() => Promise<void>> {
+  if (!/^T\d{3}$/.test(taskId)) throw new Error("invalid_phase_id");
+  const canonical = await realpath(path);
+  const lockPath = join(dirname(canonical), `.${basename(canonical)}.${taskId}.finalize.lock`);
+  let handle;
+  try { handle = await open(lockPath, "wx", 0o600); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("phase_finalize_locked: another finalize attempt is active or needs explicit crash recovery");
+    throw error;
+  }
+  return async () => { try { await handle.close(); } finally { await rm(lockPath); } };
+}
+
 export async function detectLegacyWorkspaceConflict(root: string): Promise<string[]> {
   const conflicts: string[] = [];
   const planning = join(root, "planning");

@@ -13,7 +13,9 @@ export interface PhaseContext {
 export interface BaselineReference { id: string; initial_version: string }
 export interface BaselineProvider {
   capture(context: PhaseContext): Promise<BaselineReference>;
-  /** Throws on missing/foreign baseline; returns current content identity without resetting it. */
+  /** Throws on missing/foreign baseline; returns current content identity without resetting it.
+   * Exclude this Plan's execution-only metadata from that identity; Plan bytes have their own CAS.
+   */
   verify(context: PhaseContext, baseline: BaselineReference): Promise<string>;
 }
 
@@ -25,7 +27,9 @@ export interface DocSyncGateResult {
   human_exceptions: string[];
 }
 export interface DocSyncGate {
-  /** A passing result certifies required durable debt/exception records have already been saved. */
+  /** May mutate authorized documentation only, never implementation code.
+   * A passing result certifies required durable debt/exception records have already been saved.
+   */
   check(input: { context: PhaseContext; baseline: BaselineReference; content_version: string; notes: Record<string, ExecutionNote> }): Promise<DocSyncGateResult>;
 }
 
@@ -85,7 +89,7 @@ export interface PhaseRecord {
   baseline: BaselineReference;
   authorization: HumanDecision;
   docsync: { enabled: boolean; decision?: HumanDecision };
-  acceptance: Array<{ id: string; satisfied: boolean; summary: string }>;
+  acceptance: Array<{ id: string; satisfied: boolean; summary: string; content_version: string }>;
   last_finalize?: { summary: string; outcome: "blocked" };
   finalized?: { check: "passed" | "with_debt" | "with_exceptions" | "skipped"; summary: string; content_version: string; debt_refs: string[]; human_exceptions: string[] };
 }

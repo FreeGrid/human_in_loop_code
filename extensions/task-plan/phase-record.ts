@@ -22,7 +22,7 @@ export function validatePhaseRecord(v: unknown): v is PhaseRecord {
   if (!decision(v.authorization, ["execute"])) return false;
   const d = v.docsync;
   if (!object(d) || !keys(d, ["enabled"], ["decision"]) || typeof d.enabled !== "boolean" || (d.decision !== undefined && !decision(d.decision, [d.enabled ? "docsync_on" : "docsync_off"])) || (!d.enabled && !d.decision)) return false;
-  if (!Array.isArray(v.acceptance) || v.acceptance.length > 128 || !v.acceptance.every(a => object(a) && keys(a, ["id", "satisfied", "summary"]) && typeof a.id === "string" && new RegExp(`^${c.phase_id}\\.A\\d{3}$`).test(a.id) && typeof a.satisfied === "boolean" && text(a.summary)) || new Set(v.acceptance.map(a => a.id)).size !== v.acceptance.length) return false;
+  if (!Array.isArray(v.acceptance) || v.acceptance.length > 128 || !v.acceptance.every(a => object(a) && keys(a, ["id", "satisfied", "summary", "content_version"]) && typeof a.id === "string" && new RegExp(`^${c.phase_id}\\.A\\d{3}$`).test(a.id) && typeof a.satisfied === "boolean" && text(a.summary) && text(a.content_version, 500)) || new Set(v.acceptance.map(a => a.id)).size !== v.acceptance.length) return false;
   if (v.last_finalize !== undefined && (!object(v.last_finalize) || !keys(v.last_finalize, ["summary", "outcome"]) || v.last_finalize.outcome !== "blocked" || !text(v.last_finalize.summary))) return false;
   const f = v.finalized;
   if (f !== undefined && (!object(f) || !keys(f, ["check", "summary", "content_version", "debt_refs", "human_exceptions"]) || typeof f.check !== "string" || !["passed", "with_debt", "with_exceptions", "skipped"].includes(f.check) || !text(f.summary) || !text(f.content_version, 500) || !refs(f.debt_refs) || !refs(f.human_exceptions) || (f.check === "skipped") !== !d.enabled || (f.check === "passed" && (f.debt_refs.length > 0 || f.human_exceptions.length > 0)) || (f.check === "with_debt" && !f.debt_refs.length) || (f.check === "with_exceptions" && !f.human_exceptions.length))) return false;
@@ -40,14 +40,14 @@ export function inspectPhaseRecords(markdown: string): { definition: string; rec
     const line = lines[i]!;
     const header = line.match(HEADER);
     if (header) { phase = header[1]!; field = ""; }
-    else if (/^#{1,4} /.test(line)) { field = line === "#### Depends On" ? "depends" : ""; if (!line.startsWith("#### ")) phase = ""; }
+    else if (/^#{1,4} /.test(line)) { field = line.trimEnd() === "#### Depends On" ? "depends" : ""; if (!line.startsWith("#### ")) phase = ""; }
     if (line.includes(PREFIX)) {
       let value: unknown;
       try { value = JSON.parse(lines[i + 1] ?? ""); } catch { /* retain invalid data in definition */ }
       let next = i + 3;
       while (next < lines.length && /^[ \t]*$/.test(lines[next]!)) next++;
       const boundary = next === lines.length || HEADER.test(lines[next]!) || /^<!-- pi-plan:tasks:end -->$/.test(lines[next]!) || /^#{1,2} /.test(lines[next]!);
-      const dependencyStart = lines.slice(0, i).lastIndexOf("#### Depends On");
+      const dependencyStart = lines.slice(0, i).map(line => line.trimEnd()).lastIndexOf("#### Depends On");
       const hasDependencies = dependencyStart >= 0 && lines.slice(dependencyStart + 1, i).some(l => !!l.trim() && !l.includes(PREFIX));
       const valid = phase && field === "depends" && hasDependencies && !records[phase] && line === `${PREFIX}${phase}:start -->` && lines[i + 2] === `${PREFIX}${phase}:end -->` && boundary && validatePhaseRecord(value) && value.context.phase_id === phase && lines[i + 1] === serialize(value);
       if (valid) { records[phase] = value as PhaseRecord; i += 2; continue; }
@@ -74,8 +74,8 @@ export function upsertPhaseRecord(markdown: string, phaseId: string, record: Pha
     while (end < lines.length && !/^#{1,3} /.test(lines[end]!) && lines[end] !== "<!-- pi-plan:tasks:end -->") end++;
     let last = end - 1;
     while (last > i && /^[ \t]*$/.test(lines[last]!)) last--;
-    const fields = lines.slice(i + 1, last + 1).filter(l => /^#### /.test(l));
-    if (fields.at(-1) !== "#### Depends On" || lines[last] === "#### Depends On") throw new Error("Phase record requires a final Depends On field");
+    const fields = lines.slice(i + 1, last + 1).filter(l => /^#### /.test(l)).map(line => line.trimEnd());
+    if (fields.at(-1) !== "#### Depends On" || lines[last]!.trimEnd() === "#### Depends On") throw new Error("Phase record requires a final Depends On field");
     const id = h[1]!;
     inserts.set(last, [`${PREFIX}${id}:start -->`, serialize(records[id]), `${PREFIX}${id}:end -->`]);
     if (id === phaseId) { if (found) throw new Error("Duplicate phase"); found = true; }

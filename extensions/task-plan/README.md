@@ -40,6 +40,8 @@ private control repository, test fixture or acceptance script.
    reports specify `work_item_id`, a concise summary, affected `files`, optional
    `change_types`, and Acceptance evidence by stable ID or unambiguous text.
 5. A report with `result: completed` records **pending_finalize**, not `[x]`.
+   Acceptance evidence binds to the provider's content version: repository changes
+   before finalize require re-verification, not reuse of old passing assertions.
    When every work item and Acceptance is ready, use `/plan:finalize T001` or
    `plan_finalize`. One version-checked write completes the phase heading,
    work items and Acceptance together and records the documentation outcome.
@@ -92,18 +94,24 @@ Work-note and phase-record regions are strict, bounded, canonical JSON inside
 reserved Markdown markers. Their contents describe progress, execution identity,
 Human decisions and evidence; they cannot redefine work or Acceptance. Only valid
 records in their exact permitted locations are excluded from definition hashes.
+Tasks submission and review must preserve reserved records/notes exactly; they
+cannot fabricate Human decisions, rewrite baseline identity or delete prior evidence.
 Malformed, oversized, misplaced or unknown fields fail validation. ASCII spaces and
 tabs and CRLF are supported for structure; unsupported Unicode/control structural
 whitespace is rejected rather than silently shifting item IDs.
 
-Plan writes acquire an exclusive lock on the canonical file path, recheck the
+A separate phase lock serializes the whole finalize attempt, including the document
+gate, so a losing concurrent finalizer cannot continue mutating docs after a winning
+receipt. Plan writes acquire an exclusive lock on the canonical file path, recheck the
 expected document version and atomically rename a fully prepared replacement.
 Symlink aliases share that lock. Stale versions or an existing lock return conflicts;
 no partial batch is published. A lock left after a crashed process is not guessed
 stale or automatically stolen: establish that the owner is gone before an explicit
 operator recovery removes it. Do not remove another active writer's lock.
 
-All Harness writers cooperate with this lock. Late version checks detect external
+Providers exclude this Plan's execution-only metadata from the repository content
+identity to avoid self-invalidating evidence; Plan bytes have a separate version check.
+All Harness writers cooperate with these locks. Late version checks detect external
 edits, but ordinary filesystem rename is not a universal compare-and-swap against
 arbitrary non-cooperating processes. Keep external editors from writing during the
 final commit window. Required gate debt records are saved before the Plan receipt;

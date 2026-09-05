@@ -10,7 +10,7 @@ import { validateFrontmatter, validatePlan, validateProgress, validateSections, 
 import type { PlanOperationResult } from "./operation-result.ts";
 import { PhaseExecutionService } from "./phase-execution.ts";
 import { inspectPhaseRecords, upsertPhaseRecord } from "./phase-record.ts";
-import { upsertExecutionNote, type ExecutionNote } from "./execution-notes.ts";
+import { inspectExecutionNotes, upsertExecutionNote, type ExecutionNote } from "./execution-notes.ts";
 import type { PhaseDependencies, HumanDecisionToken } from "./phase-contracts.ts";
 import { phaseSwitchHelp } from "./phase-input.ts";
 
@@ -70,6 +70,7 @@ export class TaskPlanService {
     if (reconciled.changed) return this.persistStateChange(loaded, reconciled.text, reconciled.reason);
     const section = sectionForStage(loaded.metadata.stage);
     if (!section) return validation(`Cannot submit section while stage is ${loaded.metadata.stage}`, []);
+    if (section === "tasks" && !preservesExecutionState(loaded.sections.tasks, params.content)) return conflict("reserved_execution_state_changed: Tasks editing cannot add, modify or delete execution records/notes");
     const candidateIssues = validateCandidate(section, params.content, loaded.metadata).issues;
     if (candidateIssues.some((i) => i.severity === "error")) return validation("Section validation failed", candidateIssues);
     let text = replaceSection(loaded.text, section, params.content);
@@ -131,6 +132,7 @@ export class TaskPlanService {
     }
     if (loaded.metadata.stage !== "tasks") return this.get(loaded.path);
     const nextTasks = params.candidate_tasks ?? loaded.sections.tasks;
+    if (!preservesExecutionState(loaded.sections.tasks, nextTasks)) return conflict("reserved_execution_state_changed: Review cannot add, modify or delete execution records/notes");
     const v = validateTasks(nextTasks, loaded.metadata.round, { requireCurrentOpen: true, historicalCompleted: true });
     if (!v.ok) return validation("Tasks review failed", v.issues);
     let text = replaceSection(loaded.text, "tasks", nextTasks);
@@ -301,6 +303,17 @@ export async function isCurrentHarnessPlanPath(cwd: string, targetPath: string, 
   if (state.currentPlanPath) candidates.add(resolve(state.currentPlanPath));
   for (const p of await findUnfinishedHarnessPlans(cwd)) candidates.add(resolve(p));
   return candidates.has(path);
+}
+
+function preservesExecutionState(before: string, after: string): boolean {
+  const saved = (markdown: string) => {
+    const phases = inspectPhaseRecords(markdown);
+    const notes = inspectExecutionNotes(phases.definition);
+    if (phases.errors.length || notes.errors.length) return undefined;
+    return JSON.stringify([Object.entries(phases.records).sort(([a], [b]) => a.localeCompare(b)), Object.entries(notes.notes).sort(([a], [b]) => a.localeCompare(b))]);
+  };
+  const original = saved(before), candidate = saved(after);
+  return original !== undefined && candidate !== undefined && original === candidate;
 }
 
 function sectionForStage(stage: PlanStage): SectionName | undefined {
