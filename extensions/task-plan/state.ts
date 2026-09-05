@@ -1,11 +1,13 @@
-import { canonicalSectionHash, canonicalTasksDefinitionHash, replaceFrontmatter } from "./plan-file.ts";
+import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash, replaceFrontmatter } from "./plan-file.ts";
 import { parseTasks } from "./tasks.ts";
+import { inspectPhaseRecords } from "./phase-record.ts";
 import { type PlanDocument, type PlanMetadata } from "./types.ts";
 import { validateApprovalHashes, validatePlan, validateProgress, validateTasks, validateWhatWhy } from "./validators.ts";
 
 export interface ReconcileResult {
   changed: boolean;
   reason?: string;
+  conflict?: string;
   metadata: PlanMetadata;
   text: string;
 }
@@ -42,6 +44,17 @@ export function reconcileState(document: PlanDocument): ReconcileResult {
   }
 
   const currentRoundTasks = parseTasks(document.sections.tasks).filter((task) => task.round === next.round);
+  if (["executing", "awaiting_round_decision"].includes(next.stage)) {
+    const records = inspectPhaseRecords(document.sections.tasks);
+    if (records.errors.length) return { changed: false, metadata: current, text: document.text, conflict: "invalid_phase_record" };
+    for (const task of currentRoundTasks) {
+      const record = records.records[task.id];
+      if (task.completed && (!record?.finalized || record.definition_hash !== phaseExecutionDefinitionHash(document) || record.context.round !== next.round || task.workItems.some((item) => !item.completed) || task.acceptance.some((item) => !item.completed))) {
+        return { changed: false, metadata: current, text: document.text, conflict: "completion_evidence_missing" };
+      }
+      if (!task.completed && (record?.finalized || task.workItems.some((item) => item.completed) || task.acceptance.some((item) => item.completed))) return { changed: false, metadata: current, text: document.text, conflict: "completion_record_conflict" };
+    }
+  }
   if (next.stage === "executing" && currentRoundTasks.length > 0 && currentRoundTasks.every((task) => task.completed)) {
     next.stage = "awaiting_round_decision";
     next.stage_status = "awaiting_human";

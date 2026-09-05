@@ -19,6 +19,10 @@ export function canonicalTasksDefinitionHash(content: string): string {
   return sha256(canonicalTaskDefinition(content));
 }
 
+export function phaseExecutionDefinitionHash(document: PlanDocument): string {
+  return sha256(JSON.stringify([document.metadata.plan_id, document.metadata.round, canonicalSectionHash(document.sections.what_why), canonicalSectionHash(document.sections.plan), canonicalTasksDefinitionHash(document.sections.tasks)]));
+}
+
 export function parseFrontmatter(text: string): { metadata: PlanMetadata; body: string } {
   const match = text.match(FRONTMATTER);
   if (!match) throw new Error("Plan document is missing frontmatter");

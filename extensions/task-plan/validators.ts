@@ -1,4 +1,5 @@
-import { canonicalSectionHash, canonicalTasksDefinitionHash } from "./plan-file.ts";
+import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash } from "./plan-file.ts";
+import { inspectPhaseRecords } from "./phase-record.ts";
 import { inspectExecutionNotes } from "./execution-notes.ts";
 import { extractAllSections } from "./sections.ts";
 import { parseTasks, taskField, taskRequiredFields } from "./tasks.ts";
@@ -67,7 +68,9 @@ export function validatePlan(markdown: string, round: number): ValidationResult 
 export function validateTasks(markdown: string, currentRound: number, options: { requireCurrentOpen?: boolean; historicalCompleted?: boolean } = {}): ValidationResult {
   const issues: ValidationIssue[] = [];
   const tasks = parseTasks(markdown);
-  for (const message of inspectExecutionNotes(markdown).errors) issues.push(error("invalid_execution_note", message));
+  const phaseRecords = inspectPhaseRecords(markdown);
+  for (const message of phaseRecords.errors) issues.push(error("invalid_phase_record", message));
+  for (const message of inspectExecutionNotes(phaseRecords.definition).errors) issues.push(error("invalid_execution_note", message));
   if (/^### T\+\d+\b/m.test(markdown)) issues.push(error("tasks_contains_horizon_group", "Tasks must be listed directly as T001/T002 stages, without a T+0 grouping block"));
   if (tasks.length === 0) issues.push(error("missing_tasks", "Tasks section must contain at least one Task"));
   const ids = new Set<string>();
@@ -119,6 +122,13 @@ export function validateApprovalHashes(document: PlanDocument): ValidationResult
 export function validateProgress(document: PlanDocument): ValidationResult {
   const issues: ValidationIssue[] = [];
   const tasks = parseTasks(document.sections.tasks).filter((t) => t.round === document.metadata.round);
+  if (["executing", "awaiting_round_decision"].includes(document.metadata.stage)) {
+    const records = inspectPhaseRecords(document.sections.tasks);
+    for (const task of tasks.filter((item) => item.completed)) {
+      const record = records.records[task.id];
+      if (!record?.finalized || record.definition_hash !== phaseExecutionDefinitionHash(document) || task.workItems.some((item) => !item.completed) || task.acceptance.some((item) => !item.completed)) issues.push(error("completion_evidence_missing", `${task.id} requires a phase finalize receipt, not manual completion markers`));
+    }
+  }
   if (document.metadata.stage === "executing") {
     if (tasks.length === 0) issues.push(error("no_current_round_tasks", "executing requires current round Tasks"));
     if (tasks.every((t) => t.completed)) issues.push(error("executing_all_done", "executing cannot have all current round Tasks complete"));
