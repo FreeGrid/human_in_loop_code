@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { modelSwitchEntryData, switchTaskPlanModel, type TaskPlanModelSwitchConfig } from "./model-switch.ts";
 import { renderPlanOperationResult } from "./operation-result.ts";
 import { reminderForStage } from "./prompts.ts";
 import { TaskPlanService, type TaskPlanSessionState } from "./operations.ts";
+import { captureHumanDecision } from "./phase-contracts.ts";
+import { inspectPhaseRecords } from "./phase-record.ts";
+import { currentRoundTasks } from "./tasks.ts";
+import { phaseSwitchHelp } from "./phase-input.ts";
 
 export function registerTaskPlanCommands(pi: ExtensionAPI, state: TaskPlanSessionState, modelConfig: Required<TaskPlanModelSwitchConfig>): void {
   pi.registerCommand("plan", { description: "Start a guided Harness Plan from a natural-language brief", handler: (args, ctx) => newPlan(pi, args, ctx, state, modelConfig) });
@@ -12,7 +17,61 @@ export function registerTaskPlanCommands(pi: ExtensionAPI, state: TaskPlanSessio
   pi.registerCommand("plan:approve", { description: "Apply the current Human approval gate", handler: (args, ctx) => approve(pi, args, ctx, state, modelConfig) });
   pi.registerCommand("plan:review", { description: "Review the current Harness Plan stage", handler: (args, ctx) => review(args, ctx, state) });
   pi.registerCommand("plan:task", { description: "Bind or mark a current-round Task: <id> <start|done|open>", handler: (args, ctx) => task(args, ctx, state) });
+  pi.registerCommand("plan:execute", { description: "Start/resume only the approved current phase: [plan-path]", handler: (args, ctx) => executePhase(pi, args, ctx, state) });
+  pi.registerCommand("plan:finalize", { description: "Verify and finalize the entire current phase: [TNNN]", handler: (args, ctx) => finalizePhase(args, ctx, state) });
+  pi.registerCommand("docsync", { description: "Human-only document check switch: on|off (does not skip Task acceptance)", handler: (args, ctx) => docsync(args, ctx, state) });
   pi.registerCommand("plan:abandon", { description: "Abandon the current Harness Plan, optionally recording a reason", handler: (args, ctx) => abandon(pi, args, ctx, state, modelConfig) });
+}
+
+async function executePhase(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+  const service = new TaskPlanService(ctx.cwd, state);
+  const current = await service.get(args.trim() || undefined);
+  if (!current.document_hash) return notify(ctx, current);
+  const snap = current.snapshot as { metadata: { stage: string; round: number }; sections: { tasks: string } };
+  if (snap.metadata.stage !== "executing") return ctx.ui.notify("Phase execution requires reviewed Tasks and separate Human execution approval.", "error");
+  const open = currentRoundTasks(snap.sections.tasks, snap.metadata.round).filter((task) => !task.completed);
+  let task_id = open.length === 1 ? open[0]!.id : undefined;
+  if (!task_id && ctx.hasUI) task_id = await ctx.ui.select("Choose the phase (no automatic cross-phase execution)", open.map((task) => task.id));
+  if (!task_id) return ctx.ui.notify("Ambiguous phase. Use plan_execute with explicit task_id.", "error");
+  const existing = inspectPhaseRecords(snap.sections.tasks).records[task_id];
+  let target_root: string | undefined, governance_root: string | undefined;
+  ctx.ui.notify(phaseSwitchHelp(existing?.docsync.enabled ?? true), "info");
+  if (!existing) {
+    if (!ctx.hasUI) return ctx.ui.notify("First execution requires Human input and explicit roots. Say execute phase, then use plan_execute with target_root/governance_root.", "error");
+    target_root = await ctx.ui.input("Target Git repository root (absolute path)");
+    governance_root = await ctx.ui.input("Governance root containing this Plan (absolute path)");
+    if (!target_root || !governance_root || !await ctx.ui.confirm("Authorize this phase execution?", `${task_id}\nTarget: ${target_root}\nGovernance: ${governance_root}\n${phaseSwitchHelp()}`)) return;
+    state.humanDecision = captureHumanDecision({ action: "execute", source: "slash", input_id: randomUUID(), text: `/plan:execute ${current.path ?? ""}; Human confirmed ${task_id}, target=${target_root}, governance=${governance_root}` });
+  }
+  const result = await service.executePhase({ expected_document_hash: current.document_hash, planPath: current.path, task_id, target_root, governance_root });
+  notify(ctx, result);
+  if (result.status === "ok" || result.status === "applied") pi.sendMessage({ customType: "pi-plan-phase-execute", display: false, content: `Continue only phase ${task_id} at ${current.path}. Read the Plan as authoritative progress. Use bound work_item_id reports; completed means pending_finalize. When all work/evidence is ready call plan_finalize once for this phase. Stop at phase completion or a genuine blocker; never enter the next phase automatically.` }, { triggerTurn: true, deliverAs: "followUp" });
+}
+
+async function docsync(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+  const setting = args.trim();
+  if (setting !== "on" && setting !== "off") return ctx.ui.notify("Usage: /docsync on|off", "error");
+  const service = new TaskPlanService(ctx.cwd, state);
+  const current = await service.get();
+  if (!current.document_hash) return notify(ctx, current);
+  const tasks = (current.snapshot as { sections: { tasks: string } }).sections.tasks;
+  const active = Object.values(inspectPhaseRecords(tasks).records).filter((record) => !record.finalized);
+  let task_id = active.length === 1 ? active[0]!.context.phase_id : undefined;
+  if (!task_id && active.length && ctx.hasUI) task_id = await ctx.ui.select("Choose active phase", active.map((record) => record.context.phase_id));
+  if (!task_id) return ctx.ui.notify("DocSync requires one explicitly selected active phase.", "error");
+  // Commands may also be injected by extensions; a trusted UI confirmation is the authority.
+  if (!ctx.hasUI || !await ctx.ui.confirm(`Set DocSync ${setting}?`, `${task_id}\n${phaseSwitchHelp(setting === "on")}`)) return ctx.ui.notify("No Human confirmation; DocSync unchanged. Natural-language Human input is also supported.", "info");
+  state.humanDecision = captureHumanDecision({ action: setting === "on" ? "docsync_on" : "docsync_off", source: "slash", input_id: randomUUID(), text: `/docsync ${setting}; Human confirmed ${task_id}` });
+  notify(ctx, await service.setPhaseDocSync({ expected_document_hash: current.document_hash, task_id, enabled: setting === "on" }));
+}
+
+async function finalizePhase(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+  const service = new TaskPlanService(ctx.cwd, state);
+  const current = await service.get();
+  if (!current.document_hash) return notify(ctx, current);
+  const task_id = args.trim() || state.binding?.task_id || state.phaseTaskId;
+  if (!task_id || !/^T\d{3}$/.test(task_id)) return ctx.ui.notify("Usage: /plan:finalize TNNN", "error");
+  notify(ctx, await service.finalizePhase({ expected_document_hash: current.document_hash, task_id }));
 }
 
 async function newPlan(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState, modelConfig: Required<TaskPlanModelSwitchConfig>) {
@@ -24,7 +83,7 @@ async function newPlan(pi: ExtensionAPI, args: string, ctx: ExtensionCommandCont
   ctx.ui.notify("收到。我会先切换到 Plan 专用模型，把需求概括成短文件名，再创建 Plan 并起草 What / Why。", "info");
   const switched = await switchTaskPlanModel(pi, ctx, state.modelSwitch ??= {}, modelConfig, "planning");
   if (!switched) return;
-  pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
+  pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding ? { task_id: state.binding.task_id } : undefined, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
   queueNewPlanFollowUp(pi, brief);
 }
 
@@ -76,14 +135,14 @@ async function approve(pi: ExtensionAPI, args: string, ctx: ExtensionCommandCont
       : "收到“继续”。我会基于已确认的 Plan 直接拆当前轮 Tasks，完成后把任务列表贴出来请你审批。", "info");
     const switched = await switchTaskPlanModel(pi, ctx, state.modelSwitch ??= {}, modelConfig, "planning");
     if (!switched) return;
-    pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
+    pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding ? { task_id: state.binding.task_id } : undefined, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
     queueDraftFollowUp(pi, nextStage, result.path);
     return;
   }
   const terminalStage = (result.snapshot as { metadata?: { stage?: string } } | undefined)?.metadata?.stage;
   if (result.status === "applied" && ["executing", "completed", "abandoned"].includes(terminalStage ?? "")) {
     await switchTaskPlanModel(pi, ctx, state.modelSwitch ??= {}, modelConfig, "normal");
-    pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
+    pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding ? { task_id: state.binding.task_id } : undefined, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
   }
   notify(ctx, result);
 }
@@ -117,7 +176,7 @@ async function abandon(pi: ExtensionAPI, args: string, ctx: ExtensionCommandCont
   const result = await service.abandon({ expected_document_hash: current.document_hash, reason: args.trim() || undefined });
   if (result.status === "applied") {
     await switchTaskPlanModel(pi, ctx, state.modelSwitch ??= {}, modelConfig, "normal");
-    pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
+    pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding ? { task_id: state.binding.task_id } : undefined, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
   }
   notify(ctx, result);
   if (result.status !== "applied" || args.trim() || !result.document_hash || !ctx.hasUI) return;

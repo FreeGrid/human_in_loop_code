@@ -1,6 +1,8 @@
-import { canonicalSectionHash, canonicalTasksDefinitionHash } from "./plan-file.ts";
+import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash } from "./plan-file.ts";
+import { inspectPhaseRecords } from "./phase-record.ts";
+import { inspectExecutionNotes } from "./execution-notes.ts";
 import { extractAllSections } from "./sections.ts";
-import { parseTasks, taskRequiredFields } from "./tasks.ts";
+import { parseTasks, taskField, taskRequiredFields } from "./tasks.ts";
 import { HARNESS, STAGE_STATUS, type PlanDocument, type ValidationIssue, type ValidationResult } from "./types.ts";
 
 function result(issues: ValidationIssue[]): ValidationResult { return { ok: issues.every((i) => i.severity !== "error"), issues }; }
@@ -66,6 +68,9 @@ export function validatePlan(markdown: string, round: number): ValidationResult 
 export function validateTasks(markdown: string, currentRound: number, options: { requireCurrentOpen?: boolean; historicalCompleted?: boolean } = {}): ValidationResult {
   const issues: ValidationIssue[] = [];
   const tasks = parseTasks(markdown);
+  const phaseRecords = inspectPhaseRecords(markdown);
+  for (const message of phaseRecords.errors) issues.push(error("invalid_phase_record", message));
+  for (const message of inspectExecutionNotes(phaseRecords.definition).errors) issues.push(error("invalid_execution_note", message));
   if (/^### T\+\d+\b/m.test(markdown)) issues.push(error("tasks_contains_horizon_group", "Tasks must be listed directly as T001/T002 stages, without a T+0 grouping block"));
   if (tasks.length === 0) issues.push(error("missing_tasks", "Tasks section must contain at least one Task"));
   const ids = new Set<string>();
@@ -78,7 +83,19 @@ export function validateTasks(markdown: string, currentRound: number, options: {
         if (new RegExp(`^#### ${escapeRegExp(field)}\\s*$`, "m").test(task.definition)) issues.push(error("verbose_task_field", `${task.id} should not include ${field}; keep only Tasks, Acceptance, and Depends On`));
       }
     }
+    for (const heading of task.definition.matchAll(/^(#{1,4}) (.+)$/gm)) {
+      if (heading[0] === task.completionLine) continue;
+      const field = heading[2]!.trim();
+      if (heading[1] !== "####" || ![...taskRequiredFields(), "Round"].includes(field)) issues.push(error("unsupported_task_heading", `${task.id} contains unsupported heading: ${heading[0]}`));
+    }
     validateSubtaskMarkers(task.definition, task.id).forEach((issue) => issues.push(issue));
+    if (task.workItems.length === 0) issues.push(error("missing_work_items", `${task.id} Tasks needs at least one work item`));
+    for (const line of taskField(task.definition, "Acceptance").split(/\r?\n/).map((line) => line.trim())) {
+      if (line.startsWith("- ") && !/^- \[(?: |x|X)\] .+$/.test(line)) issues.push(error("invalid_acceptance_marker", `${task.id} Acceptance items must use leading checkboxes`));
+    }
+    for (const field of taskRequiredFields()) {
+      if ([...task.definition.matchAll(new RegExp(`^#### ${escapeRegExp(field)}[ \\t]*$`, "gm"))].length > 1) issues.push(error("duplicate_task_field", `${task.id} has duplicate ${field} fields`));
+    }
     if (task.round < 0) issues.push(error("invalid_task_round", `${task.id} has invalid Round`));
     if (!new RegExp(`^### ${task.id} — .+ \\[(?: |x|X)\\]$`, "m").test(task.definition)) issues.push(error("invalid_completion", `${task.id} must have a heading completion marker: ### ${task.id} — Title [ ] or [x]`));
     if (task.acceptanceItems.length < 1) issues.push(error("missing_acceptance_checkbox", `${task.id} Acceptance needs at least one checkbox`));
@@ -105,6 +122,13 @@ export function validateApprovalHashes(document: PlanDocument): ValidationResult
 export function validateProgress(document: PlanDocument): ValidationResult {
   const issues: ValidationIssue[] = [];
   const tasks = parseTasks(document.sections.tasks).filter((t) => t.round === document.metadata.round);
+  if (["executing", "awaiting_round_decision"].includes(document.metadata.stage)) {
+    const records = inspectPhaseRecords(document.sections.tasks);
+    for (const task of tasks.filter((item) => item.completed)) {
+      const record = records.records[task.id];
+      if (!record?.finalized || record.definition_hash !== phaseExecutionDefinitionHash(document) || task.workItems.some((item) => !item.completed) || task.acceptance.some((item) => !item.completed)) issues.push(error("completion_evidence_missing", `${task.id} requires a phase finalize receipt, not manual completion markers`));
+    }
+  }
   if (document.metadata.stage === "executing") {
     if (tasks.length === 0) issues.push(error("no_current_round_tasks", "executing requires current round Tasks"));
     if (tasks.every((t) => t.completed)) issues.push(error("executing_all_done", "executing cannot have all current round Tasks complete"));
@@ -134,8 +158,7 @@ function dependencyCycleIssues(tasks: ReturnType<typeof parseTasks>): Validation
 }
 
 function validateSubtaskMarkers(definition: string, taskId: string): ValidationIssue[] {
-  const match = definition.match(/^#### Tasks\s*\n([\s\S]*?)(?=^#### |$)/m);
-  const lines = (match?.[1] ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = taskField(definition, "Tasks").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const issues: ValidationIssue[] = [];
   for (const line of lines) {
     if (!line.startsWith("- ")) continue;
