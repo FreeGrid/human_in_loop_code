@@ -1,26 +1,30 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
+import { modelSwitchEntryData, switchTaskPlanModel, type TaskPlanModelSwitchConfig } from "./model-switch.ts";
 import { renderPlanOperationResult } from "./operation-result.ts";
 import { reminderForStage } from "./prompts.ts";
 import { TaskPlanService, type TaskPlanSessionState } from "./operations.ts";
 
-export function registerTaskPlanCommands(pi: ExtensionAPI, state: TaskPlanSessionState): void {
-  pi.registerCommand("plan", { description: "Start a guided Harness Plan from a natural-language brief", handler: (args, ctx) => newPlan(pi, args, ctx, state) });
-  pi.registerCommand("plan:new", { description: "Create a new one-file Harness Plan skeleton, then ask the Agent to draft What / Why", handler: (args, ctx) => newPlan(pi, args, ctx, state) });
+export function registerTaskPlanCommands(pi: ExtensionAPI, state: TaskPlanSessionState, modelConfig: Required<TaskPlanModelSwitchConfig>): void {
+  pi.registerCommand("plan", { description: "Start a guided Harness Plan from a natural-language brief", handler: (args, ctx) => newPlan(pi, args, ctx, state, modelConfig) });
+  pi.registerCommand("plan:new", { description: "Create a new one-file Harness Plan skeleton, then ask the Agent to draft What / Why", handler: (args, ctx) => newPlan(pi, args, ctx, state, modelConfig) });
   pi.registerCommand("plan:status", { description: "Show current Harness Plan status", handler: (args, ctx) => run(ctx, state, (s) => s.status(args.trim() || undefined)) });
   pi.registerCommand("plan:edit", { description: "Submit Markdown content for the current Harness Plan stage", handler: (args, ctx) => edit(args, ctx, state) });
-  pi.registerCommand("plan:approve", { description: "Apply the current Human approval gate", handler: (args, ctx) => approve(pi, args, ctx, state) });
+  pi.registerCommand("plan:approve", { description: "Apply the current Human approval gate", handler: (args, ctx) => approve(pi, args, ctx, state, modelConfig) });
   pi.registerCommand("plan:review", { description: "Review the current Harness Plan stage", handler: (args, ctx) => review(args, ctx, state) });
   pi.registerCommand("plan:task", { description: "Bind or mark a current-round Task: <id> <start|done|open>", handler: (args, ctx) => task(args, ctx, state) });
-  pi.registerCommand("plan:abandon", { description: "Abandon the current Harness Plan, optionally recording a reason", handler: (args, ctx) => abandon(args, ctx, state) });
+  pi.registerCommand("plan:abandon", { description: "Abandon the current Harness Plan, optionally recording a reason", handler: (args, ctx) => abandon(pi, args, ctx, state, modelConfig) });
 }
 
-async function newPlan(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+async function newPlan(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState, modelConfig: Required<TaskPlanModelSwitchConfig>) {
   const brief = await collectPlanBrief(args, ctx);
   if (!brief) {
     ctx.ui.notify("没有创建 Plan。你可以直接输入 `/plan 我想做什么...`，也可以只输入 `/plan` 打开引导输入。", "info");
     return;
   }
-  ctx.ui.notify("收到。我会先用当前模型把需求概括成短文件名，再创建 Plan 并起草 What / Why。", "info");
+  ctx.ui.notify("收到。我会先切换到 Plan 专用模型，把需求概括成短文件名，再创建 Plan 并起草 What / Why。", "info");
+  const switched = await switchTaskPlanModel(pi, ctx, state.modelSwitch ??= {}, modelConfig, "planning");
+  if (!switched) return;
+  pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
   queueNewPlanFollowUp(pi, brief);
 }
 
@@ -51,7 +55,7 @@ async function edit(args: string, ctx: ExtensionCommandContext, state: TaskPlanS
   return notify(ctx, await service.submitSection({ expected_document_hash: current.document_hash, content: args }));
 }
 
-async function approve(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+async function approve(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState, modelConfig: Required<TaskPlanModelSwitchConfig>) {
   const service = new TaskPlanService(ctx.cwd, state);
   const current = await service.get();
   if (!current.document_hash) return notify(ctx, current);
@@ -70,8 +74,16 @@ async function approve(pi: ExtensionAPI, args: string, ctx: ExtensionCommandCont
     ctx.ui.notify(nextStage === "plan"
       ? "收到“继续”。我会基于已确认的 What / Why 直接起草 Plan，完成后把 Plan 内容贴出来请你审批。"
       : "收到“继续”。我会基于已确认的 Plan 直接拆当前轮 Tasks，完成后把任务列表贴出来请你审批。", "info");
+    const switched = await switchTaskPlanModel(pi, ctx, state.modelSwitch ??= {}, modelConfig, "planning");
+    if (!switched) return;
+    pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
     queueDraftFollowUp(pi, nextStage, result.path);
     return;
+  }
+  const terminalStage = (result.snapshot as { metadata?: { stage?: string } } | undefined)?.metadata?.stage;
+  if (result.status === "applied" && ["executing", "completed", "abandoned"].includes(terminalStage ?? "")) {
+    await switchTaskPlanModel(pi, ctx, state.modelSwitch ??= {}, modelConfig, "normal");
+    pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
   }
   notify(ctx, result);
 }
@@ -98,11 +110,15 @@ async function task(args: string, ctx: ExtensionCommandContext, state: TaskPlanS
   return notify(ctx, result);
 }
 
-async function abandon(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+async function abandon(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState, modelConfig: Required<TaskPlanModelSwitchConfig>) {
   const service = new TaskPlanService(ctx.cwd, state);
   const current = await service.get();
   if (!current.document_hash) return notify(ctx, current);
   const result = await service.abandon({ expected_document_hash: current.document_hash, reason: args.trim() || undefined });
+  if (result.status === "applied") {
+    await switchTaskPlanModel(pi, ctx, state.modelSwitch ??= {}, modelConfig, "normal");
+    pi.appendEntry("pi-plan-task-binding", { currentPlanPath: state.currentPlanPath, binding: state.binding, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
+  }
   notify(ctx, result);
   if (result.status !== "applied" || args.trim() || !result.document_hash || !ctx.hasUI) return;
   const reason = await ctx.ui.input("可选：为什么放弃这个 Plan？", "不想填写可以直接按 Esc 或留空");
