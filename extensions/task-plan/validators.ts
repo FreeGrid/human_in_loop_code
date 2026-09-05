@@ -1,6 +1,6 @@
 import { canonicalSectionHash, canonicalTasksDefinitionHash } from "./plan-file.ts";
 import { extractAllSections } from "./sections.ts";
-import { parseTasks, taskRequiredFields } from "./tasks.ts";
+import { parseTasks, taskField, taskRequiredFields } from "./tasks.ts";
 import { HARNESS, STAGE_STATUS, type PlanDocument, type ValidationIssue, type ValidationResult } from "./types.ts";
 
 function result(issues: ValidationIssue[]): ValidationResult { return { ok: issues.every((i) => i.severity !== "error"), issues }; }
@@ -79,6 +79,13 @@ export function validateTasks(markdown: string, currentRound: number, options: {
       }
     }
     validateSubtaskMarkers(task.definition, task.id).forEach((issue) => issues.push(issue));
+    if (task.workItems.length === 0) issues.push(error("missing_work_items", `${task.id} Tasks needs at least one work item`));
+    for (const line of taskField(task.definition, "Acceptance").split(/\r?\n/).map((line) => line.trim())) {
+      if (line.startsWith("- ") && !/^- \[(?: |x|X)\] .+$/.test(line)) issues.push(error("invalid_acceptance_marker", `${task.id} Acceptance items must use leading checkboxes`));
+    }
+    for (const field of taskRequiredFields()) {
+      if ([...task.definition.matchAll(new RegExp(`^#### ${escapeRegExp(field)}[ \\t]*$`, "gm"))].length > 1) issues.push(error("duplicate_task_field", `${task.id} has duplicate ${field} fields`));
+    }
     if (task.round < 0) issues.push(error("invalid_task_round", `${task.id} has invalid Round`));
     if (!new RegExp(`^### ${task.id} — .+ \\[(?: |x|X)\\]$`, "m").test(task.definition)) issues.push(error("invalid_completion", `${task.id} must have a heading completion marker: ### ${task.id} — Title [ ] or [x]`));
     if (task.acceptanceItems.length < 1) issues.push(error("missing_acceptance_checkbox", `${task.id} Acceptance needs at least one checkbox`));
@@ -134,8 +141,7 @@ function dependencyCycleIssues(tasks: ReturnType<typeof parseTasks>): Validation
 }
 
 function validateSubtaskMarkers(definition: string, taskId: string): ValidationIssue[] {
-  const match = definition.match(/^#### Tasks\s*\n([\s\S]*?)(?=^#### |$)/m);
-  const lines = (match?.[1] ?? "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lines = taskField(definition, "Tasks").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const issues: ValidationIssue[] = [];
   for (const line of lines) {
     if (!line.startsWith("- ")) continue;

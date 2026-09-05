@@ -47,12 +47,21 @@ export interface ValidationResult {
   issues: ValidationIssue[];
 }
 
+/** Ordinal IDs are stable within a frozen task definition, not across replanning. */
+export interface TaskChecklistItem {
+  id: string;
+  text: string;
+  completed: boolean;
+}
+
 export interface TaskBlock {
   id: string;
   title: string;
   round: number;
   completed: boolean;
   completionLine: string;
+  workItems: TaskChecklistItem[];
+  acceptance: TaskChecklistItem[];
   acceptanceItems: string[];
   dependsOn: string[];
   definition: string;
