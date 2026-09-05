@@ -4,6 +4,7 @@ import { canonicalSectionHash, canonicalTasksDefinitionHash, createPlanSkeleton,
 import { replaceSection } from "./sections.ts";
 import { currentRoundTasks, parseTasks } from "./tasks.ts";
 import { approvePlan, approveWhatWhy, authorizeExecution, closePlan, markTasksReviewed, reconcileState, rollForward, abandonPlan } from "./state.ts";
+import type { TaskPlanModelSwitchState } from "./model-switch.ts";
 import type { PlanDocument, PlanMetadata, PlanStage, SectionName, TaskBlock, ValidationIssue } from "./types.ts";
 import { validateFrontmatter, validatePlan, validateProgress, validateSections, validateTasks, validateWhatWhy } from "./validators.ts";
 import type { PlanOperationResult } from "./operation-result.ts";
@@ -20,6 +21,7 @@ export interface TaskPlanSessionState {
   currentPlanPath?: string;
   binding?: TaskBinding;
   reportedThisTurn?: boolean;
+  modelSwitch?: TaskPlanModelSwitchState;
 }
 
 export class TaskPlanService {

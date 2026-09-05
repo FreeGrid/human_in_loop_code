@@ -50,6 +50,41 @@ configurable specialist roles.
 
 [Read the Collaborating Agents guide](extensions/collaborating-agents/README.md)
 
+### 3. Task Plan: use a planning model, then return to coding
+
+`/plan` switches the current main session to a dedicated planning preset before
+it queues plan drafting. By default the planning preset is
+`openai-codex/gpt-6-astra` with thinking level `xhigh` (Extra high). When the
+plan enters execution, completes, or is abandoned, the extension switches back
+to the normal coding preset: `openai-codex/gpt-6-astra` with thinking level
+`medium`.
+
+The switch uses Pi's current-session model API, not a subagent, so the
+conversation context stays in the main Agent.
+
+Configuration is available through environment variables:
+
+```bash
+# Disable automatic model switching if needed.
+export PI_TASK_PLAN_MODEL_SWITCH=0
+
+# Planning preset.
+export PI_TASK_PLAN_MODEL_PROVIDER=openai-codex
+export PI_TASK_PLAN_MODEL_ID=gpt-6-astra
+export PI_TASK_PLAN_THINKING=xhigh
+
+# Normal/coding preset after planning.
+export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=openai-codex
+export PI_TASK_PLAN_NORMAL_MODEL_ID=gpt-6-astra
+export PI_TASK_PLAN_NORMAL_THINKING=medium
+
+# Optional: restore the model active before /plan instead of the configured normal preset.
+export PI_TASK_PLAN_RESTORE_MODE=previous
+```
+
+Package consumers that import the extension directly can also pass a
+`TaskPlanModelSwitchConfig` object to the default task-plan extension factory.
+
 ## Installation
 
 Choose one source below. A version of this package that contains the current
