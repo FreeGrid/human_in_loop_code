@@ -1,8 +1,10 @@
+import { runReview, configureReviewAuthority, authenticateReviewEvidence } from "./evidence.ts";
+import { nodeContractHash, requireNodeReview, effectiveNodeRisk, writeReviewEvidence, dependencyFinalizations, assertAllFinalizedHistory, assertReopenRecoverable } from "./receipt-state.ts";
 import { consumeDocumentAuthority, appendAuthorization } from "./authority-context.ts";
 import type { AuthorityAction, HumanCapability } from "./authority.ts";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash, createPlanSkeleton, findUnfinishedHarnessPlans, readPlanDocument, replaceFrontmatter, sha256, writeIfDocumentHash } from "./plan-file.ts";
+import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash, parseFrontmatter, createPlanSkeleton, findUnfinishedHarnessPlans, readPlanDocument, replaceFrontmatter, sha256, writeIfDocumentHash } from "./plan-file.ts";
 import { replaceSection } from "./sections.ts";
 import { currentRoundTasks, parseTasks } from "./tasks.ts";
 import { approvePlan, approveWhatWhy, authorizeExecution, closePlan, markTasksReviewed, reconcileState, rollForward, abandonPlan } from "./state.ts";
@@ -108,7 +110,7 @@ export class TaskPlanService {
       authorityAction = "approve_plan";
       metadata = approvePlan(loaded.metadata, loaded.sections.plan);
     } else if (loaded.metadata.stage === "awaiting_execution_approval") {
-      const v = validateExecutionReadiness(loaded); if (!v.ok) return validation("Execution readiness validation failed", v.issues);
+      const v = this.executionReadiness(loaded); if (!v.ok) return validation("Execution readiness validation failed", v.issues);
       if (params.action === "execute") {
         if (loaded.metadata.approved_contract_hash !== phaseExecutionDefinitionHash(loaded)) return validation("contract_approval_required: approve the detailed contract separately", []);
         authorityAction = "authorize_execution";
@@ -118,6 +120,7 @@ export class TaskPlanService {
         metadata = { ...loaded.metadata, approved_contract_hash: phaseExecutionDefinitionHash(loaded) };
       } else return validation("Explicit contract approval or execution authorization required", []);
     } else if (loaded.metadata.stage === "awaiting_round_decision") {
+      try { assertAllFinalizedHistory(loaded,this.sessionState.phaseDependencies?.evidence); } catch(error) { return validation(String((error as Error).message),[]); }
       const progress = validateProgress(loaded); if (!progress.ok) return validation("Current round is not complete", progress.issues);
       if (params.action === "next_round") { authorityAction = "next_round"; metadata = rollForward(loaded.metadata); }
       else if (params.action === "complete") {
@@ -150,10 +153,37 @@ export class TaskPlanService {
     if (!preservesExecutionState(loaded.sections.tasks, nextTasks)) return conflict("reserved_execution_state_changed: Review cannot add, modify or delete execution records/notes");
     const v = validateTasks(nextTasks, loaded.metadata.round, { requireCurrentOpen: true, historicalCompleted: true });
     if (!v.ok) return validation("Tasks review failed", v.issues);
-    let text = replaceSection(loaded.text, "tasks", nextTasks);
-    text = replaceSection(text, "review", upsertReview(loaded.sections.review, loaded.metadata.round, params.summary ?? "Status: passed\n\nChanges:\n\n- No deterministic changes required.\n\nRemaining Warnings:\n\n- None."));
-    text = replaceFrontmatter(text, markTasksReviewed(loaded.metadata, nextTasks));
-    return this.write(loaded, text, "Tasks reviewed; awaiting execution approval");
+    const mapping = validatePlanNodeMapping(loaded.sections.plan, nextTasks, {currentNodeId:currentRoundTasks(nextTasks,loaded.metadata.round)[0]?.id}).filter(i=>i.severity === "error");
+    if (mapping.length) return validation("Plan/Tasks contract mapping failed", mapping);
+    const runtime = this.sessionState.phaseDependencies?.evidence;
+    if (!runtime) return validation("capability_unavailable: trusted reviewer and receipt signer required", []);
+    try {
+      let text = replaceSection(loaded.text, "tasks", nextTasks);
+      const candidate = {...loaded,text,sections:{...loaded.sections,tasks:nextTasks}};
+      const summaries: string[] = [];
+      let passed = true;
+      for (const task of currentRoundTasks(nextTasks,loaded.metadata.round)) {
+        const risk = effectiveNodeRisk(task,runtime);
+        const reviewer = runtime.reviewer ?? (risk === "low" ? configureReviewAuthority({signer:runtime.signer,session_id:`controller-structural:${runtime.implementer_session_id}`,implementer_session_id:runtime.implementer_session_id,fresh:false,run:async()=>({review_type:"deterministic",result:"passed",summary:"Task structure and Plan mapping passed deterministic validation",evidence_refs:["task-plan:structural-review/v1"]})}) : undefined);
+        if (!reviewer) return validation("capability_unavailable: fresh independent review required for unknown/medium/high risk", []);
+        const evidence = await runReview(reviewer,{node_id:task.id,contract_hash:nodeContractHash(candidate,task.id),risk});
+        authenticateReviewEvidence(evidence,runtime.signer,{node_id:task.id,contract_hash:nodeContractHash(candidate,task.id),risk,implementer_session_id:runtime.implementer_session_id});
+        text = writeReviewEvidence(text,task.id,evidence);
+        summaries.push(`${task.id}: ${evidence.receipt.result} — ${evidence.receipt.summary}`);
+        passed &&= evidence.receipt.result === "passed";
+      }
+      // Model summaries are candidate commentary; only the configured review result is authoritative.
+      text = replaceSection(text,"review",upsertReview(loaded.sections.review,loaded.metadata.round,summaries.join("\n\n")));
+      const metadata = parseFrontmatter(text).metadata;
+      if (passed) text = replaceFrontmatter(text,markTasksReviewed(metadata,nextTasks));
+      else {
+        delete metadata.reviewed_tasks_hash;
+        delete metadata.approved_contract_hash;
+        text = replaceFrontmatter(text,{...metadata,stage:"tasks",stage_status:"ready_for_review"});
+      }
+      const result = await this.write(loaded,text,passed ? "Trusted Review passed; awaiting separate Human contract approval" : "Review did not pass; execution remains blocked");
+      return !passed && result.status === "applied" ? {...result,status:"validation_error"} : result;
+    } catch (error) { return validation(String((error as Error).message),[]); }
   }
 
   async bindTask(params: { expected_document_hash: string; task_id: string; planPath?: string }): Promise<PlanOperationResult> {
@@ -161,10 +191,11 @@ export class TaskPlanService {
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
     if (loaded.metadata.stage !== "executing") return validation("Task binding requires executing stage", []);
-    const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("Task binding validation failed", ready.issues);
+    const ready = this.executionReadiness(loaded); if (!ready.ok) return validation("Task binding validation failed", ready.issues);
     const task = currentRoundTasks(loaded.sections.tasks, loaded.metadata.round).find((candidate) => candidate.id === params.task_id);
     if (!task) return validation(`Task ${params.task_id} is not in current round`, []);
     if (task.completed) return validation(`Task ${params.task_id} is already complete`, []);
+    try { dependencyFinalizations(loaded,task.id,this.sessionState.phaseDependencies?.evidence); } catch(error) { return validation(String((error as Error).message),[]); }
     const binding = { task_id: task.id, plan_path: loaded.path, round: loaded.metadata.round, task_definition_hash: canonicalTasksDefinitionHash(task.definition), contract: task };
     this.sessionState.binding = binding;
     this.sessionState.reportedThisTurn = false;
@@ -183,7 +214,7 @@ export class TaskPlanService {
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
-    const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("Phase readiness validation failed", ready.issues);
+    const ready = this.executionReadiness(loaded); if (!ready.ok) return validation("Phase readiness validation failed", ready.issues);
     const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).start(loaded, { ...params, decision });
     if (result.status === "applied" || result.status === "ok") {
       const next = await readPlanDocument(loaded.path);
@@ -204,7 +235,7 @@ export class TaskPlanService {
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
-    const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("DocSync readiness validation failed", ready.issues);
+    const ready = this.executionReadiness(loaded); if (!ready.ok) return validation("DocSync readiness validation failed", ready.issues);
     const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).setDocSync(loaded, params.task_id, params.enabled, decision);
     if (result.status === "applied" || result.status === "ok") return { ...result, snapshot: snapshot(await readPlanDocument(loaded.path), this.sessionState.binding) };
     return result;
@@ -214,7 +245,7 @@ export class TaskPlanService {
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
-    const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("Finalize readiness validation failed", ready.issues);
+    const ready = this.executionReadiness(loaded); if (!ready.ok) return validation("Finalize readiness validation failed", ready.issues);
     const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).finalize(loaded, params.task_id, this.takeCapability());
     if (result.status === "applied") {
       const next = await readPlanDocument(loaded.path);
@@ -225,11 +256,21 @@ export class TaskPlanService {
     return result;
   }
 
+  async verifyAcceptance(params: {expected_document_hash:string; task_id:string; acceptance_id:string; planPath?:string}): Promise<PlanOperationResult> {
+    const loaded = await this.load(params.planPath);
+    if ("status" in loaded) return loaded;
+    if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
+    const ready = this.executionReadiness(loaded); if (!ready.ok) return validation("Verification readiness failed",ready.issues);
+    const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).verifyAcceptance(loaded,params.task_id,params.acceptance_id);
+    if (result.document_hash) return {...result,snapshot:snapshot(await readPlanDocument(loaded.path),this.sessionState.binding)};
+    return result;
+  }
+
   async reportTaskResult(params: { task_id: string; work_item_id?: string; result: "in_progress" | "blocked" | "completed"; summary: string; files?: string[]; change_types?: ExecutionNote["change_types"]; acceptance_results?: Array<{ item: string; satisfied: boolean }> }): Promise<PlanOperationResult> {
     const binding = this.sessionState.binding;
     if (!binding || binding.task_id !== params.task_id) return validation("Report must match the current task binding", []);
     const loaded = await readPlanDocument(binding.plan_path);
-    const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("Report readiness validation failed", ready.issues);
+    const ready = this.executionReadiness(loaded); if (!ready.ok) return validation("Report readiness validation failed", ready.issues);
     if (loaded.metadata.stage !== "executing" || loaded.metadata.round !== binding.round) return conflict("task_binding_stale");
     const task = currentRoundTasks(loaded.sections.tasks, binding.round).find((candidate) => candidate.id === binding.task_id);
     if (!task || canonicalTasksDefinitionHash(task.definition) !== binding.task_definition_hash) return conflict("task_binding_stale");
@@ -264,6 +305,7 @@ export class TaskPlanService {
     if (params.status === "completed" && loaded.metadata.stage !== "executing") return validation("Human completion requires executing stage", []);
     if (params.status === "open" && !["executing", "awaiting_round_decision"].includes(loaded.metadata.stage)) return validation("Human reopen requires executing or awaiting_round_decision stage", []);
     if (params.status === "completed") return this.finalizePhase(params);
+    try { assertReopenRecoverable(loaded,task.id); } catch(error) { return validation(String((error as Error).message),[]); }
     // Reopening invalidates all previous evidence, but preserves execution identity/baseline.
     let definition = task.definition.replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/m, "$1 [ ]")
       .replace(/^([ \t]*- )\[(?: |x|X)\]/gm, "$1[ ]")
@@ -273,6 +315,7 @@ export class TaskPlanService {
       delete record.finalized;
       delete record.last_finalize;
       record.acceptance = [];
+      record.verification = [];
       definition = upsertPhaseRecord(definition, task.id, record);
       for (const work of task.workItems) definition = upsertExecutionNote(definition, work.id, { version: 1, status: "in_progress", summary: "Reopened by Human; previous evidence invalidated", files: [], change_types: [] });
     }
@@ -321,6 +364,17 @@ export class TaskPlanService {
   }
 
   private async persistStateChange(loaded: PlanDocument, text: string, reason?: string): Promise<PlanOperationResult> { return this.write(loaded, text, `State changed during reconciliation: ${reason}` as string, "state_changed"); }
+
+  private executionReadiness(document: PlanDocument) {
+    const result = validateExecutionReadiness(document);
+    try {
+      for (const task of currentRoundTasks(document.sections.tasks,document.metadata.round).filter(t=>!t.completed)) {
+        requireNodeReview(document,task.id,this.sessionState.phaseDependencies?.evidence);
+        // Dependency readiness is evaluated when a node is actually bound/executed, not when reviewing future work.
+      }
+    } catch(error) { result.issues.push({severity:"error",code:"review_authority_required",message:String((error as Error).message)}); }
+    return {...result,ok:result.issues.every(i=>i.severity !== "error")};
+  }
 
   private takeCapability(): HumanCapability | undefined {
     const token = this.sessionState.humanCapability;
@@ -382,6 +436,7 @@ function validateExecutionReadiness(document: PlanDocument) {
     ...validateFrontmatter(document).issues,
     ...validateProgress(document).issues,
     ...validateSections(document.text).issues,
+    ...validatePlanNodeMapping(document.sections.plan,document.sections.tasks,{currentNodeId:currentRoundTasks(document.sections.tasks,document.metadata.round)[0]?.id}),
     ...validateTasks(document.sections.tasks, document.metadata.round, { historicalCompleted: true }).issues,
   ];
   if (!document.metadata.approved_what_why_hash || document.metadata.approved_what_why_hash !== canonicalSectionHash(document.sections.what_why)) issues.push({ severity: "error" as const, code: "what_why_not_approved", message: "What / Why hash is not approved" });
