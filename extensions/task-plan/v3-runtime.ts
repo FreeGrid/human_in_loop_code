@@ -51,7 +51,7 @@ export interface V3RuntimeConfiguration {
   /** Persist outside child-readable content. Missing/wrong keys cannot recreate state. */
   authentication_key: Uint8Array;
   protected_key_paths?: string[];
-  checkpoint?: (stage: "runtime_committed" | "projection_written") => Promise<void>;
+  checkpoint?: (stage: "runtime_state_linked" | "runtime_committed" | "projection_written") => Promise<void>;
 }
 interface Envelope { version: 1; generation: number; previous_hash: string | null; state: V3RuntimeState; seal: string }
 export interface V3RuntimeSnapshot { generation: number; hash: string | null; state: V3RuntimeState | null }
@@ -148,7 +148,10 @@ export class V3Runtime {
     return new V3Runtime(config);
   }
   private sign(value: unknown): string { return createHmac("sha256", this.#key).update("pi-plan-v3-runtime:1\n").update(canonicalJson(value)).digest("hex"); }
-  async read(): Promise<V3RuntimeSnapshot> {
+  async read(): Promise<V3RuntimeSnapshot> { return this.load(false); }
+  /** Pure, authenticated inspection for a Human-bound interrupted-head recovery. */
+  async inspectRecovery(): Promise<V3RuntimeSnapshot> { return this.load(true); }
+  private async load(allowPendingHead: boolean): Promise<V3RuntimeSnapshot> {
     await directory(this.root, true);
     const names = (await readdir(this.root)).filter(name => name.endsWith(".json")).sort();
     if (names.length > 10000) v3Fail("runtime_history_budget");
@@ -160,7 +163,7 @@ export class V3Runtime {
       if (parsed.version !== 1 || !Number.isSafeInteger(parsed.generation) || Number(parsed.generation) < 1 || canonicalJson(parsed) + "\n" !== raw || !timingSafeEqual(Buffer.from(seal, "hex"), Buffer.from(this.sign(body), "hex"))) v3Fail("runtime_head_authentication_failed");
       head = parsed;
     } catch (error) { if (!absent(error)) throw error; }
-    if (names.length !== (head?.generation ?? 0)) v3Fail("runtime_committed_head_missing_data");
+    if (names.length < Number(head?.generation ?? 0)) v3Fail("runtime_committed_head_missing_data");
     let previous: string | null = null, state: V3RuntimeState | null = null;
     for (const [index, name] of names.entries()) {
       if (name !== `${String(index + 1).padStart(10, "0")}.json`) v3Fail("runtime_sequence_corrupt");
@@ -173,11 +176,12 @@ export class V3Runtime {
       assertV3RuntimeState(envelope.state); state = envelope.state;
       if (state.plan_path !== this.plan_path || state.target_root !== this.target_root || state.governance_root !== this.governance_root) v3Fail("runtime_foreign_binding");
       previous = canonicalHash(envelope);
+      if (head?.generation === index + 1 && head.state_hash !== previous) v3Fail("runtime_head_mismatch");
     }
-    if (head && head.state_hash !== previous) v3Fail("runtime_head_mismatch");
+    if (names.length > Number(head?.generation ?? 0) && !allowPendingHead) v3Fail("runtime_head_recovery_required");
     return { generation: names.length, hash: previous, state: structuredClone(state) };
   }
-  async checkpoint(stage: "runtime_committed" | "projection_written"): Promise<void> { await this.#checkpoint?.(stage); }
+  async checkpoint(stage: "runtime_state_linked" | "runtime_committed" | "projection_written"): Promise<void> { await this.#checkpoint?.(stage); }
   /** Cooperative runtime mutex. Recovery may reclaim only a validated, dead process owner. */
   async transaction<T>(work: (tx: { read(): Promise<V3RuntimeSnapshot>; save(state: V3RuntimeState, expected: V3RuntimeSnapshot): Promise<V3RuntimeSnapshot> }) => Promise<T>, recoverDeadOwner = false): Promise<T> {
     await directory(this.root, true);
@@ -199,7 +203,7 @@ export class V3Runtime {
       identity = await lstat(path); await unlink(temporary);
       const save = async (state: V3RuntimeState, expected: V3RuntimeSnapshot): Promise<V3RuntimeSnapshot> => {
         assertV3RuntimeState(state);
-        const current = await this.read(); if (current.generation !== expected.generation || current.hash !== expected.hash) v3Fail("runtime_cas_conflict");
+        const current = await this.load(recoverDeadOwner); if (current.generation !== expected.generation || current.hash !== expected.hash) v3Fail("runtime_cas_conflict");
         if (state.plan_path !== this.plan_path || state.target_root !== this.target_root || state.governance_root !== this.governance_root) v3Fail("runtime_foreign_binding");
         // A new revision cannot erase earlier execution identities or revise finalized evidence.
         if (current.state?.invalidated_revisions.some(id => !state.invalidated_revisions.includes(id))) v3Fail("runtime_revocation_rewrite");
@@ -214,6 +218,7 @@ export class V3Runtime {
         const file = await open(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
         try { await file.writeFile(raw); await file.sync(); } finally { await file.close(); }
         try { await directory(this.root, true); await link(temp, destination); await syncDirectory(this.root); } finally { await unlink(temp).catch(() => undefined); }
+        await this.checkpoint("runtime_state_linked");
         const headBody = { version: 1, generation: body.generation, state_hash: canonicalHash(envelope) };
         const head = { ...headBody, seal: this.sign(headBody) }, headTemp = join(this.root, `.head-${randomUUID()}.tmp`);
         const headFile = await open(headTemp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
@@ -222,7 +227,7 @@ export class V3Runtime {
         await this.checkpoint("runtime_committed");
         return { generation: body.generation, hash: canonicalHash(envelope), state: structuredClone(state) };
       };
-      return await work({ read: () => this.read(), save });
+      return await work({ read: () => this.load(recoverDeadOwner), save });
     } finally {
       await unlink(temporary).catch(() => undefined);
       if (identity) { const current = await lstat(path).catch(() => undefined); if (current && current.dev === identity.dev && current.ino === identity.ino) await unlink(path); }
