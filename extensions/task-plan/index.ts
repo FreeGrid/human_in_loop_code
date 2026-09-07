@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { issueHumanCapability, type AuthorityAction } from "./authority.ts";
+import { documentAuthorityContext } from "./authority-context.ts";
+import { readPlanDocument } from "./plan-file.ts";
 import { GitBaselineProvider } from "./docsync/baseline.ts";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { registerTaskPlanCommands } from "./commands.ts";
@@ -6,7 +10,7 @@ import { modelSwitchEntryData, normalizeTaskPlanModelConfig, switchTaskPlanModel
 import { PLAN_PROMPTS } from "./prompts.ts";
 import { registerTaskPlanTools } from "./tools.ts";
 import { inspectPhaseRecords } from "./phase-record.ts";
-import { decisionFromInput, explicitPhaseAction } from "./phase-input.ts";
+import { explicitPhaseAction } from "./phase-input.ts";
 import type { PhaseDependencies } from "./phase-contracts.ts";
 import { renderPlanOperationResult } from "./operation-result.ts";
 
@@ -20,7 +24,9 @@ export * from "./model-switch.ts";
 export * from "./nodes.ts";
 export * from "./v2-plan.ts";
 export * from "./review-receipt.ts";
-export * from "./migration.ts";
+// Migration apply is deliberately absent from the public extension surface.
+export * from "./authority.ts";
+export * from "./authority-context.ts";
 export * from "./operation-result.ts";
 export * from "./operations.ts";
 export * from "./plan-file.ts";
@@ -50,6 +56,7 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
     if (entry?.data?.currentPlanPath) state.currentPlanPath = entry.data.currentPlanPath;
     delete state.binding;
     delete state.humanDecision;
+    delete state.humanCapability;
     if (entry?.data?.modelSwitch) state.modelSwitch = entry.data.modelSwitch;
     if (entry?.data?.binding?.task_id && state.currentPlanPath) {
       const service = new TaskPlanService(ctx.cwd, state);
@@ -59,21 +66,45 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
   });
 
   pi.on("input", async (event, ctx) => {
-    state.humanDecision = decisionFromInput(event.text, event.source);
-    const action = explicitPhaseAction(event.text);
-    if (!state.humanDecision || (action !== "docsync_on" && action !== "docsync_off")) return { action: "continue" };
+    delete state.humanDecision;
+    delete state.humanCapability;
+    if (event.source !== "interactive" && event.source !== "rpc") return { action: "continue" };
+    const value = event.text.trim().replace(/[。！.!]+$/u, "").trim();
+    const phaseAction = explicitPhaseAction(event.text);
+    const approval = /^(继续|开始拆任务|批准合同|approve contract|approve plan)$/iu.test(value);
+    const closure = /^(放弃计划|abandon plan|完成计划|complete plan)$/iu.test(value);
+    const nodeAction = value.match(/^(重开|reopen|完成阶段|finalize)\s+(T\d{3})$/iu);
+    if (!phaseAction && !approval && !closure && !nodeAction) return { action: "continue" };
     const service = new TaskPlanService(ctx.cwd, state);
     const current = await service.get();
-    const sections = (current.snapshot as { sections?: { tasks?: string } })?.sections;
-    const active = Object.values(inspectPhaseRecords(sections?.tasks ?? "").records).filter((r) => !r.finalized);
-    if (!current.document_hash || active.length !== 1) {
-      delete state.humanDecision;
-      ctx.ui.notify("DocSync switch requires one active phase; start/resume or select the phase first.", "error");
-    } else {
-      const result = await service.setPhaseDocSync({ expected_document_hash: current.document_hash, task_id: active[0]!.context.phase_id, enabled: action === "docsync_on" });
-      ctx.ui.notify(renderPlanOperationResult(result), result.status === "applied" ? "info" : "error");
+    if (!current.path || !current.document_hash) return { action: "continue" };
+    const document = await readPlanDocument(current.path);
+    if (document.document_hash !== current.document_hash) return { action: "continue" };
+    const records = Object.values(inspectPhaseRecords(document.sections.tasks).records);
+    const active = records.filter(r => !r.finalized);
+    const stage = document.metadata.stage;
+    let action: AuthorityAction | undefined;
+    let node = "$plan";
+    if (approval) action = stage === "what_why" ? "approve_what_why" : stage === "plan" ? "approve_plan" : stage === "awaiting_execution_approval" ? "approve_contract" : undefined;
+    else if (closure) action = /^(放弃|abandon)/iu.test(value) ? "abandon" : "complete";
+    else if (nodeAction) { action = /^(重开|reopen)$/iu.test(nodeAction[1]!) ? "reopen" : "finalize"; node = nodeAction[2]!; }
+    else if (phaseAction === "execute") {
+      if (stage === "awaiting_execution_approval") action = "authorize_execution";
+      // A first execution needs concrete roots shown to the Human through /plan:execute.
+      else if (stage === "executing" && active.length === 1) { action = "execute"; node = active[0]!.context.phase_id; }
+    } else if (phaseAction && active.length === 1) { action = phaseAction; node = active[0]!.context.phase_id; }
+    if (!action) {
+      ctx.ui.notify("No unambiguous context-bound authorization issued. First execution requires /plan:execute and explicit roots.", "info");
+      return { action: "continue" };
     }
-    return { action: "handled" };
+    const context = await documentAuthorityContext(document, node);
+    state.humanCapability = issueHumanCapability(action, context, { source: event.source, input_id: randomUUID(), text: event.text });
+    if (action === "docsync_on" || action === "docsync_off") {
+      const result = await service.setPhaseDocSync({ expected_document_hash: document.document_hash, task_id: node, enabled: action === "docsync_on" });
+      ctx.ui.notify(renderPlanOperationResult(result), result.status === "applied" ? "info" : "error");
+      return { action: "handled" };
+    }
+    return { action: "continue" };
   });
 
   pi.on("agent_start", async () => { state.reportedThisTurn = false; });
