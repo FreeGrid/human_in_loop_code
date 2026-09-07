@@ -17,10 +17,20 @@ function serialize(v: unknown): string {
 
 export function validatePhaseRecord(v: unknown): v is PhaseRecord {
   try { assertSafeUnicode(v); } catch { return false; }
-  if (!object(v) || !keys(v, ["version", "context", "definition_hash", "baseline", "authorization", "docsync", "acceptance"], ["last_finalize", "finalized", "implementer_session_id", "verification"]) || v.version !== 1) return false;
+  if (!object(v) || !keys(v, ["version", "context", "definition_hash", "baseline", "authorization", "docsync", "acceptance"], ["last_finalize", "finalized", "implementer_session_id", "verification", "generation", "report_batches"]) || v.version !== 1) return false;
   if (v.implementer_session_id !== undefined && (!text(v.implementer_session_id, 256) || /[\u0000]|\p{Surrogate}/u.test(v.implementer_session_id))) return false;
+  if(v.generation!==undefined && (!Number.isSafeInteger(v.generation)||Number(v.generation)<0))return false;
+  if(v.report_batches!==undefined) {
+    if(!Array.isArray(v.report_batches)||v.report_batches.length>128)return false;
+    const seen=new Set<string>();
+    for(const b of v.report_batches) {
+      if(!object(b)||!keys(b,["idempotency_key","request_hash","operation_id","generation","report_ids","content_version"])||typeof b.idempotency_key!=="string"||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(b.idempotency_key)||seen.has(b.idempotency_key)||typeof b.request_hash!=="string"||!/^[a-f0-9]{64}$/.test(b.request_hash)||typeof b.operation_id!=="string"||!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(b.operation_id)||!Number.isSafeInteger(b.generation)||Number(b.generation)<0||Number(b.generation)>Number(v.generation??0)||!refs(b.report_ids)||!b.report_ids.length||b.report_ids.length>64||!text(b.content_version,500))return false;
+      seen.add(b.idempotency_key);
+    }
+  }
   const c = v.context;
   if (!object(c) || !keys(c, ["execute_id", "phase_id", "round", "plan_path", "target_root", "governance_root"]) || !text(c.execute_id, 128) || typeof c.phase_id !== "string" || !/^T\d{3}$/.test(c.phase_id) || !Number.isSafeInteger(c.round) || Number(c.round) < 0 || ![c.plan_path, c.target_root, c.governance_root].every(x => text(x, 4096) && !/[\x00-\x1f]/.test(x))) return false;
+  if(Array.isArray(v.report_batches)&&v.report_batches.some(b=>(b.report_ids as string[]).some(id=>!new RegExp(`^${c.phase_id}\\.W\\d{3}$`).test(id))))return false;
   if (typeof v.definition_hash !== "string" || !/^[a-f0-9]{64}$/.test(v.definition_hash)) return false;
   if (!object(v.baseline) || !keys(v.baseline, ["id", "initial_version"]) || !text(v.baseline.id, 500) || !text(v.baseline.initial_version, 500)) return false;
   if (!decision(v.authorization, ["execute"])) return false;

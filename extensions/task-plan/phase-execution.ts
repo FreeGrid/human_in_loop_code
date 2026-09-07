@@ -1,9 +1,10 @@
-import { beginPlanOperation, recordOperationFailure, type OperationContext } from "./operation-journal.ts";
+import { nodeExecutionPolicy, assertNodeSandbox, inspectNodeChanges, assertGitScopeInventory } from "./scope-policy.ts";
+import { assertOperationWritable, beginPlanOperation, recordOperationFailure, type OperationContext } from "./operation-journal.ts";
 import { validatePlanNodeMapping } from "./nodes.ts";
-import { assertVerificationEvidence, authenticateVerificationEvidence, manualAcceptanceContext, runManualAcceptance, runVerification, sealFinalizeEvidence, verifyArtifactContents, type ManualVerificationAuthority, type VerificationInput } from "./evidence.ts";
+import { verificationProcessSandbox, assertVerificationEvidence, authenticateVerificationEvidence, manualAcceptanceContext, runManualAcceptance, runVerification, sealFinalizeEvidence, verifyArtifactContents, type ManualVerificationAuthority, type VerificationInput } from "./evidence.ts";
 import { authenticateFinalizedNode, dependencyFinalizations, nodeContractHash, requireNodeReview, verificationInputFor } from "./receipt-state.ts";
 import { appendAuthorization, consumeDocumentAuthority, documentAuthorityContext } from "./authority-context.ts";
-import { canonicalJson, type AuthorizationReceipt, type HumanCapability } from "./authority.ts";
+import { canonicalHash, canonicalJson, type AuthorizationReceipt, type HumanCapability } from "./authority.ts";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
@@ -13,6 +14,7 @@ import { inspectExecutionNotes, upsertExecutionNote, validateExecutionNote, type
 import { type PhaseDependencies, type PhaseRecord } from "./phase-contracts.ts";
 import { inspectPhaseRecords, upsertPhaseRecord, validatePhaseRecord } from "./phase-record.ts";
 import { acquirePhaseFinalizeLock, canonicalSectionHash, canonicalTasksDefinitionHash, executionDefinitionHash, readPlanDocument, replaceFrontmatter, writeIfDocumentHash } from "./plan-file.ts";
+import { parsePlanCandidate } from "./plan-integrity.ts";
 import { replaceLogicalSection } from "./plan-domain.ts";
 import { selectedNode, requireNodeApproval } from "./node-approval.ts";
 import { parseTasks } from "./tasks.ts";
@@ -50,6 +52,7 @@ export class PhaseExecutionService {
       const context = { execute_id: randomUUID(), phase_id: task.id, round: d.metadata.round, plan_path: await realpath(d.path), target_root: await realpath(params.target_root!), governance_root: await realpath(params.governance_root!) };
       await this.roots(context);
       const provider = this.dependencies.baseline ?? fail("capability_unavailable: BaselineProvider is not configured");
+      if(d.metadata.identity_policy === "node-v1")await assertGitScopeInventory(d,task.id,context.target_root);
       starting = await beginPlanOperation(d,{kind:"phase_start",node_id:task.id,execute_id:context.execute_id,target_root:context.target_root,governance_root:context.governance_root,authority_ref:receipt.receipt_hash,contract_hash:this.contract(d,task.id)});
       const baseline = await provider.capture({ ...context });
       record = { version: 1, implementer_session_id: this.dependencies.evidence!.implementer_session_id, verification: [], context, definition_hash: this.contract(d, task.id), baseline, authorization, docsync: { enabled: true }, acceptance: [] };
@@ -91,6 +94,49 @@ export class PhaseExecutionService {
     });
   }
 
+  /** One preflight and one CAS, with durable replay identity in the phase record. */
+  async reportBatch(document:PlanDocument,params:{expected_document_hash:string;task_id:string;idempotency_key:string;reports:Array<Omit<Report,"task_id">>}):Promise<PlanOperationResult> {
+    let operation:OperationContext|undefined;
+    return this.operation(document,async()=>{
+      if(!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(params.idempotency_key))fail("invalid_batch_idempotency_key");
+      if(!Array.isArray(params.reports)||params.reports.length<1||params.reports.length>64)fail("invalid_batch_size");
+      const d=await this.current(document),{task,records}=this.select(d,params.task_id);
+      await assertOperationWritable(await realpath(d.path));
+      const record=records[task.id]??fail("execution_missing");
+      const version=await this.verify(d,task,record),seen=new Set<string>();
+      const entries=params.reports.map(report=>{
+        const id=report.work_item_id??(task.workItems.length===1?task.workItems[0]!.id:"");
+        const note:ExecutionNote={version:1,status:report.result==="completed"?"pending_finalize":report.result,summary:report.summary,files:report.files??[],change_types:report.change_types??[]};
+        const error=report.acceptance_results!==undefined?"candidate_evidence_only":!id||!task.workItems.some(w=>w.id===id)?"unknown_work_item":seen.has(id)?"duplicate_work_item":!validateExecutionNote(note)?"invalid_execution_note":undefined;
+        seen.add(id);return {id,note,error};
+      });
+      if(entries.some(e=>e.error))return {status:"validation_error",path:d.path,document_hash:d.document_hash,message:"Atomic batch rejected before any report was written",batch:{atomic:true,idempotency_key:params.idempotency_key,items:entries.map(e=>({work_item_id:e.id,status:e.error?"rejected":"not_applied",...(e.error?{message:e.error}:{})}))}};
+      const request_hash=canonicalHash({task_id:task.id,contract_hash:this.contract(d,task.id),reports:entries.map(({id,note})=>({id,note}))});
+      const previous=record.report_batches?.find(b=>b.idempotency_key===params.idempotency_key);
+      if(previous){
+        if(previous.request_hash!==request_hash)fail("batch_key_payload_conflict");
+        if(previous.generation!==(record.generation??0))fail("batch_key_reopened_generation");
+        if(entries.some(e=>canonicalJson(task.workItems.find(w=>w.id===e.id)?.note??null)!==canonicalJson(e.note)))fail("batch_projection_changed: later progress supersedes this batch");
+        return {status:"ok",path:d.path,document_hash:d.document_hash,operation_id:previous.operation_id,message:"Atomic batch already applied; no write repeated",batch:{atomic:true,idempotency_key:params.idempotency_key,replayed:true,items:entries.map(e=>({work_item_id:e.id,status:"applied",report_id:`${previous.operation_id}/${e.id}`}))}};
+      }
+      if(d.document_hash!==params.expected_document_hash)fail("stale_document_hash");
+      if((record.report_batches?.length??0)>=128)fail("batch_history_limit: explicit archival recovery required");
+      const receipt={idempotency_key:params.idempotency_key,request_hash,operation_id:"00000000-0000-4000-8000-000000000000",generation:record.generation??0,report_ids:entries.map(e=>e.id),content_version:version};
+      record.report_batches=[...(record.report_batches??[]),receipt];delete record.last_finalize;
+      const render=()=>{let markdown=inspectPhaseRecords(d.sections.tasks).definition;for(const e of entries)markdown=upsertExecutionNote(markdown,e.id,e.note);records[task.id]=record;for(const [id,r]of Object.entries(records))markdown=upsertPhaseRecord(markdown,id,r);return replaceLogicalSection(d,"tasks",markdown);};
+      parsePlanCandidate(d.path,render()); // Full candidate preflight before durable intent.
+      operation=await beginPlanOperation(d,{kind:"mutation",node_id:task.id,execute_id:record.context.execute_id,baseline_id:record.baseline.id,contract_hash:this.contract(d,task.id),content_version:version});
+      receipt.operation_id=operation.operation_id;
+      if(await this.verify(d,task,record)!==version)fail("content_changed_during_batch");
+      const result=await this.write(d,render(),`Atomically recorded ${entries.length} work reports`,record,{operation});
+      if(result.status!=="applied"&&!result.message.includes("operation_recovery_required"))await recordOperationFailure(operation,{code:"batch_not_committed",checkpoint:"batch_write",side_effects_possible:false});
+      return {...result,batch:{atomic:true,idempotency_key:params.idempotency_key,items:entries.map(e=>({work_item_id:e.id,status:result.status==="applied"?"applied":result.message.includes("operation_recovery_required")?"recovery_required":"not_applied",...(result.status==="applied"?{report_id:`${operation!.operation_id}/${e.id}`}:{})}))}};
+    },async message=>{
+      if(operation&&!message.includes("operation_recovery_required"))await recordOperationFailure(operation,{code:"batch_failed",checkpoint:"batch_prepare_or_write",side_effects_possible:false});
+      return {status:"validation_error",path:document.path,operation_id:operation?.operation_id,message};
+    });
+  }
+
   /** Model-facing callers supply IDs only; the trusted runtime resolves the approved command. */
   async verifyAcceptance(document: PlanDocument, task_id: string, acceptance_id: string): Promise<PlanOperationResult> {
     return this.operation(document, async () => {
@@ -103,7 +149,9 @@ export class PhaseExecutionService {
       const producer = runtime.verificationAuthority ?? fail("capability_unavailable: trusted verification authority is not configured");
       const request = verificationInputFor(d, task.id, acceptance_id, version,this.dependencies.evidence);
       if (request.command_or_method === "manual") fail("manual_gate_requires_human: use the explicit Human acceptance adapter");
+      await assertOperationWritable(await realpath(d.path));
       const handle = await producer(Object.freeze(structuredClone(request)), Object.freeze(structuredClone(record.context)));
+      if(d.metadata.identity_policy === "node-v1")await assertNodeSandbox(d,task.id,record.context,runtime,verificationProcessSandbox(handle));
       const evidence = await runVerification(handle, request);
       const receipt = authenticateVerificationEvidence(evidence, runtime.signer, request);
       await verifyArtifactContents(receipt);
@@ -196,6 +244,7 @@ export class PhaseExecutionService {
         await verifyArtifactContents(receipt);
         verification.push(receipt);
       }
+      if(d.metadata.identity_policy === "node-v1" && nodeExecutionPolicy(d,task.id).humanGates?.includes("manual_acceptance") && !verification.some(r=>r.verification_kind==="manual_acceptance"))fail("human_manual_gate_required");
       if (await this.verify(d, task, record) !== version) fail("acceptance_stale: repository changed while checking verification artifacts");
       operation = await beginPlanOperation(d,{kind:"phase_finalize",node_id:task.id,execute_id:record.context.execute_id,baseline_id:record.baseline.id,target_root:record.context.target_root,governance_root:record.context.governance_root,authority_ref:authorization.receipt_hash,contract_hash:nodeContractHash(d,task.id,this.dependencies.evidence),content_version:version});
       let finalized: NonNullable<PhaseRecord["finalized"]>;
@@ -244,7 +293,7 @@ export class PhaseExecutionService {
       let text = replaceLogicalSection(d, "tasks", markdown);
       text = replaceFrontmatter(text, { ...d.metadata, stage: allDone ? "awaiting_round_decision" : d.metadata.identity_policy === "node-v1" ? "tasks" : "executing", stage_status: allDone ? "awaiting_human" : d.metadata.identity_policy === "node-v1" ? "ready_for_review" : "in_progress", ...(d.metadata.identity_policy === "node-v1" ? {selected_node:undefined,pending_node:undefined} : {}) });
       // No implicit next-phase start. One CAS contains every target checkbox and the receipt.
-      const finalVersion = await this.dependencies.baseline!.verify(structuredClone(record.context), structuredClone(record.baseline));
+      const finalVersion = await this.verify(d,task,{...record,finalized:undefined});
       if (finalVersion !== finalized.content_version) fail("content_changed: repository changed before completion write");
       return this.write(d, appendAuthorization(text, authorization), `${task.id} finalized: ${finalized.check}${finalized.debt_refs.length ? `; debt: ${finalized.debt_refs.join(", ")}` : ""}${finalized.human_exceptions.length ? `; Human exceptions: ${finalized.human_exceptions.join(", ")}` : ""}. ${allDone ? "Awaiting Human round decision." : "Other phases remain open."}`, record,{operation});
     }, async message => {
@@ -282,6 +331,7 @@ export class PhaseExecutionService {
     const available = tasks.filter(t => t.round === d.metadata.round && !t.completed);
     const task = id ? available.find(t => t.id === id) : available.length === 1 ? available[0] : undefined;
     if (!task) fail("phase_selection_required: select one open current-round task_id");
+    if(d.metadata.identity_policy === "node-v1") {nodeExecutionPolicy(d,task!.id);if(!this.dependencies.baseline?.inspect)fail("capability_unavailable: actual Git scope inspection is required");}
     const mapping = validatePlanNodeMapping(d.sections.plan, d.sections.tasks, { currentNodeId: task!.id }).filter(issue => issue.severity === "error");
     if (mapping.length) fail(`plan_node_mapping_invalid: ${mapping.map(issue => issue.code).join(", ")}`);
     if (Object.values(records).some(record => !record.finalized && record.context.phase_id !== task!.id)) fail("another_phase_active: finish the original phase before starting another");
@@ -321,7 +371,7 @@ private contract(d: PlanDocument, nodeId: string): string {
     if (record.acceptance.some(a => !task.acceptance.some(item => item.id === a.id)) || record.verification?.some(e => !task.acceptance.some(item => item.id === e.receipt.acceptance_id))) fail("unknown_acceptance_record");
     await this.roots(record.context);
     const provider = this.dependencies.baseline ?? fail("capability_unavailable: BaselineProvider is not configured");
-    const version = await provider.verify(structuredClone(record.context), structuredClone(record.baseline));
+    const version = d.metadata.identity_policy === "node-v1" ? await inspectNodeChanges(d,task.id,record.context,record.baseline,provider) : await provider.verify(structuredClone(record.context), structuredClone(record.baseline));
     if (typeof version !== "string" || !version.trim() || version.length > 500) fail("baseline_unavailable: invalid content identity");
     return version;
   }
