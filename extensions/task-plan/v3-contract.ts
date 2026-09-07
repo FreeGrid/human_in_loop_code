@@ -69,11 +69,14 @@ function validatePolicy(value: unknown): asserts value is ReadableExecutionPolic
   }
 }
 function validateTrace(contract: ReadableContract): void {
+  // Coverage is structural, not a claim that substring matching proves semantic completeness.
+  // The trusted policy must attach an actual verification method to every current subtask.
+  for (const [index] of contract.definition.subtasks.entries()) if (!contract.policy.criteria.some(criterion => criterion.source.kind === "subtask" && criterion.source.index === index)) v3Fail("subtask_verification_coverage_required");
   for (const criterion of contract.policy.criteria) {
     const source = criterion.source;
     const text = source.kind === "brief" ? contract.definition.brief : source.kind === "task" ? contract.definition.task : contract.definition.subtasks[source.index!];
     // Exact quotations make every criterion visibly attributable to the user-owned definition.
-    if (!text || !text.includes(source.quote)) v3Fail("criterion_not_traceable");
+    if (!text || !text.includes(source.quote) || source.kind === "subtask" && text !== source.quote) v3Fail("criterion_not_traceable");
   }
 }
 export function assertReadableContract(value: unknown): asserts value is ReadableContract {
