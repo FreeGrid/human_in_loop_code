@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import type { PhaseDependencies } from "./phase-contracts.ts";
 import type { PlanCreationOptions } from "./plan-file.ts";
+import type { V3GovernedFactory } from "./v3-governed-host.ts";
 import { normalizeTaskPlanModelConfig, taskPlanModelConfigFromEnv, type TaskPlanModelSwitchConfig } from "./model-switch.ts";
 import { registerReadablePlanExtension } from "./v3-extension.ts";
 
@@ -11,6 +12,7 @@ export * from "./v3-service.ts";
 
 export interface TaskPlanExtensionConfig extends TaskPlanModelSwitchConfig {
   legacy?: boolean;
+  governed?: V3GovernedFactory;
   phase?: PhaseDependencies;
   creationOptions?: PlanCreationOptions | { format: "v3" };
 }
@@ -27,5 +29,5 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
     planning: { ...envConfig.planning, ...config.planning },
     normal: { ...envConfig.normal, ...config.normal },
   });
-  registerReadablePlanExtension(pi, { modelConfig });
+  registerReadablePlanExtension(pi, { modelConfig, governed: config.governed });
 }

@@ -232,7 +232,8 @@ export function describeExecutionSandbox(handle: ExecutionSandbox): Readonly<Exe
   const bound = sandboxes.get(handle); if (!bound) fail("identity");
   const copy = structuredClone(bound.config); Object.freeze(copy.read_scope); Object.freeze(copy.write_scope); Object.freeze(copy.protected_roots); Object.freeze(copy.allowed_executables); if (copy.runtime_read_roots) Object.freeze(copy.runtime_read_roots); return Object.freeze(copy);
 }
-export async function runSandboxedProcess(handle: ExecutionSandbox, request: SandboxedProcessRequest): Promise<SandboxedProcessResult> {
+export async function runSandboxedProcess(handle: ExecutionSandbox, request: SandboxedProcessRequest, abortSignal?: AbortSignal): Promise<SandboxedProcessResult> {
+  abortSignal?.throwIfAborted();
   const bound = sandboxes.get(handle); if (!bound) fail("identity");
   fields(request, ["executable", "args", "cwd"], ["env", "timeout_ms", "max_buffer_bytes"]);
   const input = structuredClone(request); absolute(input.executable); absolute(input.cwd);
@@ -256,13 +257,18 @@ export async function runSandboxedProcess(handle: ExecutionSandbox, request: San
     for (const [name, value] of Object.entries(input.env)) { text(value); env[name] = value; }
   }
   return new Promise((resolveResult, reject) => {
+    abortSignal?.throwIfAborted();
     const child = spawn("/usr/bin/sandbox-exec", ["-p", profile(bound), executable, ...input.args], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [], stderr: Buffer[] = []; let bytes = 0, timed_out = false, output_limit_exceeded = false;
     const killProcess = () => { child.kill("SIGKILL"); };
     const timer = setTimeout(() => { timed_out = true; killProcess(); }, timeout);
+    const abort = () => killProcess();
+    abortSignal?.addEventListener("abort", abort, { once: true });
+    if (abortSignal?.aborted) abort();
+    const cleanup = () => { clearTimeout(timer); abortSignal?.removeEventListener("abort", abort); };
     function collect(chunks: Buffer[], chunk: Buffer) { const available = Math.max(0, limit - bytes); if (available) chunks.push(chunk.subarray(0, available)); bytes += chunk.length; if (bytes > limit) { output_limit_exceeded = true; killProcess(); } }
     child.stdout.on("data", chunk => collect(stdout, chunk)); child.stderr.on("data", chunk => collect(stderr, chunk));
-    child.on("error", error => { clearTimeout(timer); killProcess(); reject(error); });
-    child.on("close", (exit_code, signal) => { clearTimeout(timer); killProcess(); resolveResult({ stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), exit_code, signal, timed_out, output_limit_exceeded }); });
+    child.on("error", error => { cleanup(); killProcess(); reject(error); });
+    child.on("close", (exit_code, signal) => { cleanup(); killProcess(); resolveResult({ stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8"), exit_code, signal, timed_out, output_limit_exceeded }); });
   });
 }

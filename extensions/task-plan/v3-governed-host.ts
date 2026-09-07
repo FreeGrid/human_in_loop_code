@@ -56,6 +56,7 @@ function recoveryDisplay(source: ReadablePlanSnapshot, context: AuthorityContext
 }
 function summary(action: CommandAction, status: V3GovernedStatus): string {
   const node = status.contract?.node_id;
+  if (status.stage === "invalidated") return `Governed ${node}: definition changed; prepare a new revision before continuing.`;
   if (action === "verify") return `Verification passed for ${node}.`;
   if (action === "review") return `Independent review passed for ${node}.`;
   if (action === "recover") return `Governed state recovered${node ? ` for ${node}` : ""}${status.projection === "projected" ? "; completion is recorded" : ""}.`;
@@ -115,10 +116,11 @@ export class V3GovernedHost {
     }
     return summary(selectedAction, result);
   }
-  async run(path: string, request: SandboxedProcessRequest): Promise<SandboxedProcessResult> {
+  async run(path: string, request: SandboxedProcessRequest, abortSignal?: AbortSignal): Promise<SandboxedProcessResult> {
+    abortSignal?.throwIfAborted();
     const generation = this.#generation, source = await readReadablePlan(path); this.live(generation);
     const actor = this.#actors.get(source.path) ?? v3Fail("governed_actor_not_selected_use_command");
     this.binding(actor, source);
-    return actor.run(request);
+    return actor.run(request, abortSignal);
   }
 }

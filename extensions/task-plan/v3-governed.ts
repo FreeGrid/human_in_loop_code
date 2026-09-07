@@ -73,6 +73,15 @@ export class V3Governed {
     const inspect = async (tx: { read(): Promise<V3RuntimeSnapshot>; save(state: V3RuntimeState, expected: V3RuntimeSnapshot): Promise<V3RuntimeSnapshot> }): Promise<AuthorityContext> => {
       const source = await this.source(), snapshot = await tx.read();
       const revision = action === "recover" ? snapshot.state?.revisions.find(item => item.revision_id === (snapshot.state?.projection?.revision_id ?? snapshot.state?.active_revision)) ?? v3Fail("no_runtime_state_to_recover") : (await this.bound(snapshot, source, tx.save)).revision;
+      if (action === "finalize") {
+        // Present a concrete, ready action to the Human. Finalize repeats these
+        // checks after confirmation so this preview cannot grant stale authority.
+        const content = await this.content(revision);
+        await this.dependencies(snapshot.state!, source.plan, revision);
+        this.reviewRef(revision, await this.verificationRefs(revision, content));
+        if (await this.content(revision) !== content) v3Fail("finalize_inputs_changed");
+        await this.unchanged(source);
+      }
       return this.authority(action, source, snapshot, revision);
     };
     // Recovery inspection must remain possible while a dead process owns the lock.
@@ -163,13 +172,14 @@ export class V3Governed {
     for (const id of revision.contract.policy.dependencies) result.push(await this.dependency(state, plan, id, new Set([revision.contract.node_id])));
     return result;
   }
-  async run(request: SandboxedProcessRequest): Promise<SandboxedProcessResult> {
+  async run(request: SandboxedProcessRequest, abortSignal?: AbortSignal): Promise<SandboxedProcessResult> {
+    abortSignal?.throwIfAborted();
     return this.#config.runtime.transaction(async tx => {
       const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source, tx.save);
       this.authorized(revision); await this.dependencies(state, source.plan, revision); await this.content(revision);
       const sandbox = await this.#config.sandbox(structuredClone(revision.contract)); await assertV3Sandbox(this.#config.runtime, revision.contract, this.#config.signer, sandbox);
       revision.verification = []; revision.review = null; snapshot = await tx.save(state, snapshot);
-      const result = await runSandboxedProcess(sandbox, request);
+      const result = await runSandboxedProcess(sandbox, request, abortSignal);
       await this.content(revision); await this.unchanged(source);
       return result;
     });

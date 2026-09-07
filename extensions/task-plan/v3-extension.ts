@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import type { V3GovernedFactory, V3GovernedHost } from "./v3-governed-host.ts";
 import { resolve } from "node:path";
 import { readPlanSource, readLegacyPlanView, legacyViewText, previewReadableMigration } from "./v3-compat.ts";
 import { currentReadableTask, renderReadablePlan, type ReadableTask, type ReadableSubtask } from "./v3-format.ts";
@@ -8,7 +9,7 @@ import { modelSwitchEntryData, switchTaskPlanModel, type TaskPlanModelSwitchConf
 import { newReadablePlanPrompt, READABLE_PLAN_SYSTEM, reviseReadablePlanPrompt } from "./v3-prompts.ts";
 
 export interface ReadableHostState extends ReadableSessionState { modelSwitch: TaskPlanModelSwitchState }
-export interface ReadableExtensionOptions { modelConfig: Required<TaskPlanModelSwitchConfig> }
+export interface ReadableExtensionOptions { modelConfig: Required<TaskPlanModelSwitchConfig>; governed?: V3GovernedFactory }
 const pathField = Type.Optional(Type.String({ description: "Plan path; defaults to the selected readable Plan." }));
 const child = Type.Object({ text: Type.String(), completed: Type.Optional(Type.Boolean()) }, { additionalProperties: false });
 const task = Type.Object({ id: Type.String({ pattern: "^T[0-9]{3,}$" }), text: Type.String(), completed: Type.Optional(Type.Boolean()), subtasks: Type.Optional(Type.Array(child)) }, { additionalProperties: false });
@@ -34,6 +35,15 @@ function normalizeTasks(items: Array<{ id: string; text: string; completed?: boo
 /** Separate registration means ordinary tools never invoke legacy state transitions. */
 export function registerReadablePlanExtension(pi: ExtensionAPI, options: ReadableExtensionOptions): ReadableHostState {
   const state: ReadableHostState = { modelSwitch: {} };
+  let governedHost: V3GovernedHost | undefined;
+  let governedGeneration = 0;
+  const governedFactory = options.governed;
+  const optionalHost = async (generation: number) => {
+    if (!governedFactory) throw new Error("未配置受控执行；普通 Plan 和工作工具可以继续使用。");
+    if (!governedHost) { const { V3GovernedHost } = await import("./v3-governed-host.ts"); if (generation !== governedGeneration) throw new Error("governed_session_changed"); governedHost ??= new V3GovernedHost(governedFactory); }
+    if (generation !== governedGeneration) throw new Error("governed_session_changed");
+    return governedHost;
+  };
   const service = (cwd: string) => new ReadablePlanService(cwd, state);
   const switchModel = async (ctx: ExtensionContext, mode: "planning" | "normal") => {
     try { await switchTaskPlanModel(pi, ctx, state.modelSwitch, options.modelConfig, mode); }
@@ -110,6 +120,22 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     parameters: Type.Object({ path: Type.String(), plan_id: Type.String({ pattern: "^P[0-9]{3,}$" }), title: Type.String(), brief: Type.String(), tasks: Type.Array(task, { minItems: 1 }) }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, _signal, _update, ctx) { try { const result = await previewReadableMigration(resolve(ctx.cwd, params.path), { format: "pi-plan/v3", plan_id: params.plan_id, title: params.title, brief: params.brief, tasks: normalizeTasks(params.tasks) }); return response(`仅预览，原文件未修改：\n\n${result.preview}`); } catch (error) { return failure(error); } } });
 
+  if (governedFactory) pi.registerTool({ name: "plan_governed_run", label: "运行已授权的受控进程", description: "Run through a previously explicitly selected, Human-authorized governed actor. Does not select a runtime, grant authority, accept completion or affect availability of ordinary work.",
+    parameters: Type.Object({ executable: Type.String(), args: Type.Array(Type.String()), cwd: Type.String(), env: Type.Optional(Type.Record(Type.String(), Type.String())), timeout_ms: Type.Optional(Type.Integer({ minimum: 1 })), max_buffer_bytes: Type.Optional(Type.Integer({ minimum: 1 })) }, { additionalProperties: false }), executionMode: "sequential",
+    async execute(_id, params, signal, _update, ctx) {
+      if (signal?.aborted) throw new Error("plan_governed_run aborted");
+      const generation = governedGeneration;
+      try { await editable(ctx.cwd); const selected = await service(ctx.cwd).peek(); const host = await optionalHost(generation); if (generation !== governedGeneration) throw new Error("governed_session_changed"); const result = await host.run(selected.path, params, signal); return { content: [{ type: "text" as const, text: `受控进程退出：${result.exit_code ?? result.signal ?? "unknown"}${signal?.aborted ? "（已取消）" : result.timed_out ? "（超时）" : ""}${result.output_limit_exceeded ? "（输出超限）" : ""}\n${result.stdout}${result.stderr}` }], details: { mode: "optional_governed", exit_code: result.exit_code } }; }
+      catch (error) { return response(`受控操作未完成：${(error as Error).message}\n普通 Plan 和工作工具仍可使用。`); }
+    } });
+  pi.registerCommand("plan:governed", { description: "可选受控流程：prepare|approve|authorize|verify|review|finalize|recover|status", async handler(args, ctx) {
+    if (!governedFactory) return ctx.ui.notify("未配置受控执行；普通 Plan 和工作工具可以继续使用。", "info");
+    if (!args.trim()) return ctx.ui.notify("用 /plan:governed prepare|approve|authorize|verify|review|finalize|recover|status；普通工作无需进入此流程。", "info");
+    const generation = governedGeneration;
+    try { await editable(ctx.cwd); const selected = await service(ctx.cwd).peek(); const host = await optionalHost(generation); if (generation !== governedGeneration) throw new Error("governed_session_changed"); ctx.ui.notify(await host.command(args.trim(), selected.path, ctx), "info"); }
+    catch (error) { ctx.ui.notify(`受控操作未完成：${(error as Error).message}\n普通 Plan 和工作工具仍可使用。`, "info"); }
+  } });
+
   const queue = (content: string) => pi.sendMessage({ customType: "pi-plan-readable-request", display: true, content }, { triggerTurn: true, deliverAs: "followUp" });
   async function newPlan(args: string, ctx: ExtensionCommandContext) {
     const request = args.trim() || (ctx.hasUI ? (await ctx.ui.input("想做什么？", "直接描述需求即可"))?.trim() : undefined);
@@ -127,6 +153,7 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
   pi.registerCommand("plan:next", { description: "继续当前任务的普通工作", async handler(args, ctx) { try { const old = await legacy(ctx.cwd, args.trim() || undefined); if (old) return ctx.ui.notify(legacyViewText(old), "info"); const snapshot = await service(ctx.cwd).peek(args.trim() || undefined); state.currentPlanPath = snapshot.path; const current = currentReadableTask(snapshot.plan); if (!current) return ctx.ui.notify("所有任务已勾选完成。", "info"); await switchModel(ctx, "normal"); remember(); queue(`继续当前 Plan 的普通工作：${current.id} ${current.text}。需要时先原位细分当前任务；使用普通工作工具，完成后更新 checklist。`); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
 
   pi.on("session_start", async (_event, ctx) => {
+    governedGeneration++; governedHost?.clear();
     const entry = [...ctx.sessionManager.getEntries()].reverse().find((item: { type: string; customType?: string }) => item.type === "custom" && item.customType === "pi-plan-readable") as { data?: { currentPlanPath?: string; modelSwitch?: TaskPlanModelSwitchState } } | undefined;
     state.currentPlanPath = entry?.data?.currentPlanPath;
     state.modelSwitch = entry?.data?.modelSwitch ?? {};
