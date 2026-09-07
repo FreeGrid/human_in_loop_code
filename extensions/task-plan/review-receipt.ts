@@ -1,6 +1,6 @@
-import { sha256 } from "./plan-file.ts";
+import { canonicalHash } from "./authority.ts";
 
-export type ReviewResult = "passed" | "failed" | "invalidated";
+export type ReviewResult = "passed" | "failed" | "disputed" | "invalidated";
 export type ReviewType = "deterministic" | "independent" | "human";
 
 export interface ReviewReceipt {
@@ -17,6 +17,9 @@ export interface ReviewReceipt {
 }
 
 export function createReviewReceipt(input: Omit<ReviewReceipt, "receipt_version" | "result"> & { result?: ReviewResult }): ReviewReceipt {
+  if (!input || typeof input !== "object" || Object.keys(input).some(k => !["node_id","contract_hash","review_type","result","reviewer","summary","evidence_ref","created_at","invalidated_reason"].includes(k))) throw new Error("Invalid Review receipt fields");
+  if (!["deterministic","independent","human"].includes(input.review_type) || !["passed","failed","disputed","invalidated"].includes(input.result ?? "passed")) throw new Error("Invalid Review receipt type or result");
+  if (input.result === "invalidated" && !input.invalidated_reason?.trim()) throw new Error("Invalidated Review needs a reason");
   if (!/^T\d{3}$/.test(input.node_id)) throw new Error("Review receipt node_id must use TNNN");
   if (!/^[a-f0-9]{64}$/.test(input.contract_hash)) throw new Error("Review receipt contract_hash must be SHA-256");
   if (!input.reviewer.trim() || !input.summary.trim()) throw new Error("Review receipt reviewer and summary are required");
@@ -31,5 +34,5 @@ export function invalidateReviewReceipt(receipt: ReviewReceipt, currentContractH
 }
 
 export function reviewReceiptHash(receipt: ReviewReceipt): string {
-  return sha256(JSON.stringify(receipt));
+  return canonicalHash(receipt);
 }

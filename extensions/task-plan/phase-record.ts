@@ -1,3 +1,4 @@
+import { parseFinalizeReceipt, parseVerificationReceipt } from "./evidence.ts";
 import type { PhaseRecord } from "./phase-contracts.ts";
 
 const PREFIX = "<!-- pi-plan:phase:";
@@ -14,7 +15,8 @@ function serialize(v: unknown): string {
 }
 
 export function validatePhaseRecord(v: unknown): v is PhaseRecord {
-  if (!object(v) || !keys(v, ["version", "context", "definition_hash", "baseline", "authorization", "docsync", "acceptance"], ["last_finalize", "finalized"]) || v.version !== 1) return false;
+  if (!object(v) || !keys(v, ["version", "context", "definition_hash", "baseline", "authorization", "docsync", "acceptance"], ["last_finalize", "finalized", "implementer_session_id", "verification"]) || v.version !== 1) return false;
+  if (v.implementer_session_id !== undefined && (!text(v.implementer_session_id, 256) || /[\u0000]|\p{Surrogate}/u.test(v.implementer_session_id))) return false;
   const c = v.context;
   if (!object(c) || !keys(c, ["execute_id", "phase_id", "round", "plan_path", "target_root", "governance_root"]) || !text(c.execute_id, 128) || typeof c.phase_id !== "string" || !/^T\d{3}$/.test(c.phase_id) || !Number.isSafeInteger(c.round) || Number(c.round) < 0 || ![c.plan_path, c.target_root, c.governance_root].every(x => text(x, 4096) && !/[\x00-\x1f]/.test(x))) return false;
   if (typeof v.definition_hash !== "string" || !/^[a-f0-9]{64}$/.test(v.definition_hash)) return false;
@@ -23,9 +25,29 @@ export function validatePhaseRecord(v: unknown): v is PhaseRecord {
   const d = v.docsync;
   if (!object(d) || !keys(d, ["enabled"], ["decision"]) || typeof d.enabled !== "boolean" || (d.decision !== undefined && !decision(d.decision, [d.enabled ? "docsync_on" : "docsync_off"])) || (!d.enabled && !d.decision)) return false;
   if (!Array.isArray(v.acceptance) || v.acceptance.length > 128 || !v.acceptance.every(a => object(a) && keys(a, ["id", "satisfied", "summary", "content_version"]) && typeof a.id === "string" && new RegExp(`^${c.phase_id}\\.A\\d{3}$`).test(a.id) && typeof a.satisfied === "boolean" && text(a.summary) && text(a.content_version, 500)) || new Set(v.acceptance.map(a => a.id)).size !== v.acceptance.length) return false;
+  if (v.verification !== undefined) {
+    if (!Array.isArray(v.verification) || v.verification.length > 128) return false;
+    const acceptanceIds = new Set<string>();
+    try {
+      for (const envelope of v.verification) {
+        if (!object(envelope) || !keys(envelope, ["receipt", "seal"]) || typeof envelope.seal !== "string" || !/^[a-f0-9]{64}$/.test(envelope.seal)) return false;
+        const receipt = parseVerificationReceipt(envelope.receipt);
+        if (!new RegExp(`^${c.phase_id}\\.A\\d{3}$`).test(receipt.acceptance_id) || acceptanceIds.has(receipt.acceptance_id)) return false;
+        acceptanceIds.add(receipt.acceptance_id);
+      }
+    } catch { return false; }
+  }
   if (v.last_finalize !== undefined && (!object(v.last_finalize) || !keys(v.last_finalize, ["summary", "outcome"]) || v.last_finalize.outcome !== "blocked" || !text(v.last_finalize.summary))) return false;
   const f = v.finalized;
-  if (f !== undefined && (!object(f) || !keys(f, ["check", "summary", "content_version", "debt_refs", "human_exceptions"]) || typeof f.check !== "string" || !["passed", "with_debt", "with_exceptions", "skipped"].includes(f.check) || !text(f.summary) || !text(f.content_version, 500) || !refs(f.debt_refs) || !refs(f.human_exceptions) || (f.check === "skipped") !== !d.enabled || (f.check === "passed" && (f.debt_refs.length > 0 || f.human_exceptions.length > 0)) || (f.check === "with_debt" && !f.debt_refs.length) || (f.check === "with_exceptions" && !f.human_exceptions.length))) return false;
+  if (f !== undefined && (!object(f) || !keys(f, ["check", "summary", "content_version", "debt_refs", "human_exceptions"], ["evidence"]) || typeof f.check !== "string" || !["passed", "with_debt", "with_exceptions", "skipped"].includes(f.check) || !text(f.summary) || !text(f.content_version, 500) || !refs(f.debt_refs) || !refs(f.human_exceptions) || (f.check === "skipped") !== !d.enabled || (f.check === "passed" && (f.debt_refs.length > 0 || f.human_exceptions.length > 0)) || (f.check === "with_debt" && !f.debt_refs.length) || (f.check === "with_exceptions" && !f.human_exceptions.length))) return false;
+  if (object(f) && f.evidence !== undefined) {
+    try {
+      const envelope = f.evidence;
+      if (!object(envelope) || !keys(envelope, ["receipt", "seal"]) || typeof envelope.seal !== "string" || !/^[a-f0-9]{64}$/.test(envelope.seal)) return false;
+      const receipt = parseFinalizeReceipt(envelope.receipt);
+      if (receipt.node_id !== c.phase_id || receipt.content_version !== f.content_version || receipt.docsync_check !== f.check) return false;
+    } catch { return false; }
+  }
   return serialize(v).length <= 300000;
 }
 

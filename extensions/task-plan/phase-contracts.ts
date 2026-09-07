@@ -1,3 +1,5 @@
+import type { EvidenceRuntime } from "./receipt-state.ts";
+import type { FinalizeReceipt, SealedEvidence, VerificationReceipt } from "./evidence.ts";
 import type { ExecutionNote } from "./execution-notes.ts";
 
 export interface PhaseContext {
@@ -55,6 +57,7 @@ export interface MaintainerRunner {
 }
 
 export interface PhaseDependencies {
+  evidence?: EvidenceRuntime;
   baseline?: BaselineProvider;
   docsync?: DocSyncGate;
   maintainer?: MaintainerRunner;
@@ -84,6 +87,8 @@ export function readHumanDecision(token: HumanDecisionToken | undefined, action:
 
 export interface PhaseRecord {
   version: 1;
+  implementer_session_id?: string;
+  verification?: Array<SealedEvidence<VerificationReceipt>>;
   context: PhaseContext;
   definition_hash: string;
   baseline: BaselineReference;
@@ -91,5 +96,5 @@ export interface PhaseRecord {
   docsync: { enabled: boolean; decision?: HumanDecision };
   acceptance: Array<{ id: string; satisfied: boolean; summary: string; content_version: string }>;
   last_finalize?: { summary: string; outcome: "blocked" };
-  finalized?: { check: "passed" | "with_debt" | "with_exceptions" | "skipped"; summary: string; content_version: string; debt_refs: string[]; human_exceptions: string[] };
+  finalized?: { evidence?: SealedEvidence<FinalizeReceipt>; check: "passed" | "with_debt" | "with_exceptions" | "skipped"; summary: string; content_version: string; debt_refs: string[]; human_exceptions: string[] };
 }

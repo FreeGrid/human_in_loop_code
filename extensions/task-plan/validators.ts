@@ -1,3 +1,4 @@
+import { nodeEvidencePolicy, nodeContractHash } from "./receipt-state.ts";
 import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash } from "./plan-file.ts";
 import { inspectPhaseRecords } from "./phase-record.ts";
 import { inspectExecutionNotes } from "./execution-notes.ts";
@@ -86,14 +87,15 @@ export function validateTasks(markdown: string, currentRound: number, options: {
     for (const heading of task.definition.matchAll(/^(#{1,4}) (.+)$/gm)) {
       if (heading[0] === task.completionLine) continue;
       const field = heading[2]!.trim();
-      if (heading[1] !== "####" || ![...taskRequiredFields(), "Round"].includes(field)) issues.push(error("unsupported_task_heading", `${task.id} contains unsupported heading: ${heading[0]}`));
+      if (heading[1] !== "####" || ![...taskRequiredFields(), "Round", "Verification"].includes(field)) issues.push(error("unsupported_task_heading", `${task.id} contains unsupported heading: ${heading[0]}`));
     }
+    try { nodeEvidencePolicy(task); } catch(error) { issues.push({severity:"error",code:"invalid_verification_policy",message:String((error as Error).message)}); }
     validateSubtaskMarkers(task.definition, task.id).forEach((issue) => issues.push(issue));
     if (task.workItems.length === 0) issues.push(error("missing_work_items", `${task.id} Tasks needs at least one work item`));
     for (const line of taskField(task.definition, "Acceptance").split(/\r?\n/).map((line) => line.trim())) {
       if (line.startsWith("- ") && !/^- \[(?: |x|X)\] .+$/.test(line)) issues.push(error("invalid_acceptance_marker", `${task.id} Acceptance items must use leading checkboxes`));
     }
-    for (const field of taskRequiredFields()) {
+    for (const field of [...taskRequiredFields(), "Verification"]) {
       if ([...task.definition.matchAll(new RegExp(`^#### ${escapeRegExp(field)}[ \\t]*$`, "gm"))].length > 1) issues.push(error("duplicate_task_field", `${task.id} has duplicate ${field} fields`));
     }
     if (task.round < 0) issues.push(error("invalid_task_round", `${task.id} has invalid Round`));
@@ -124,9 +126,9 @@ export function validateProgress(document: PlanDocument): ValidationResult {
   const tasks = parseTasks(document.sections.tasks).filter((t) => t.round === document.metadata.round);
   if (["executing", "awaiting_round_decision"].includes(document.metadata.stage)) {
     const records = inspectPhaseRecords(document.sections.tasks);
-    for (const task of tasks.filter((item) => item.completed)) {
+    for (const task of parseTasks(document.sections.tasks).filter((item) => item.completed)) {
       const record = records.records[task.id];
-      if (!record?.finalized || record.definition_hash !== phaseExecutionDefinitionHash(document) || task.workItems.some((item) => !item.completed) || task.acceptance.some((item) => !item.completed)) issues.push(error("completion_evidence_missing", `${task.id} requires a phase finalize receipt, not manual completion markers`));
+      if (!record?.finalized?.evidence || record.finalized.evidence.receipt.contract_hash !== nodeContractHash(document,task.id) || task.workItems.some((item) => !item.completed) || task.acceptance.some((item) => !item.completed)) issues.push(error("completion_evidence_missing", `${task.id} requires a phase finalize receipt, not manual completion markers`));
     }
   }
   if (document.metadata.stage === "executing") {
