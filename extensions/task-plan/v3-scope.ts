@@ -59,9 +59,9 @@ async function inventory(runtime: V3Runtime, contract: ReadableContract, signer:
     }
     if (!info.isFile() || info.nlink !== 1n) v3Fail("raw_inventory_alias");
     if (info.size > 67108864n) v3Fail("raw_inventory_budget");
-    const file = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const file = await open(absolute, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
-      const before = await file.stat({ bigint: true }); if (before.dev !== info.dev || before.ino !== info.ino) v3Fail("raw_inventory_changed");
+      const before = await file.stat({ bigint: true }); if (!before.isFile() || before.nlink !== 1n || before.dev !== info.dev || before.ino !== info.ino) v3Fail("raw_inventory_changed");
       const hash = createHash("sha256"), buffer = Buffer.alloc(65536); let total = 0;
       while (true) { const read = await file.read(buffer, 0, buffer.length, null); if (!read.bytesRead) break; total += read.bytesRead; bytes += read.bytesRead; if (total > 67108864 || bytes > 268435456) v3Fail("raw_inventory_budget"); hash.update(buffer.subarray(0, read.bytesRead)); }
       const after = await file.stat({ bigint: true }), current = await lstat(absolute, { bigint: true });
