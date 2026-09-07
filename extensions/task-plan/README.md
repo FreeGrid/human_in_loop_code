@@ -109,7 +109,7 @@ gate, so a losing concurrent finalizer cannot continue mutating docs after a win
 receipt. Plan writes acquire an exclusive lock on the canonical file path, recheck the
 expected document version and atomically rename a fully prepared replacement.
 Symlink aliases share that lock. Stale versions or an existing lock return conflicts;
-each individual write is atomic. Report batches currently stop after the first failure and retain earlier successful entries. A lock left after a crashed process is not guessed
+each individual write is atomic. Report batches preflight every item and install all notes in one CAS, with a durable idempotency key and operation ID. See [execution boundaries and batch recovery](execution-boundaries.md). A lock left after a crashed process is not guessed
 stale or automatically stolen: establish that the owner is gone before an explicit
 operator recovery removes it. Do not remove another active writer's lock.
 
@@ -153,7 +153,7 @@ The trusted input adapter issues opaque, short-lived, one-shot capabilities boun
 
 Reopen, abandon, plan completion, phase finalize, closure edits and DocSync changes require their own capabilities. Slash commands request an actual UI confirmation because other extensions can inject commands. Without UI, only exact trusted interactive/RPC input with an unambiguous existing context can grant authority; first execution requires confirmed roots. A serialized token, boolean or model statement is insufficient. Successful transitions save an authorization receipt in the same CAS write as the state change; failed attempts consume authority and require a new decision where consumption occurred.
 
-V1→V2 apply migration is disabled, including direct calls to the legacy migration module. Read-only migration proposals remain available. Native V2 execution and the full evidence/Controller boundary are not yet a released capability. The Pi write hook is a coordination guard, not a sandbox.
+V1→V2 apply migration is disabled, including direct calls to the legacy migration module. Read-only migration proposals remain available. Native V2 execution uses the common domain reader and node-local identity. The Pi write hook remains a coordination guard. The complete Harness scheduler and isolation of an already running host are outside this component.
 
 
 ## Trusted verification and review
@@ -163,8 +163,7 @@ Implementer session identity, a configured independent reviewer, and a verificat
 factory. These are host configuration, never model tool parameters. With no trusted
 runtime the extension fails closed. `configureProcessVerificationAuthority` freezes
 an absolute executable, arguments, working directory and approved verification input;
-it records actual output, exit status and artifact hashes. It does not create a sandbox.
-The host must isolate verifier/reviewer launchers, signing keys and control configuration.
+it records actual output, exit status and artifact hashes. For node-v1 execution, the verifier must use an opaque `ExecutionSandbox` whose scope, Git metadata and protected authority paths match the contract. The host configures this boundary and must launch untrusted Implementer processes inside it; starting a phase does not isolate the existing host. See [execution boundaries](execution-boundaries.md). The host must also isolate reviewer launchers, signing keys and control configuration.
 
 Each executable Task can declare an optional `#### Verification` JSON field before
 `#### Depends On`. Actual verification requires an approved method for every Acceptance:
