@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { constants } from "node:fs";
-import { link, lstat, mkdir, open, readdir, realpath, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, realpath, rename, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { assertAuthorizationReceipt, canonicalHash, canonicalJson, type AuthorizationReceipt } from "./authority.ts";
 import { parseFinalizeReceipt, parseReviewEvidence, parseVerificationReceipt, type FinalizeReceipt, type ReviewEvidence, type SealedEvidence, type VerificationReceipt } from "./evidence.ts";
@@ -152,6 +152,15 @@ export class V3Runtime {
     await directory(this.root, true);
     const names = (await readdir(this.root)).filter(name => name.endsWith(".json")).sort();
     if (names.length > 10000) v3Fail("runtime_history_budget");
+    let head: Record<string, unknown> | null = null;
+    try {
+      const raw = await regularRead(join(this.root, "head")); const parsed: unknown = JSON.parse(raw);
+      exactV3(parsed, ["version", "generation", "state_hash", "seal"]); hashV3(parsed.state_hash); hashV3(parsed.seal);
+      const { seal, ...body } = parsed;
+      if (parsed.version !== 1 || !Number.isSafeInteger(parsed.generation) || Number(parsed.generation) < 1 || canonicalJson(parsed) + "\n" !== raw || !timingSafeEqual(Buffer.from(seal, "hex"), Buffer.from(this.sign(body), "hex"))) v3Fail("runtime_head_authentication_failed");
+      head = parsed;
+    } catch (error) { if (!absent(error)) throw error; }
+    if (names.length !== (head?.generation ?? 0)) v3Fail("runtime_committed_head_missing_data");
     let previous: string | null = null, state: V3RuntimeState | null = null;
     for (const [index, name] of names.entries()) {
       if (name !== `${String(index + 1).padStart(10, "0")}.json`) v3Fail("runtime_sequence_corrupt");
@@ -165,6 +174,7 @@ export class V3Runtime {
       if (state.plan_path !== this.plan_path || state.target_root !== this.target_root || state.governance_root !== this.governance_root) v3Fail("runtime_foreign_binding");
       previous = canonicalHash(envelope);
     }
+    if (head && head.state_hash !== previous) v3Fail("runtime_head_mismatch");
     return { generation: names.length, hash: previous, state: structuredClone(state) };
   }
   async checkpoint(stage: "runtime_committed" | "projection_written"): Promise<void> { await this.#checkpoint?.(stage); }
@@ -204,6 +214,11 @@ export class V3Runtime {
         const file = await open(temp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
         try { await file.writeFile(raw); await file.sync(); } finally { await file.close(); }
         try { await directory(this.root, true); await link(temp, destination); await syncDirectory(this.root); } finally { await unlink(temp).catch(() => undefined); }
+        const headBody = { version: 1, generation: body.generation, state_hash: canonicalHash(envelope) };
+        const head = { ...headBody, seal: this.sign(headBody) }, headTemp = join(this.root, `.head-${randomUUID()}.tmp`);
+        const headFile = await open(headTemp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW, 0o600);
+        try { await headFile.writeFile(canonicalJson(head) + "\n"); await headFile.sync(); } finally { await headFile.close(); }
+        try { await directory(this.root, true); await rename(headTemp, join(this.root, "head")); await syncDirectory(this.root); } finally { await unlink(headTemp).catch(() => undefined); }
         await this.checkpoint("runtime_committed");
         return { generation: body.generation, hash: canonicalHash(envelope), state: structuredClone(state) };
       };
