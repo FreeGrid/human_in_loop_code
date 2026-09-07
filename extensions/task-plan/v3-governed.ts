@@ -39,17 +39,27 @@ export class V3Governed {
   private async unchanged(source: ReadablePlanSnapshot): Promise<void> { if ((await this.source()).document_hash !== source.document_hash) v3Fail("plan_cas_conflict"); }
   private active(state: V3RuntimeState, plan: ReadablePlan, requireCurrent = true): V3ExecutionRevision {
     const revision = state.revisions.find(item => item.revision_id === state.active_revision) ?? v3Fail("contract_not_prepared");
+    if (revision.implementer_session_id !== this.#config.implementer_session_id) v3Fail("execution_session_changed_requires_revision");
     if (state.invalidated_revisions.includes(revision.revision_id) || !readableContractMatches(plan, revision.contract)) v3Fail("contract_revision_required");
     if (requireCurrent && currentReadableTask(plan)?.id !== revision.contract.node_id) v3Fail("current_task_changed");
     return revision;
   }
-  private async bound(snapshot: V3RuntimeSnapshot, source: ReadablePlanSnapshot): Promise<{ state: V3RuntimeState; revision: V3ExecutionRevision }> {
+  private async bound(snapshot: V3RuntimeSnapshot, source: ReadablePlanSnapshot, save: (state: V3RuntimeState, expected: V3RuntimeSnapshot) => Promise<V3RuntimeSnapshot>): Promise<{ state: V3RuntimeState; revision: V3ExecutionRevision }> {
     const state = snapshot.state ?? v3Fail("runtime_missing");
     if (state.plan_id !== source.plan.plan_id) v3Fail("runtime_plan_mismatch");
     if (state.projection?.status === "pending") v3Fail("projection_recovery_required");
+    const priorRevocations = state.invalidated_revisions.length;
+    for (const observed of state.revisions) if (!readableContractMatches(source.plan, observed.contract) && !state.invalidated_revisions.includes(observed.revision_id)) {
+      state.invalidated_revisions.push(observed.revision_id);
+      if (observed.stage !== "finalized") observed.stage = "invalidated";
+    }
+    if (state.invalidated_revisions.length !== priorRevocations) Object.assign(snapshot, await save(state, snapshot));
     const revision = this.active(state, source.plan);
     const policy = await this.#config.policy(structuredClone(source.plan));
-    if (prepareReadableContract(source.plan, policy).contract_hash !== revision.contract.contract_hash) v3Fail("policy_revision_required");
+    if (prepareReadableContract(source.plan, policy).contract_hash !== revision.contract.contract_hash) {
+      state.invalidated_revisions.push(revision.revision_id); revision.stage = "invalidated";
+      Object.assign(snapshot, await save(state, snapshot)); v3Fail("policy_revision_required");
+    }
     return { state, revision };
   }
   private authority(action: V3GovernedAction, source: ReadablePlanSnapshot, snapshot: V3RuntimeSnapshot, revision: V3ExecutionRevision): AuthorityContext {
@@ -59,9 +69,14 @@ export class V3Governed {
   }
   async context(action: V3GovernedAction): Promise<AuthorityContext> {
     if (!["approve_contract", "authorize_execution", "finalize", "recover"].includes(action)) v3Fail("unknown_governed_action");
-    const source = await this.source(), snapshot = await this.#config.runtime.read();
-    const revision = action === "recover" ? snapshot.state?.revisions.find(item => item.revision_id === snapshot.state?.projection?.revision_id) ?? v3Fail("no_projection_to_recover") : (await this.bound(snapshot, source)).revision;
-    return this.authority(action, source, snapshot, revision);
+    const inspect = async (tx: { read(): Promise<V3RuntimeSnapshot>; save(state: V3RuntimeState, expected: V3RuntimeSnapshot): Promise<V3RuntimeSnapshot> }): Promise<AuthorityContext> => {
+      const source = await this.source(), snapshot = await tx.read();
+      const revision = action === "recover" ? snapshot.state?.revisions.find(item => item.revision_id === (snapshot.state?.projection?.revision_id ?? snapshot.state?.active_revision)) ?? v3Fail("no_runtime_state_to_recover") : (await this.bound(snapshot, source, tx.save)).revision;
+      return this.authority(action, source, snapshot, revision);
+    };
+    // Recovery inspection must remain possible while a dead process owns the lock.
+    if (action === "recover") return inspect({ read: () => this.#config.runtime.inspectRecovery(), save: async () => v3Fail("unexpected_recovery_mutation") });
+    return this.#config.runtime.transaction(inspect);
   }
   async prepare(): Promise<V3GovernedStatus> {
     const runtime = this.#config.runtime;
@@ -69,11 +84,11 @@ export class V3Governed {
       const source = await this.source(), snapshot = await tx.read();
       if (snapshot.state?.projection?.status === "pending") v3Fail("projection_recovery_required");
       const contract = prepareReadableContract(source.plan, await this.#config.policy(structuredClone(source.plan)));
-      const state: V3RuntimeState = snapshot.state ?? { version: 1, plan_path: runtime.plan_path, plan_id: source.plan.plan_id, target_root: runtime.target_root, governance_root: runtime.governance_root, revisions: [], active_revision: null, invalidated_revisions: [], projection: null, recovery: [] };
+      const state: V3RuntimeState = snapshot.state ? structuredClone(snapshot.state) : { version: 1, plan_path: runtime.plan_path, plan_id: source.plan.plan_id, target_root: runtime.target_root, governance_root: runtime.governance_root, revisions: [], active_revision: null, invalidated_revisions: [], projection: null, recovery: [] };
       if (state.plan_id !== source.plan.plan_id) v3Fail("runtime_plan_mismatch");
       for (const revision of state.revisions) if (!readableContractMatches(source.plan, revision.contract) && !state.invalidated_revisions.includes(revision.revision_id)) state.invalidated_revisions.push(revision.revision_id);
       const previous = state.revisions.find(item => item.revision_id === state.active_revision);
-      if (previous?.contract.contract_hash === contract.contract_hash && !state.invalidated_revisions.includes(previous.revision_id) && previous.stage !== "finalized" && previous.stage !== "invalidated") {
+      if (previous?.implementer_session_id === this.#config.implementer_session_id && previous.contract.contract_hash === contract.contract_hash && !state.invalidated_revisions.includes(previous.revision_id) && previous.stage !== "finalized" && previous.stage !== "invalidated") {
         if (canonicalJson(state) !== canonicalJson(snapshot.state)) { await this.unchanged(source); await tx.save(state, snapshot); }
         return;
       }
@@ -85,7 +100,18 @@ export class V3Governed {
     return this.status();
   }
   async status(): Promise<V3GovernedStatus> {
-    const source = await this.source(), snapshot = await this.#config.runtime.read(), state = snapshot.state;
+    const source = await this.source();
+    // Observed material changes retire evidence permanently, even if text is later restored.
+    const snapshot = await this.#config.runtime.transaction(async tx => {
+      const observed = await tx.read(), state = observed.state;
+      if (!state) return observed;
+      let changed = false;
+      for (const revision of state.revisions) if (!readableContractMatches(source.plan, revision.contract) && !state.invalidated_revisions.includes(revision.revision_id)) {
+        state.invalidated_revisions.push(revision.revision_id); if (revision.stage !== "finalized") revision.stage = "invalidated"; changed = true;
+      }
+      return changed ? tx.save(state, observed) : observed;
+    });
+    const state = snapshot.state;
     const active = state?.revisions.find(item => item.revision_id === state.active_revision);
     const verified: string[] = [];
     if (state) for (const task of source.plan.tasks.filter(item => item.completed)) {
@@ -95,7 +121,7 @@ export class V3Governed {
   }
   async approve(capability: HumanCapability): Promise<V3GovernedStatus> {
     await this.#config.runtime.transaction(async tx => {
-      const source = await this.source(), snapshot = await tx.read(), { state, revision } = await this.bound(snapshot, source);
+      const source = await this.source(), snapshot = await tx.read(), { state, revision } = await this.bound(snapshot, source, tx.save);
       const receipt = consumeHumanCapability(capability, "approve_contract", this.authority("approve_contract", source, snapshot, revision));
       if (revision.stage !== "prepared") v3Fail("approval_transition_denied");
       revision.approval = receipt; revision.stage = "approved";
@@ -104,7 +130,7 @@ export class V3Governed {
   }
   async authorize(capability: HumanCapability): Promise<V3GovernedStatus> {
     await this.#config.runtime.transaction(async tx => {
-      const source = await this.source(), snapshot = await tx.read(), { state, revision } = await this.bound(snapshot, source);
+      const source = await this.source(), snapshot = await tx.read(), { state, revision } = await this.bound(snapshot, source, tx.save);
       const receipt = consumeHumanCapability(capability, "authorize_execution", this.authority("authorize_execution", source, snapshot, revision));
       if (revision.stage !== "approved" || !revision.approval) v3Fail("execution_authority_requires_approval");
       await this.dependencies(state, source.plan, revision);
@@ -138,7 +164,7 @@ export class V3Governed {
   }
   async run(request: SandboxedProcessRequest): Promise<SandboxedProcessResult> {
     return this.#config.runtime.transaction(async tx => {
-      const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source);
+      const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source, tx.save);
       this.authorized(revision); await this.dependencies(state, source.plan, revision); await this.content(revision);
       const sandbox = await this.#config.sandbox(structuredClone(revision.contract)); await assertV3Sandbox(this.#config.runtime, revision.contract, this.#config.signer, sandbox);
       revision.verification = []; revision.review = null; snapshot = await tx.save(state, snapshot);
@@ -149,7 +175,7 @@ export class V3Governed {
   }
   async verify(): Promise<V3GovernedStatus> {
     await this.#config.runtime.transaction(async tx => {
-      const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source);
+      const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source, tx.save);
       this.authorized(revision); await this.dependencies(state, source.plan, revision);
       const content = await this.content(revision), sandbox = await this.#config.sandbox(structuredClone(revision.contract));
       await assertV3Sandbox(this.#config.runtime, revision.contract, this.#config.signer, sandbox);
@@ -178,7 +204,7 @@ export class V3Governed {
   }
   async review(): Promise<V3GovernedStatus> {
     await this.#config.runtime.transaction(async tx => {
-      const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source);
+      const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source, tx.save);
       const content = await this.content(revision); await this.dependencies(state, source.plan, revision); const refs = await this.verificationRefs(revision, content);
       revision.review = null; snapshot = await tx.save(state, snapshot);
       const reviewer = await this.#config.reviewer({ contract: structuredClone(revision.contract), verification_refs: [...refs], content_version: content, implementer_session_id: revision.implementer_session_id });
@@ -195,7 +221,7 @@ export class V3Governed {
   }
   async finalize(capability: HumanCapability): Promise<V3GovernedStatus> {
     await this.#config.runtime.transaction(async tx => {
-      const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source);
+      const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source, tx.save);
       const authorization = consumeHumanCapability(capability, "finalize", this.authority("finalize", source, snapshot, revision));
       const content = await this.content(revision), dependencies = await this.dependencies(state, source.plan, revision), refs = await this.verificationRefs(revision, content), review_ref = this.reviewRef(revision, refs);
       if (await this.content(revision) !== content) v3Fail("finalize_inputs_changed"); await this.unchanged(source);
@@ -211,6 +237,9 @@ export class V3Governed {
   }
   private async project(state: V3RuntimeState, snapshot: V3RuntimeSnapshot, save: (state: V3RuntimeState, expected: V3RuntimeSnapshot) => Promise<V3RuntimeSnapshot>): Promise<void> {
     const projection = state.projection ?? v3Fail("projection_missing"), current = await this.source();
+    if (state.invalidated_revisions.includes(projection.revision_id) || projection.status === "conflict" || projection.status === "projected" && current.document_hash !== projection.candidate_hash || state.active_revision !== projection.revision_id) {
+      projection.status = "conflict"; await save(state, snapshot); v3Fail("projection_cas_conflict_manual_edit_preserved");
+    }
     if (current.document_hash === projection.candidate_hash) { projection.status = "projected"; await save(state, snapshot); return; }
     if (current.document_hash !== projection.source_hash) { projection.status = "conflict"; await save(state, snapshot); v3Fail("projection_cas_conflict_manual_edit_preserved"); }
     const result = await writeReadablePlan(this.#config.runtime.plan_path, projection.source_hash, parseReadablePlan(projection.candidate_text));
@@ -219,15 +248,15 @@ export class V3Governed {
     projection.status = "projected"; await save(state, snapshot);
   }
   async recoverProjection(capability: HumanCapability): Promise<V3GovernedStatus> {
-    const source = await this.source(), observed = await this.#config.runtime.read();
-    const revision = observed.state?.revisions.find(item => item.revision_id === observed.state?.projection?.revision_id) ?? v3Fail("no_projection_to_recover");
+    const source = await this.source(), observed = await this.#config.runtime.inspectRecovery();
+    const revision = observed.state?.revisions.find(item => item.revision_id === (observed.state?.projection?.revision_id ?? observed.state?.active_revision)) ?? v3Fail("no_runtime_state_to_recover");
     const authorization = consumeHumanCapability(capability, "recover", this.authority("recover", source, observed, revision));
     await this.#config.runtime.transaction(async tx => {
       let snapshot = await tx.read(); if (snapshot.hash !== observed.hash || snapshot.generation !== observed.generation) v3Fail("recovery_state_changed");
       await this.unchanged(source); const state = snapshot.state!;
-      assertFinalizeEvidence(revision.finalized, this.#config.signer, { plan_id: source.plan.plan_id, node_id: revision.contract.node_id, contract_hash: revision.contract.contract_hash });
+      if (state.projection) assertFinalizeEvidence(revision.finalized, this.#config.signer, { plan_id: source.plan.plan_id, node_id: revision.contract.node_id, contract_hash: revision.contract.contract_hash });
       state.recovery.push(authorization); snapshot = await tx.save(state, snapshot);
-      await this.project(state, snapshot, tx.save);
+      if (state.projection) await this.project(state, snapshot, tx.save);
     }, true); return this.status();
   }
 }
