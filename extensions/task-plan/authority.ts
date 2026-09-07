@@ -11,6 +11,8 @@ export interface AuthorityContext {
   contract_hash: string;
   target_root: string;
   governance_root: string;
+  /** Exact displayed action payload, required for newly issued manual acceptance. */
+  payload_hash?: string;
 }
 export interface HumanProvenance { source: "interactive" | "rpc" | "slash"; input_id: string; text: string }
 /** Only the trusted Human input adapter may issue this process-local handle. Never a tool argument schema. */
@@ -48,7 +50,8 @@ function action(value: unknown): asserts value is AuthorityAction {
   if (!AUTHORITY_ACTIONS.includes(value as AuthorityAction)) invalid("Unknown authority action");
 }
 function context(value: unknown): asserts value is AuthorityContext {
-  record(value, CONTEXT_KEYS);
+  record(value, [...CONTEXT_KEYS, ...(value && typeof value === "object" && Object.hasOwn(value, "payload_hash") ? ["payload_hash"] : [])]);
+  if (Object.hasOwn(value, "payload_hash") && (typeof value.payload_hash !== "string" || !HASH.test(value.payload_hash))) invalid("Expected a SHA-256 action payload hash");
   for (const key of CONTEXT_KEYS) validString(value[key]);
   if (!/^P\d{3,}$/.test(value.plan_id as string) || !/^(?:T\d{3,}|\$plan)$/.test(value.node_id as string)) invalid("Expected a Plan ID and node ID or $plan");
   if (!HASH.test(value.document_hash as string) || !HASH.test(value.contract_hash as string)) invalid("Expected lowercase SHA-256 hashes");
@@ -97,6 +100,7 @@ const issued = new WeakSet<HumanCapability>();
 /** Trusted input boundary only. Copy and freeze caller data to prevent later mutation of authority. */
 export function issueHumanCapability(requestedAction: AuthorityAction, boundContext: AuthorityContext, human: HumanProvenance): HumanCapability {
   action(requestedAction); context(boundContext); provenance(human);
+  if (requestedAction === "manual_accept" && !boundContext.payload_hash) invalid("Manual acceptance requires an exact displayed payload hash");
   const now = Date.now();
   const token = Object.freeze({}) as HumanCapability;
   pending.set(token, { action: requestedAction, context: Object.freeze({ ...boundContext }), provenance: Object.freeze({ ...human }), issued_at: new Date(now).toISOString(), issued_ms: now, nonce: randomUUID() });
@@ -122,7 +126,8 @@ export function consumeHumanCapability(token: HumanCapability | undefined, reque
   const now = Date.now();
   if (!entry || now < entry.issued_ms || now - entry.issued_ms >= MAX_AGE_MS) throw new AuthorityError("replay_or_expired", "Capability has already been consumed or expired");
   action(requestedAction); context(actualContext);
-  if (entry.action !== requestedAction || CONTEXT_KEYS.some(key => entry.context[key] !== actualContext[key])) throw new AuthorityError("context_mismatch", "Capability does not authorize this action and context");
+  if (requestedAction === "manual_accept" && !actualContext.payload_hash) invalid("Manual acceptance requires an exact displayed payload hash");
+  if (entry.action !== requestedAction || CONTEXT_KEYS.some(key => entry.context[key] !== actualContext[key]) || entry.context.payload_hash !== actualContext.payload_hash) throw new AuthorityError("context_mismatch", "Capability does not authorize this action and context");
   const unsigned = { version: 1 as const, id: randomUUID(), action: entry.action, context: entry.context, provenance: entry.provenance, issued_at: entry.issued_at, consumed_at: new Date(now).toISOString(), nonce: entry.nonce };
   return Object.freeze({ ...unsigned, receipt_hash: canonicalHash(unsigned) });
 }

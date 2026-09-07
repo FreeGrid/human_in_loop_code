@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:pi-plan:authorization-receipt:1",
   "title": "Task Plan Authorization Receipt",
-  "description": "Durable integrity record issued when a process-local Human capability is consumed. Schema and hash validation do not establish issuer authenticity; only trusted transition writers may persist this record. Capabilities themselves are never serialized. Runtime also checks canonical timestamps, lifetime below ten minutes, absolute roots and SHA-256 canonical JSON hash excluding receipt_hash.",
+  "description": "Durable integrity record issued when a process-local Human capability is consumed. Schema and hash validation do not establish issuer authenticity; only trusted transition writers may persist this record. Capabilities themselves are never serialized. New manual_accept capabilities require context.payload_hash binding the displayed approved input, observation and artifact references; absent payload is legacy read-only evidence. Runtime also checks canonical timestamps, lifetime below ten minutes, absolute roots and SHA-256 canonical JSON hash excluding receipt_hash.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "id", "action", "context", "provenance", "issued_at", "consumed_at", "nonce", "receipt_hash"],
@@ -20,7 +20,8 @@
         "document_hash": { "$ref": "#/$defs/hash" },
         "contract_hash": { "$ref": "#/$defs/hash" },
         "target_root": { "$ref": "#/$defs/text" },
-        "governance_root": { "$ref": "#/$defs/text" }
+        "governance_root": { "$ref": "#/$defs/text" },
+        "payload_hash": { "$ref": "#/$defs/hash" }
       }
     },
     "provenance": {
