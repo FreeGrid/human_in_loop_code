@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "task-plan/execution-sandbox.schema.json",
+  "title": "Trusted Controller execution sandbox configuration",
+  "description": "Configuration is trusted bootstrap input, never a model tool or capability serialization. Runtime issues opaque process-local handles. Darwin sandbox-exec is mandatory; other hosts fail closed. Network, child process creation, Git metadata and protected authority paths are denied. Fixed system library reads require a sealed read-only OS root; writable firmlink subtrees are denied.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "target_root",
+    "read_scope",
+    "write_scope",
+    "common_git_root",
+    "protected_roots",
+    "allowed_executables"
+  ],
+  "properties": {
+    "target_root": {
+      "$ref": "#/$defs/absolutePath"
+    },
+    "common_git_root": {
+      "$ref": "#/$defs/absolutePath"
+    },
+    "read_scope": {
+      "$ref": "#/$defs/scopes"
+    },
+    "write_scope": {
+      "$ref": "#/$defs/scopes"
+    },
+    "protected_roots": {
+      "$ref": "#/$defs/paths",
+      "minItems": 1
+    },
+    "allowed_executables": {
+      "$ref": "#/$defs/paths",
+      "minItems": 1
+    },
+    "runtime_read_roots": {
+      "$ref": "#/$defs/paths",
+      "description": "Trusted library roots only. Canonical filesystem identity, case and Unicode aliases must not overlap the target or any protected authority tree. Revalidated before every launch. Every custom runtime tree and executable is audited at configuration and launch: at most 10,000 aggregate entries, no multiply linked regular files, and no symlink escape. Use narrow library directories; broad installation trees can fail closed."
+    }
+  },
+  "$defs": {
+    "absolutePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 16384,
+      "pattern": "^/[^\\u0000-\\u001f\\u007f]*$"
+    },
+    "paths": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/absolutePath"
+      }
+    },
+    "scopes": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 16384,
+        "pattern": "^(?!/)(?!.*//)(?!.*(?:^|/)(?:\\.|\\.\\.)(?:/|$))[^\\\\*?\\[\\]{}\\u0000-\\u001f\\u007f]+(?:/\\*\\*)?$"
+      }
+    }
+  }
+}
