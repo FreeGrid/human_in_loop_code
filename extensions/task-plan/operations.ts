@@ -1,8 +1,9 @@
+import { assertOperationWritable, listPlanOperationIds, inspectOperationRecovery, recoverPlanOperation, PLAN_RUNTIME_ROOT } from "./operation-journal.ts";
 import { runReview, configureReviewAuthority, authenticateReviewEvidence } from "./evidence.ts";
 import { nodeContractHash, requireNodeReview, effectiveNodeRisk, writeReviewEvidence, dependencyFinalizations, assertAllFinalizedHistory, assertReopenRecoverable } from "./receipt-state.ts";
 import { consumeDocumentAuthority, appendAuthorization } from "./authority-context.ts";
 import type { AuthorityAction, HumanCapability } from "./authority.ts";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash, parseFrontmatter, createPlanSkeleton, findUnfinishedHarnessPlans, readPlanDocument, replaceFrontmatter, sha256, writeIfDocumentHash } from "./plan-file.ts";
 import { replaceSection } from "./sections.ts";
@@ -10,7 +11,7 @@ import { currentRoundTasks, parseTasks } from "./tasks.ts";
 import { approvePlan, approveWhatWhy, authorizeExecution, closePlan, markTasksReviewed, reconcileState, rollForward, abandonPlan } from "./state.ts";
 import type { TaskPlanModelSwitchState } from "./model-switch.ts";
 import type { PlanDocument, PlanMetadata, PlanStage, SectionName, TaskBlock, ValidationIssue } from "./types.ts";
-import { validateFrontmatter, validatePlan, validateProgress, validateSections, validateTasks, validateWhatWhy } from "./validators.ts";
+import { validateApprovalHashes, validateFrontmatter, validatePlan, validateProgress, validateSections, validateTasks, validateWhatWhy } from "./validators.ts";
 import type { PlanOperationResult } from "./operation-result.ts";
 import { PhaseExecutionService } from "./phase-execution.ts";
 import { inspectPhaseRecords, upsertPhaseRecord } from "./phase-record.ts";
@@ -53,27 +54,63 @@ export class TaskPlanService {
   }
 
   async get(planPath?: string): Promise<PlanOperationResult> {
-    const loaded = await this.load(planPath);
+    const loaded = await this.load(planPath,true);
     if ("status" in loaded) return loaded;
-    const reconciled = reconcileState(loaded);
-    if (reconciled.conflict) return conflict(reconciled.conflict);
-    if (reconciled.changed) {
-      const write = await writeIfDocumentHash(loaded.path, loaded.document_hash, reconciled.text);
-      if (!write.ok) return conflict(write.conflict);
-      const next = await readPlanDocument(loaded.path);
-      return { ...ok("state_changed", `Reconciled state: ${reconciled.reason}`, next), snapshot: snapshot(next, this.sessionState.binding) };
-    }
-    return { ...ok("ok", "Read Harness Plan", loaded), snapshot: snapshot(loaded, this.sessionState.binding) };
+    const proposed = reconcileState(loaded);
+    const issues = [...validateFrontmatter(loaded).issues,...validateApprovalHashes(loaded).issues,...validateProgress(loaded).issues];
+    if (proposed.conflict) issues.push({severity:"error",code:"reconciliation_conflict",message:proposed.conflict});
+    try { await assertOperationWritable(await realpath(loaded.path)); } catch(error) { issues.push({severity:"error",code:"operation_recovery_required",message:String((error as Error).message)}); }
+    if (loaded.metadata.operation_runtime && loaded.metadata.operation_runtime !== PLAN_RUNTIME_ROOT) issues.push({severity:"error",code:"operation_runtime_mismatch",message:"Restore the originally bound Controller runtime before mutations"});
+    return {...ok("ok",proposed.changed ? `Read Harness Plan; explicit reconciliation required: ${proposed.reason}` : "Read Harness Plan without modifying it",loaded),issues,snapshot:{...snapshot(loaded,this.sessionState.binding),issues,proposed_reconciliation:proposed.changed ? {expected_document_hash:loaded.document_hash,reason:proposed.reason,metadata:proposed.metadata} : null}};
   }
 
   async status(planPath?: string): Promise<PlanOperationResult> { return this.get(planPath); }
+
+  /** Explicit Controller transaction: invalidates stale state; never grants Human approval. */
+  async reconcile(params: {expected_document_hash:string; planPath?:string}): Promise<PlanOperationResult> {
+    const loaded = await this.load(params.planPath,true);
+    if ("status" in loaded) return loaded;
+    if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
+    const proposed = reconcileState(loaded);
+    if (proposed.conflict) return conflict(proposed.conflict);
+    if (!proposed.changed && loaded.metadata.operation_runtime !== undefined) return {...ok("ok","No reconciliation required",loaded),snapshot:snapshot(loaded,this.sessionState.binding)};
+    if (!loaded.metadata.operation_runtime && Object.keys(inspectPhaseRecords(loaded.sections.tasks).records).length) return conflict("runtime_binding_required: legacy execution needs explicit baseline-preserving operator recovery");
+    if (proposed.metadata.stage === "awaiting_round_decision") {
+      try { assertAllFinalizedHistory(loaded,this.sessionState.phaseDependencies?.evidence); } catch(error) { return validation(String((error as Error).message),[]); }
+    }
+    const result = await this.write(loaded,proposed.text,`Reconciled state: ${proposed.reason ?? "bound Controller operation runtime"}`,"state_changed");
+    if (result.status === "state_changed") { delete this.sessionState.binding; delete this.sessionState.humanCapability; }
+    return result;
+  }
+
+  async recoveryStatus(params:{operation_id?:string;planPath?:string}):Promise<PlanOperationResult> {
+    try {
+      const path=params.planPath?resolvePath(this.cwd,params.planPath):await this.defaultPlanPath();
+      if(!path)return conflict("Explicit Plan path required for recovery inspection");
+      if(!params.operation_id){const ids=await listPlanOperationIds(path);return {status:"ok",path,message:`Known operation IDs (latest 20): ${ids.slice(-20).join(", ") || "none; unknown pre-intent locks require offline recovery"}`,snapshot:{operation_ids:ids}};}
+      const inspection=await inspectOperationRecovery(path,params.operation_id);
+      return {status:"ok",path,operation_id:inspection.operation_id,document_hash:inspection.current_document_hash??undefined,message:`Recovery inspection: ${inspection.outcome}`,snapshot:inspection};
+    }catch(error){return conflict(String((error as Error).message));}
+  }
+
+  async recover(params:{operation_id:string;expected_document_hash:string;expected_journal_head:string;planPath?:string}):Promise<PlanOperationResult> {
+    const capability=this.takeCapability();
+    try {
+      const path=params.planPath?resolvePath(this.cwd,params.planPath):await this.defaultPlanPath();
+      if(!path)return conflict("Explicit Plan path required for recovery");
+      const inspection=await inspectOperationRecovery(path,params.operation_id);
+      if(inspection.authority_context.document_hash!==params.expected_document_hash || inspection.journal_head!==params.expected_journal_head)return conflict("stale_recovery_inspection");
+      const result=await recoverPlanOperation(inspection,capability!);
+      return {status:"applied",path,operation_id:result.operation_id,document_hash:result.current_document_hash??undefined,message:`Recovery recorded: ${inspection.outcome}; no gate or baseline capture replayed`,snapshot:result};
+    }catch(error){return conflict(String((error as Error).message));}
+  }
 
   async submitSection(params: { expected_document_hash: string; content: string; planPath?: string }): Promise<PlanOperationResult> {
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
     const reconciled = reconcileState(loaded);
-    if (reconciled.changed) return this.persistStateChange(loaded, reconciled.text, reconciled.reason);
+    if (reconciled.changed) return conflict(`reconciliation_required: ${reconciled.reason}`);
     const section = sectionForStage(loaded.metadata.stage);
     if (!section) return validation(`Cannot submit section while stage is ${loaded.metadata.stage}`, []);
     if (section === "tasks" && !preservesExecutionState(loaded.sections.tasks, params.content)) return conflict("reserved_execution_state_changed: Tasks editing cannot add, modify or delete execution records/notes");
@@ -96,7 +133,7 @@ export class TaskPlanService {
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
     const reconciled = reconcileState(loaded);
-    if (reconciled.changed) return this.persistStateChange(loaded, reconciled.text, reconciled.reason);
+    if (reconciled.changed) return conflict(`reconciliation_required: ${reconciled.reason}`);
     if (loaded.metadata.stage_status === "drafting") return validation("Drafting content cannot be advanced; submit or review it first", []);
     let metadata: PlanMetadata;
     let authorityAction: AuthorityAction;
@@ -139,7 +176,7 @@ export class TaskPlanService {
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
     const reconciled = reconcileState(loaded);
-    if (reconciled.changed) return this.persistStateChange(loaded, reconciled.text, reconciled.reason);
+    if (reconciled.changed) return conflict(`reconciliation_required: ${reconciled.reason}`);
     if (loaded.metadata.stage === "what_why") {
       const v = validateWhatWhy(loaded.sections.what_why); if (!v.ok) return validation("What / Why review failed", v.issues);
       return this.write(loaded, replaceFrontmatter(loaded.text, { ...loaded.metadata, stage_status: "ready_for_review" }), "What / Why ready for Human review");
@@ -345,13 +382,14 @@ export class TaskPlanService {
   }
 
   private async load(planPath?: string, allowCompletionConflict = false): Promise<PlanDocument | PlanOperationResult> {
-    const path = planPath ? resolvePath(this.cwd, planPath) : await this.defaultPlanPath();
-    if (!path) return conflict("No unfinished Harness Plan found");
     try {
+      const path = planPath ? resolvePath(this.cwd, planPath) : await this.defaultPlanPath();
+      if (!path) return conflict("No unfinished Harness Plan found");
       const doc = await readPlanDocument(path);
       this.sessionState.currentPlanPath = doc.path;
       const reconciled = reconcileState(doc);
-      if (reconciled.conflict && !allowCompletionConflict) return conflict(reconciled.conflict);
+      if (!allowCompletionConflict && reconciled.conflict) return conflict(reconciled.conflict);
+      if (!allowCompletionConflict && reconciled.changed) return conflict(`reconciliation_required: ${reconciled.reason}`);
       return doc;
     }
     catch (error) { return conflict(String((error as Error).message ?? error)); }
@@ -362,8 +400,6 @@ export class TaskPlanService {
     const unfinished = await findUnfinishedHarnessPlans(this.cwd);
     return unfinished.length === 1 ? unfinished[0] : undefined;
   }
-
-  private async persistStateChange(loaded: PlanDocument, text: string, reason?: string): Promise<PlanOperationResult> { return this.write(loaded, text, `State changed during reconciliation: ${reason}` as string, "state_changed"); }
 
   private executionReadiness(document: PlanDocument) {
     const result = validateExecutionReadiness(document);
@@ -391,18 +427,19 @@ export class TaskPlanService {
   }
 
   private async write(loaded: PlanDocument, text: string, message: string, status: PlanOperationResult["status"] = "applied"): Promise<PlanOperationResult> {
-    const write = await writeIfDocumentHash(loaded.path, loaded.document_hash, text);
-    if (!write.ok) return conflict(write.conflict);
+    const write = await writeIfDocumentHash(loaded.path, loaded.document_hash, text, {kind:status === "state_changed" ? "reconcile" : "mutation"});
+    if (!write.ok) return {...conflict(write.conflict),operation_id:write.operation_id,observed_document_hash:write.observed_document_hash};
     const next = await readPlanDocument(loaded.path);
-    return { ...ok(status, message, next), snapshot: snapshot(next, this.sessionState.binding) };
+    return { ...ok(status, message, next), operation_id:write.operation_id, snapshot: snapshot(next, this.sessionState.binding) };
   }
 }
 
 export async function isCurrentHarnessPlanPath(cwd: string, targetPath: string, state: TaskPlanSessionState): Promise<boolean> {
-  const path = resolvePath(cwd, targetPath);
+  const normalize = async (path: string) => { try { return await realpath(path); } catch(error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return resolve(path); throw error; } };
+  const path = await normalize(resolvePath(cwd, targetPath));
   const candidates = new Set<string>();
-  if (state.currentPlanPath) candidates.add(resolve(state.currentPlanPath));
-  for (const p of await findUnfinishedHarnessPlans(cwd)) candidates.add(resolve(p));
+  if (state.currentPlanPath) candidates.add(await normalize(resolve(state.currentPlanPath)));
+  for (const p of await findUnfinishedHarnessPlans(cwd)) candidates.add(await normalize(resolve(p)));
   return candidates.has(path);
 }
 
@@ -446,10 +483,14 @@ function validateExecutionReadiness(document: PlanDocument) {
 }
 
 function upsertReview(existing: string, round: number, summary: string): string {
-  const heading = `### R${String(round).padStart(3, "0")} — Current Stage Task Review`;
-  const entry = `${heading}\n\n${summary.trim()}`;
-  const re = new RegExp(`^${escapeRegExp(heading)}[\\s\\S]*?(?=^### R\\d{3} — T\\+0 Task Review|$)`, "m");
-  return re.test(existing) ? existing.replace(re, entry) : `${existing.trim() === "Not run." ? "" : existing.trim() + "\n\n"}${entry}`;
+  const prefix = `### R${String(round).padStart(3,"0")} — `;
+  const entry = `${prefix}Current Stage Task Review\n\n${summary.trim()}`;
+  const lines = existing.replace(/\r\n/g,"\n").split("\n");
+  const heading = /^### R\d{3} — (?:Current Stage|T\+0) Task Review$/;
+  const start = lines.findIndex(line => line.startsWith(prefix) && heading.test(line));
+  if (start < 0) return existing.trim() === "Not run." ? entry : `${existing.trim()}\n\n${entry}`;
+  const next = lines.findIndex((line,index)=>index>start && heading.test(line));
+  return [...lines.slice(0,start),entry,"",...lines.slice(next<0?lines.length:next)].join("\n").trim();
 }
 
 function hasFutureHorizon(plan: string): boolean { return /^### T(?:00[2-9]|0[1-9]\d|[1-9]\d{2}) — /m.test(plan); }
