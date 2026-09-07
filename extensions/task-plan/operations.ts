@@ -1,6 +1,7 @@
+import { nodeExecutionPolicy } from "./scope-policy.ts";
 import { assertOperationWritable, listPlanOperationIds, inspectOperationRecovery, recoverPlanOperation, PLAN_RUNTIME_ROOT } from "./operation-journal.ts";
 import { runReview, configureReviewAuthority, authenticateReviewEvidence } from "./evidence.ts";
-import { nodeContractHash, requireNodeReview, effectiveNodeRisk, writeReviewEvidence, dependencyFinalizations, assertAllFinalizedHistory, assertReopenRecoverable } from "./receipt-state.ts";
+import { assertNodeReviewPolicy, nodeContractHash, requireNodeReview, effectiveNodeRisk, writeReviewEvidence, dependencyFinalizations, assertAllFinalizedHistory, assertReopenRecoverable } from "./receipt-state.ts";
 import { consumeDocumentAuthority, appendAuthorization } from "./authority-context.ts";
 import type { AuthorityAction, HumanCapability } from "./authority.ts";
 import { readFile, realpath } from "node:fs/promises";
@@ -243,12 +244,13 @@ export class TaskPlanService {
       const node=loaded.metadata.identity_policy === "node-v1" ? (params.task_id ? open.find(t=>t.id===params.task_id) : open.length===1 ? open[0] : undefined) : undefined;
       if(loaded.metadata.identity_policy === "node-v1" && !node)return validation("phase_selection_required: review one open node",[]);
       for (const task of node ? [node] : currentRoundTasks(nextTasks,loaded.metadata.round)) {
-        if(node)dependencyFinalizations(candidate,task.id,runtime);
+        if(node){nodeExecutionPolicy(candidate,task.id);dependencyFinalizations(candidate,task.id,runtime);}
         const risk = effectiveNodeRisk(task,runtime);
-        const reviewer = runtime.reviewer ?? (risk === "low" ? configureReviewAuthority({signer:runtime.signer,session_id:`controller-structural:${runtime.implementer_session_id}`,implementer_session_id:runtime.implementer_session_id,fresh:false,run:async()=>({review_type:"deterministic",result:"passed",summary:"Task structure and Plan mapping passed deterministic validation",evidence_refs:["task-plan:structural-review/v1"]})}) : undefined);
+        const reviewer = runtime.reviewer ?? (risk === "low" && !domainFor(candidate).nodes.find(n=>n.id===task.id)?.reviewPolicy?.independent ? configureReviewAuthority({signer:runtime.signer,session_id:`controller-structural:${runtime.implementer_session_id}`,implementer_session_id:runtime.implementer_session_id,fresh:false,run:async()=>({review_type:"deterministic",result:"passed",summary:"Task structure and Plan mapping passed deterministic validation",evidence_refs:["task-plan:structural-review/v1"]})}) : undefined);
         if (!reviewer) return validation("capability_unavailable: fresh independent review required for unknown/medium/high risk", []);
         const evidence = await runReview(reviewer,{node_id:task.id,contract_hash:nodeContractHash(candidate,task.id,runtime),risk});
         authenticateReviewEvidence(evidence,runtime.signer,{node_id:task.id,contract_hash:nodeContractHash(candidate,task.id,runtime),risk,implementer_session_id:runtime.implementer_session_id});
+        assertNodeReviewPolicy(candidate,task.id,evidence.receipt);
         text = writeReviewEvidence(text,task.id,evidence);
         summaries.push(`${task.id}: ${evidence.receipt.result} — ${evidence.receipt.summary}`);
         passed &&= evidence.receipt.result === "passed";
@@ -299,11 +301,15 @@ export class TaskPlanService {
     const ready = this.executionReadiness(loaded); if (!ready.ok) return validation("Phase readiness validation failed", ready.issues);
     const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).start(loaded, { ...params, decision });
     if (result.status === "applied" || result.status === "ok") {
-      const next = await readPlanDocument(loaded.path);
+      let next:PlanDocument;
+      try{next=await readPlanDocument(loaded.path);}catch(error){delete this.sessionState.binding;delete this.sessionState.phaseTaskId;return {...result,status:"conflict",message:`post_start_binding_conflict: phase commit is durable; restore the readable Plan and resume its existing execution (${error instanceof Error?error.message:String(error)})`};}
+      if(next.document_hash!==result.document_hash){delete this.sessionState.binding;return {...result,status:"conflict",message:"post_start_binding_conflict: phase commit is durable; resume its existing execution",observed_document_hash:next.document_hash};}
       const active = Object.values(inspectPhaseRecords(next.sections.tasks).records).find((r) => !r.finalized && r.context.round === next.metadata.round && (!params.task_id || r.context.phase_id === params.task_id));
       if (active) {
         this.sessionState.phaseTaskId = active.context.phase_id;
-        await this.bindTask({ expected_document_hash: next.document_hash, task_id: active.context.phase_id, planPath: next.path });
+        const task=currentRoundTasks(next.sections.tasks,next.metadata.round).find(t=>t.id===active.context.phase_id)!;
+        this.sessionState.binding={task_id:task.id,plan_path:next.path,round:next.metadata.round,task_definition_hash:canonicalTasksDefinitionHash(task.definition),contract:task};
+        this.sessionState.reportedThisTurn=false;
         return { ...result, message: `${result.message}\n${phaseSwitchHelp(active.docsync.enabled)}`, snapshot: snapshot(next, this.sessionState.binding) };
       }
     }
@@ -367,15 +373,16 @@ export class TaskPlanService {
     return result;
   }
 
-  async reportTaskResults(params: { task_id: string; reports: Array<Omit<Parameters<TaskPlanService["reportTaskResult"]>[0], "task_id">> }): Promise<PlanOperationResult> {
-    const results: PlanOperationResult[] = [];
-    for (const report of params.reports) {
-      const result = await this.reportTaskResult({ ...report, task_id: params.task_id });
-      results.push(result);
-      if (result.status !== "applied" && result.status !== "ok") return { ...result, message: `Batch report stopped after ${results.length} item(s)` };
-    }
-    const last = results[results.length - 1];
-    return last ? { ...last, message: `Batch reported ${results.length} item(s)` } : validation("At least one report is required", []);
+  async reportTaskResults(params:{expected_document_hash:string;idempotency_key:string;task_id:string;reports:Array<Omit<Parameters<TaskPlanService["reportTaskResult"]>[0],"task_id">>}):Promise<PlanOperationResult> {
+    const binding=this.sessionState.binding;
+    if(!binding||binding.task_id!==params.task_id)return validation("Report must match the current task binding",[]);
+    const loaded=await readPlanDocument(binding.plan_path);
+    if(loaded.metadata.round!==binding.round)return conflict("task_binding_stale");
+    const task=currentRoundTasks(loaded.sections.tasks,binding.round).find(t=>t.id===binding.task_id);
+    if(!task||canonicalTasksDefinitionHash(task.definition)!==binding.task_definition_hash)return conflict("task_binding_stale");
+    const result=await new PhaseExecutionService(this.sessionState.phaseDependencies).reportBatch(loaded,params);
+    if(result.status==="applied"||result.status==="ok")this.sessionState.reportedThisTurn=true;
+    return result;
   }
 
   async setTaskStatus(params: { expected_document_hash: string; task_id: string; status: "open" | "completed"; planPath?: string }): Promise<PlanOperationResult> {
@@ -401,6 +408,8 @@ export class TaskPlanService {
       .replace(/^([ \t]*- .+?) \[(?: |x|X)\]([ \t]*)$/gm, "$1 [ ]$2");
     const record = inspectPhaseRecords(definition).records[task.id];
     if (record) {
+      if((record.generation??0)>=Number.MAX_SAFE_INTEGER)return validation("execution_generation_exhausted",[]);
+      record.generation=(record.generation??0)+1;
       delete record.finalized;
       delete record.last_finalize;
       record.acceptance = [];
