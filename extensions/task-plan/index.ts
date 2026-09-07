@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { issueHumanCapability, type AuthorityAction } from "./authority.ts";
 import { documentAuthorityContext } from "./authority-context.ts";
 import { readPlanDocument } from "./plan-file.ts";
+import { parseTasks } from "./tasks.ts";
 import { GitBaselineProvider } from "./docsync/baseline.ts";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { registerTaskPlanCommands } from "./commands.ts";
@@ -85,7 +86,11 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
     const stage = document.metadata.stage;
     let action: AuthorityAction | undefined;
     let node = "$plan";
-    if (approval) action = stage === "what_why" ? "approve_what_why" : stage === "plan" ? "approve_plan" : stage === "awaiting_execution_approval" ? "approve_contract" : undefined;
+    if (approval) {
+      if (/^(批准合同|approve contract)$/iu.test(value)) action = stage === "awaiting_execution_approval" ? "approve_contract" : undefined;
+      else if (/^(开始拆任务|approve plan)$/iu.test(value)) action = stage === "plan" ? "approve_plan" : undefined;
+      else action = stage === "what_why" ? "approve_what_why" : stage === "plan" ? "approve_plan" : stage === "awaiting_execution_approval" ? "approve_contract" : undefined;
+    }
     else if (closure) action = /^(放弃|abandon)/iu.test(value) ? "abandon" : "complete";
     else if (nodeAction) { action = /^(重开|reopen)$/iu.test(nodeAction[1]!) ? "reopen" : "finalize"; node = nodeAction[2]!; }
     else if (phaseAction === "execute") {
@@ -93,6 +98,11 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
       // A first execution needs concrete roots shown to the Human through /plan:execute.
       else if (stage === "executing" && active.length === 1) { action = "execute"; node = active[0]!.context.phase_id; }
     } else if (phaseAction && active.length === 1) { action = phaseAction; node = active[0]!.context.phase_id; }
+    const namedNode = value.match(/\bT\d{3}\b/iu)?.[0]?.toUpperCase();
+    if (phaseAction && namedNode) {
+      const currentNodes = parseTasks(document.sections.tasks).filter(t => t.round === document.metadata.round && !t.completed);
+      if (currentNodes.length !== 1 || currentNodes[0]!.id !== namedNode) action = undefined;
+    }
     if (!action) {
       ctx.ui.notify("No unambiguous context-bound authorization issued. First execution requires /plan:execute and explicit roots.", "info");
       return { action: "continue" };
