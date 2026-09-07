@@ -1,3 +1,4 @@
+import type { PlanDomain } from "./plan-domain.ts";
 import type { ExecutionNote } from "./execution-notes.ts";
 
 export const HARNESS = "pi-plan/v1";
@@ -17,7 +18,12 @@ export type StageStatus = "drafting" | "ready_for_review" | "awaiting_human" | "
 export type SectionName = "what_why" | "plan" | "tasks" | "review";
 
 export interface PlanMetadata {
-  harness: typeof HARNESS;
+  harness: typeof HARNESS | "pi-plan/v2";
+  format?: "pi-plan/v2";
+  identity_policy?: "node-v1";
+  selected_node?: string;
+  pending_node?: string;
+  node_approvals?: string;
   plan_id: string;
   round: number;
   stage: PlanStage;
@@ -33,6 +39,9 @@ export interface PlanMetadata {
 }
 
 export interface PlanDocument {
+  /** Parsers always populate these; optional for legacy caller-created fixtures. */
+  format?: "v1" | "v2";
+  domain?: PlanDomain;
   path: string;
   text: string;
   document_hash: string;

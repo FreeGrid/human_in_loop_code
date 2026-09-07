@@ -6,7 +6,7 @@ import { HARNESS, STAGE_STATUS, type PlanMetadata } from "./types.ts";
 
 export const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const HASH = /^[a-f0-9]{64}$/;
-const KNOWN = new Set(["harness", "operation_runtime", "format", "plan_id", "round", "stage", "stage_status", "approved_what_why_hash", "approved_plan_hash", "reviewed_tasks_hash", "approved_contract_hash", "authority_receipts", "review_receipts", "closure_reason"]);
+const KNOWN = new Set(["harness", "operation_runtime", "format", "plan_id", "round", "stage", "stage_status", "approved_what_why_hash", "approved_plan_hash", "reviewed_tasks_hash", "approved_contract_hash", "authority_receipts", "review_receipts", "closure_reason", "identity_policy", "selected_node", "pending_node", "node_approvals"]);
 
 /** Reject scalar values that a UTF-8/JSON writer can silently alter or conceal. */
 export function assertSafeUnicode(value: unknown): void {
@@ -72,11 +72,28 @@ export function parseFrontmatter(text: string): { metadata: PlanMetadata; body: 
 }
 
 export function validatePlanMetadata(m: PlanMetadata): void {
-  if (m.harness !== HARNESS || typeof m.plan_id !== "string" || !/^P\d{3}$/.test(m.plan_id)) throw new Error("invalid_plan_identity");
+  if (![HARNESS, "pi-plan/v2"].includes(m.harness) || typeof m.plan_id !== "string" || !/^P\d{3}$/.test(m.plan_id)) throw new Error("invalid_plan_identity");
   if (!Number.isSafeInteger(m.round) || m.round < 0) throw new Error("invalid_plan_round");
   if (typeof m.stage !== "string" || !Object.hasOwn(STAGE_STATUS, m.stage) || !STAGE_STATUS[m.stage].includes(m.stage_status)) throw new Error("invalid_plan_stage");
   if (m.operation_runtime !== undefined && (typeof m.operation_runtime !== "string" || !isAbsolute(m.operation_runtime) || m.operation_runtime.length > 4096 || /[\r\n]/.test(m.operation_runtime))) throw new Error("invalid_operation_runtime");
   if (m.format !== undefined && m.format !== "pi-plan/v2") throw new Error("invalid_plan_format");
+  if ((m.harness === "pi-plan/v2") !== (m.format === "pi-plan/v2")) throw new Error("contradictory_plan_format");
+  if (m.identity_policy !== undefined && m.identity_policy !== "node-v1") throw new Error("invalid_identity_policy");
+  if (m.format === "pi-plan/v2" && m.identity_policy !== "node-v1") throw new Error("native_identity_policy_required");
+  for (const key of ["selected_node", "pending_node"]) if (m[key] !== undefined && (typeof m[key] !== "string" || !/^T\d{3}$/.test(m[key] as string))) throw new Error(`invalid_${key}`);
+  if (m.identity_policy === undefined && ["selected_node", "pending_node", "node_approvals"].some(key => m[key] !== undefined)) throw new Error("scoped_state_requires_identity_policy");
+
+  if (m.node_approvals !== undefined) {
+    if (typeof m.node_approvals !== "string" || m.node_approvals.length > 1048576) throw new Error("invalid_node_approvals");
+    const approvals = parseStrictJson(m.node_approvals);
+    if (!approvals || typeof approvals !== "object" || Array.isArray(approvals) || Object.keys(approvals).length > 256 || JSON.stringify(approvals) !== m.node_approvals) throw new Error("invalid_node_approvals");
+    for (const [id, entry] of Object.entries(approvals)) {
+      if (!/^T\d{3}$/.test(id) || !entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("invalid_node_approvals");
+      const value = entry as Record<string, unknown>;
+      const keys = Object.keys(value).sort().join();
+      if (!["contract_authorization_ref,contract_hash", "contract_authorization_ref,contract_hash,execution_authorization_ref"].includes(keys) || Object.values(value).some(v => typeof v !== "string" || !HASH.test(v))) throw new Error("invalid_node_approvals");
+    }
+  }
   for (const key of ["approved_what_why_hash", "approved_plan_hash", "reviewed_tasks_hash", "approved_contract_hash"]) {
     if (m[key] !== undefined && m[key] !== "" && (typeof m[key] !== "string" || !HASH.test(m[key] as string))) throw new Error(`invalid_${key}`);
   }

@@ -1,6 +1,7 @@
 import { parseTasks, taskField } from "./tasks.ts";
 import type { TaskBlock, ValidationIssue } from "./types.ts";
-import { sha256 } from "./plan-file.ts";
+import { createHash } from "node:crypto";
+const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
 
 export interface PlanNodeOutline { id: string; title: string; definition: string; }
 export interface PlanNode { id: string; title: string; outline?: PlanNodeOutline; executable?: TaskBlock; }
@@ -89,6 +90,9 @@ export function validatePlanNodeMapping(planMarkdown: string, tasksMarkdown: str
 }
 
 export function migrateV1Nodes(planMarkdown: string, tasksMarkdown: string): CanonicalPlanNode[] {
+  if (/<!--\s*pi-plan:(?:phase|execution):/i.test(tasksMarkdown) || /^#### (?:Verification|Scopes|Forbidden|Non-Goals|Review Policy)$/m.test(tasksMarkdown)) throw new Error("migration_unmapped_execution_or_policy");
+  const allowed = new Set(["Outcome", "Expected Outcome", "Work Areas"]);
+  for (const field of planMarkdown.matchAll(/^#### (.+)$/gm)) if (!allowed.has(field[1]!)) throw new Error(`migration_unmapped_outline_field: ${field[1]}`);
   const outlines = parsePlanOutlineEntries(planMarkdown);
   const tasks = parseTasks(tasksMarkdown);
   const issues = validatePlanNodeMapping(planMarkdown, tasksMarkdown).filter((item) => item.severity === "error");
@@ -99,7 +103,7 @@ export function migrateV1Nodes(planMarkdown: string, tasksMarkdown: string): Can
     return {
       id: outline.id,
       title: outline.title,
-      outcome: nodeField(outline.definition, "Outcome"),
+      outcome: nodeField(outline.definition, "Outcome") || nodeField(outline.definition, "Expected Outcome"),
       work: task ? taskField(task.definition, "Tasks") : nodeField(outline.definition, "Work Areas"),
       acceptance: task ? taskField(task.definition, "Acceptance") : "",
       dependsOn: task ? taskField(task.definition, "Depends On") : "",
