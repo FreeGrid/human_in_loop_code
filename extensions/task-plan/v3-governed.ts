@@ -32,6 +32,7 @@ export interface V3GovernedStatus {
 export class V3Governed {
   readonly #config: V3GovernedConfiguration;
   constructor(config: V3GovernedConfiguration) { textV3(config.implementer_session_id, 256); this.#config = { ...config }; }
+  get planPath(): string { return this.#config.runtime.plan_path; }
   private async source(): Promise<ReadablePlanSnapshot> {
     const source = await readReadablePlan(this.#config.runtime.plan_path);
     if (source.path !== this.#config.runtime.plan_path) v3Fail("plan_path_changed"); return source;
