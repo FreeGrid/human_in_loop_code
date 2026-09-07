@@ -64,7 +64,14 @@ are unsupported. Document paths are literal targets, not glob expansion requests
 Absolute/parent-traversing paths, Git-internal paths, unsupported path characters
 and symlink ancestors/targets are rejected, including for not-yet-existing files.
 
-The parser is an explicit pinned `yaml` runtime dependency. The policy limit is
+The parser is an explicit pinned `yaml` runtime dependency. Checkout installs use
+`npm ci` with the committed `.npmrc` (`legacy-peer-deps=true`), matching the
+runtime-only lock. Pi supplies the existing host peers; this profile deliberately
+does not install or upgrade a second Pi host. Copy the `.npmrc` with the manifests
+when reproducing the checkout install, or explicitly use `--legacy-peer-deps`.
+A standalone embedder must supply and verify its own compatible host peers.
+
+The policy limit is
 256 KiB UTF-8, container depth 16 and 1,024 source/classification matching entries.
 Duplicate/unknown fields, custom tags, anchors/aliases, merge keys, multiple YAML
 documents and unsupported versions fail validation. Missing/invalid policy is a
@@ -149,7 +156,9 @@ unrelated clean tracked files are not explicitly re-hashed by the provider. Unkn
 new document starts (especially dirty/untracked content or ambiguous checkout
 normalization) remain errors instead of invented before-images.
 
-Only the exact Plan uses strict execution-record/checkbox normalization. The
+Only the exact Plan uses strict execution-record/checkbox normalization, plus the
+valid executing/in-progress and completed-round/awaiting-Human lifecycle pairs.
+Other frontmatter, approval hashes and invalid lifecycle pairs remain content. The
 current phase's exact untracked, empty, regular mode-0600 finalize sidecar is
 recognized as coordination metadata; other lock-looking files, meaningful content
 and tracked files are not generally ignored. The Plan has a separate CAS, and its
