@@ -20,7 +20,7 @@ export interface ReadableRevision {
 }
 
 const meaning = (text: string) => text.trim().replace(/\s+/gu, " ");
-const taskMeaning = (task: ReadableTask) => JSON.stringify([meaning(task.text), task.subtasks.map(item => meaning(item.text))]);
+const childMeaning = (task: ReadableTask) => JSON.stringify(task.subtasks.map(item => meaning(item.text)).sort());
 const clone = <T>(value: T): T => structuredClone(value);
 function settleTree(plan: ReadablePlan): void {
   const current = plan.tasks.find(task => !task.completed);
@@ -94,11 +94,23 @@ export class ReadablePlanService {
     const briefChanged = meaning(next.brief) !== meaning(before.plan.brief);
     for (const task of next.tasks) {
       const previous = before.plan.tasks.find(item => item.id === task.id);
-      const changed = previous && taskMeaning(previous) !== taskMeaning(task);
+      const changed = previous && meaning(previous.text) !== meaning(task.text);
+      const childrenChanged = previous && childMeaning(previous) !== childMeaning(task);
       const affected = briefChanged && (revision.affected_task_ids === undefined || revision.affected_task_ids.includes(task.id));
       if (changed || affected) {
         task.completed = false;
         for (const item of task.subtasks) item.completed = false;
+      } else if (childrenChanged) {
+        task.completed = false;
+        for (const item of task.subtasks) if (!previous.subtasks.some(old => meaning(old.text) === meaning(item.text))) item.completed = false;
+      }
+    }
+    const current = next.tasks.find(task => !task.completed);
+    for (const task of next.tasks) {
+      const supplied = revision.tasks?.find(item => item.id === task.id);
+      const previous = before.plan.tasks.find(item => item.id === task.id);
+      if (!task.completed && task !== current && supplied?.subtasks.length && JSON.stringify(supplied.subtasks) !== JSON.stringify(previous?.subtasks ?? [])) {
+        throw new Error("v3_refine_current_task_only: proposed work would belong to a future task after reopening");
       }
     }
     // Reopening an earlier task makes it current; future details leave the readable file.
