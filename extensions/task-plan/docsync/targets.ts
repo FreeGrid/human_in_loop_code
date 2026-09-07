@@ -54,11 +54,20 @@ export async function readContainedBytes(root: string, path: string): Promise<Bu
     try { await lstat(resolved); } catch (again) { if (absent(again)) return null; throw again; }
     throw new Error(`Document appeared during read: ${path}`);
   }
-  if (!before.isFile()) throw new Error(`Not a regular file: ${path}`);
+  if (!before.isFile() || before.size > 32n * 1024n * 1024n) throw new Error(`Not a regular or supported-size file: ${path}`);
   const handle = await open(resolved, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     if (stamp(before) !== stamp(await handle.stat({ bigint: true }))) throw new Error(`File replaced during open: ${path}`);
-    const bytes = await handle.readFile();
+    // Bound allocation and reading even if a file grows after the pre-open stat.
+    const first = Buffer.alloc(Number(before.size) + 1);
+    let firstCount = 0;
+    while (firstCount < first.length) {
+      const result = await handle.read(first, firstCount, first.length - firstCount, firstCount);
+      if (!result.bytesRead) break;
+      firstCount += result.bytesRead;
+    }
+    if (firstCount !== Number(before.size)) throw new Error(`File size changed during read: ${path}`);
+    const bytes = first.subarray(0, firstCount);
     // Positional reread avoids relying on mtime/size as content proof.
     const second = Buffer.alloc(bytes.length + 1);
     let count = 0;
