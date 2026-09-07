@@ -25,6 +25,7 @@ export function reconcileState(document: PlanDocument): ReconcileResult {
     delete next.approved_what_why_hash;
     delete next.approved_plan_hash;
     delete next.reviewed_tasks_hash;
+    delete next.approved_contract_hash;
     return changed(document, next, "what_why_hash_mismatch");
   }
 
@@ -33,6 +34,7 @@ export function reconcileState(document: PlanDocument): ReconcileResult {
     next.stage_status = validatePlan(document.sections.plan, next.round).ok ? "ready_for_review" : "drafting";
     delete next.approved_plan_hash;
     delete next.reviewed_tasks_hash;
+    delete next.approved_contract_hash;
     return changed(document, next, "plan_hash_mismatch");
   }
 
@@ -40,6 +42,7 @@ export function reconcileState(document: PlanDocument): ReconcileResult {
     next.stage = "tasks";
     next.stage_status = validateTasks(document.sections.tasks, next.round).ok ? "ready_for_review" : "drafting";
     delete next.reviewed_tasks_hash;
+    delete next.approved_contract_hash;
     return changed(document, next, "tasks_hash_mismatch");
   }
 
@@ -73,11 +76,11 @@ export function reconcileState(document: PlanDocument): ReconcileResult {
 }
 
 export function approveWhatWhy(metadata: PlanMetadata, whatWhy: string): PlanMetadata {
-  return { ...metadata, approved_what_why_hash: canonicalSectionHash(whatWhy), stage: "plan", stage_status: "drafting" };
+  return { ...metadata, approved_contract_hash: undefined, approved_plan_hash: undefined, reviewed_tasks_hash: undefined, approved_what_why_hash: canonicalSectionHash(whatWhy), stage: "plan", stage_status: "drafting" };
 }
 
 export function approvePlan(metadata: PlanMetadata, plan: string): PlanMetadata {
-  return { ...metadata, approved_plan_hash: canonicalSectionHash(plan), stage: "tasks", stage_status: "drafting" };
+  return { ...metadata, approved_contract_hash: undefined, reviewed_tasks_hash: undefined, approved_plan_hash: canonicalSectionHash(plan), stage: "tasks", stage_status: "drafting" };
 }
 
 export function markTasksReviewed(metadata: PlanMetadata, tasks: string): PlanMetadata {
@@ -92,6 +95,7 @@ export function rollForward(metadata: PlanMetadata): PlanMetadata {
   const next = { ...metadata, round: metadata.round + 1, stage: "plan" as const, stage_status: "drafting" as const };
   delete next.approved_plan_hash;
   delete next.reviewed_tasks_hash;
+  delete next.approved_contract_hash;
   return next;
 }
 

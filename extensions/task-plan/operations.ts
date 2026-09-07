@@ -2,7 +2,7 @@ import { consumeDocumentAuthority, appendAuthorization } from "./authority-conte
 import type { AuthorityAction, HumanCapability } from "./authority.ts";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import { canonicalSectionHash, canonicalTasksDefinitionHash, createPlanSkeleton, findUnfinishedHarnessPlans, readPlanDocument, replaceFrontmatter, sha256, writeIfDocumentHash } from "./plan-file.ts";
+import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash, createPlanSkeleton, findUnfinishedHarnessPlans, readPlanDocument, replaceFrontmatter, sha256, writeIfDocumentHash } from "./plan-file.ts";
 import { replaceSection } from "./sections.ts";
 import { currentRoundTasks, parseTasks } from "./tasks.ts";
 import { approvePlan, approveWhatWhy, authorizeExecution, closePlan, markTasksReviewed, reconcileState, rollForward, abandonPlan } from "./state.ts";
@@ -83,6 +83,7 @@ export class TaskPlanService {
       metadata.stage = "tasks";
       metadata.stage_status = "ready_for_review";
       delete metadata.reviewed_tasks_hash;
+      delete metadata.approved_contract_hash;
     }
     text = replaceFrontmatter(text, metadata);
     return this.write(loaded, text, "Submitted current section");
@@ -109,12 +110,12 @@ export class TaskPlanService {
     } else if (loaded.metadata.stage === "awaiting_execution_approval") {
       const v = validateExecutionReadiness(loaded); if (!v.ok) return validation("Execution readiness validation failed", v.issues);
       if (params.action === "execute") {
-        if (loaded.metadata.approved_contract_hash !== canonicalTasksDefinitionHash(loaded.sections.tasks)) return validation("contract_approval_required: approve the detailed contract separately", []);
+        if (loaded.metadata.approved_contract_hash !== phaseExecutionDefinitionHash(loaded)) return validation("contract_approval_required: approve the detailed contract separately", []);
         authorityAction = "authorize_execution";
         metadata = authorizeExecution(loaded.metadata);
       } else if (!params.action || params.action === "next" || params.action === "approve_contract") {
         authorityAction = "approve_contract";
-        metadata = { ...loaded.metadata, approved_contract_hash: canonicalTasksDefinitionHash(loaded.sections.tasks) };
+        metadata = { ...loaded.metadata, approved_contract_hash: phaseExecutionDefinitionHash(loaded) };
       } else return validation("Explicit contract approval or execution authorization required", []);
     } else if (loaded.metadata.stage === "awaiting_round_decision") {
       const progress = validateProgress(loaded); if (!progress.ok) return validation("Current round is not complete", progress.issues);
