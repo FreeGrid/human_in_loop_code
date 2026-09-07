@@ -1,0 +1,395 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pi-plan:operation-journal:1",
+  "title": "Task Plan operation journal event",
+  "description": "Canonical JSON immutable numbered files with SHA-256 previous-event linkage. Runtime additionally validates exact sequences, plan/path binding, candidate-byte hashes, ownership and recovery authorization. This integrity chain is not a filesystem adversary signature.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "previous_hash": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/hash"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "event_hash": {
+      "$ref": "#/$defs/hash"
+    },
+    "operation_id": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+    },
+    "plan_path": {
+      "type": "string",
+      "maxLength": 8192
+    },
+    "plan_id": {
+      "type": "string",
+      "pattern": "^P[0-9]{3}$"
+    },
+    "expected_document_hash": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/hash"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "type": {
+      "enum": [
+        "prepare",
+        "commit",
+        "failure",
+        "recovery"
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "details": {
+      "type": "object"
+    }
+  },
+  "required": [
+    "version",
+    "sequence",
+    "previous_hash",
+    "event_hash",
+    "operation_id",
+    "plan_path",
+    "plan_id",
+    "expected_document_hash",
+    "type",
+    "timestamp",
+    "details"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "prepare"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "stage": {
+                    "const": "intent"
+                  },
+                  "intent": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "enum": [
+                          "mutation",
+                          "reconcile",
+                          "phase_start",
+                          "phase_finalize",
+                          "create"
+                        ]
+                      },
+                      "node_id": {
+                        "type": "string",
+                        "maxLength": 8192
+                      },
+                      "execute_id": {
+                        "type": "string",
+                        "maxLength": 8192
+                      },
+                      "baseline_id": {
+                        "type": "string",
+                        "maxLength": 8192
+                      },
+                      "target_root": {
+                        "type": "string",
+                        "maxLength": 8192
+                      },
+                      "governance_root": {
+                        "type": "string",
+                        "maxLength": 8192
+                      },
+                      "authority_ref": {
+                        "type": "string",
+                        "maxLength": 8192
+                      },
+                      "content_version": {
+                        "type": "string",
+                        "maxLength": 8192
+                      },
+                      "contract_hash": {
+                        "type": "string",
+                        "maxLength": 8192
+                      }
+                    },
+                    "required": [
+                      "kind"
+                    ]
+                  },
+                  "locks": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "maxLength": 8192
+                        },
+                        "dev": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ino": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "pid": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "token": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "dev",
+                        "ino",
+                        "pid",
+                        "token"
+                      ]
+                    }
+                  },
+                  "owner_pid": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "stage",
+                  "intent",
+                  "locks",
+                  "owner_pid"
+                ]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "stage": {
+                    "const": "candidate"
+                  },
+                  "candidate_hash": {
+                    "$ref": "#/$defs/hash"
+                  },
+                  "candidate_file": {
+                    "type": "string",
+                    "maxLength": 8192
+                  },
+                  "completion": {
+                    "enum": [
+                      "success",
+                      "blocked_projection"
+                    ]
+                  },
+                  "locks": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "path": {
+                          "type": "string",
+                          "maxLength": 8192
+                        },
+                        "dev": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "ino": {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        "pid": {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        "token": {
+                          "type": "string",
+                          "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+                        }
+                      },
+                      "required": [
+                        "path",
+                        "dev",
+                        "ino",
+                        "pid",
+                        "token"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "stage",
+                  "candidate_hash",
+                  "candidate_file",
+                  "completion",
+                  "locks"
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "commit"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "document_hash": {
+                "$ref": "#/$defs/hash"
+              }
+            },
+            "required": [
+              "document_hash"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "failure"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "type": "string",
+                "maxLength": 65536
+              },
+              "checkpoint": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "side_effects_possible": {
+                "type": "boolean"
+              },
+              "write_uncertain": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "checkpoint",
+              "side_effects_possible"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "recovery"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "details": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "enum": [
+                  "abort",
+                  "confirm_commit",
+                  "already_committed"
+                ]
+              },
+              "current_document_hash": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/hash"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "candidate_hash": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/hash"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "authorization": {
+                "$ref": "authority.schema.json"
+              }
+            },
+            "required": [
+              "action",
+              "current_document_hash",
+              "candidate_hash",
+              "authorization"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    }
+  }
+}
