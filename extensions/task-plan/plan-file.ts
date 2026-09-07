@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { extractAllSections } from "./sections.ts";
-import { canonicalTaskDefinition } from "./tasks.ts";
+import { canonicalTaskDefinition, parseTasks } from "./tasks.ts";
 import { HARNESS, type PlanDocument, type PlanMetadata } from "./types.ts";
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
@@ -21,6 +21,20 @@ export function canonicalTasksDefinitionHash(content: string): string {
 
 export function phaseExecutionDefinitionHash(document: PlanDocument): string {
   return sha256(JSON.stringify([document.metadata.plan_id, document.metadata.round, canonicalSectionHash(document.sections.what_why), canonicalSectionHash(document.sections.plan), canonicalTasksDefinitionHash(document.sections.tasks)]));
+}
+
+/** V2 contract identity is scoped to one executable node and its direct definition. */
+export function executionDefinitionHash(document: PlanDocument, nodeId: string): string {
+  return (document.metadata as Record<string, unknown>).format === "pi-plan/v2"
+    ? nodeExecutionDefinitionHash(document, nodeId)
+    : phaseExecutionDefinitionHash(document);
+}
+
+export function nodeExecutionDefinitionHash(document: PlanDocument, nodeId: string): string {
+  const task = parseTasks(document.sections.tasks).find((candidate) => candidate.id === nodeId);
+  const outline = [...document.sections.plan.matchAll(new RegExp(`^### ${escapeRegExp(nodeId)} — .+$[\\s\\S]*?(?=^### T\\d{3} — |$)`, "gm"))][0]?.[0] ?? "";
+  if (!task && !outline) throw new Error(`Unknown execution node ${nodeId}`);
+  return sha256(JSON.stringify([document.metadata.plan_id, document.metadata.round, nodeId, canonicalSectionHash(outline), task ? canonicalTasksDefinitionHash(task.definition) : ""]));
 }
 
 export function parseFrontmatter(text: string): { metadata: PlanMetadata; body: string } {
@@ -204,6 +218,8 @@ function parseScalar(value: string): unknown {
   if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
   return value;
 }
+
+function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&"); }
 
 function formatScalar(value: unknown): string {
   if (value === undefined || value === null) return "";
