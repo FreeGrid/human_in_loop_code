@@ -118,17 +118,38 @@ async function directory(path: string, privateMode = false): Promise<void> {
   const info = await lstat(path);
   if (!info.isDirectory() || info.isSymbolicLink() || await realpath(path) !== path || privateMode && (info.mode & 0o077) !== 0) v3Fail("unsafe_runtime_directory");
 }
-async function regularRead(path: string): Promise<string> {
+async function regularRead(path: string, allowedLinks = 1n): Promise<string> {
   const before = await lstat(path, { bigint: true });
-  if (!before.isFile() || before.nlink !== 1n || before.size > 16777216n || (before.mode & 0o077n) !== 0n) v3Fail("unsafe_runtime_file");
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  if (!before.isFile() || before.nlink !== allowedLinks || before.size > 16777216n || (before.mode & 0o077n) !== 0n) v3Fail("unsafe_runtime_file");
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    const actual = await handle.stat({ bigint: true }); if (actual.dev !== before.dev || actual.ino !== before.ino) v3Fail("runtime_changed");
+    const actual = await handle.stat({ bigint: true }); if (!actual.isFile() || actual.nlink !== allowedLinks || actual.dev !== before.dev || actual.ino !== before.ino) v3Fail("runtime_changed");
     const bytes = await handle.readFile(), after = await handle.stat({ bigint: true }), current = await lstat(path, { bigint: true });
-    if (BigInt(bytes.length) !== before.size || after.size !== before.size || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs || current.ino !== before.ino || current.dev !== before.dev || current.nlink !== 1n) v3Fail("runtime_changed");
+    if (BigInt(bytes.length) !== before.size || after.size !== before.size || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs || current.ino !== before.ino || current.dev !== before.dev || current.nlink !== allowedLinks) v3Fail("runtime_changed");
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } finally { await handle.close(); }
 }
+
+/** Only the writer's exact private publication companion is a recoverable hardlink. */
+async function internalPair(path: string, kind: "owner" | "state"): Promise<string | undefined> {
+  const info = await lstat(path);
+  if (info.nlink === 1) return undefined;
+  if (!info.isFile() || info.nlink !== 2) v3Fail("unsafe_runtime_file");
+  const pattern = new RegExp(`^[.]${kind}-[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}[.]tmp$`);
+  const companions: string[] = [];
+  for (const name of await readdir(dirname(path))) if (pattern.test(name)) {
+    const candidate = join(dirname(path), name), sibling = await lstat(candidate);
+    if (sibling.dev === info.dev && sibling.ino === info.ino && sibling.isFile() && sibling.nlink === 2) companions.push(candidate);
+  }
+  if (companions.length !== 1) v3Fail("unsafe_runtime_file");
+  return companions[0];
+}
+async function removeInternalPair(path: string, pair: string): Promise<void> {
+  const current = await lstat(path), sibling = await lstat(pair);
+  if (current.nlink !== 2 || sibling.nlink !== 2 || current.dev !== sibling.dev || current.ino !== sibling.ino) v3Fail("runtime_changed");
+  await unlink(pair);
+}
+
 async function syncDirectory(path: string): Promise<void> { const file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW); try { await file.sync(); } finally { await file.close(); } }
 export class V3Runtime {
   readonly root: string; readonly plan_path: string; readonly target_root: string; readonly governance_root: string; readonly protected_key_paths: readonly string[];
@@ -167,7 +188,8 @@ export class V3Runtime {
     let previous: string | null = null, state: V3RuntimeState | null = null;
     for (const [index, name] of names.entries()) {
       if (name !== `${String(index + 1).padStart(10, "0")}.json`) v3Fail("runtime_sequence_corrupt");
-      const raw = await regularRead(join(this.root, name)); let envelope: unknown;
+      const path = join(this.root, name), pair = allowPendingHead ? await internalPair(path, "state") : undefined;
+      const raw = await regularRead(path, pair ? 2n : 1n); let envelope: unknown;
       try { envelope = JSON.parse(raw); } catch { v3Fail("runtime_json_corrupt"); }
       exactV3(envelope, ["version", "generation", "previous_hash", "state", "seal"]); hashV3(envelope.seal);
       if (envelope.version !== 1 || envelope.generation !== index + 1 || envelope.previous_hash !== previous || canonicalJson(envelope) + "\n" !== raw) v3Fail("runtime_chain_corrupt");
@@ -192,18 +214,23 @@ export class V3Runtime {
     try {
       if (recoverDeadOwner) {
         try {
-          const info = await lstat(path); const raw = await regularRead(path); const prior: unknown = JSON.parse(raw); exactV3(prior, ["pid", "token"]); uuid(prior.token);
+          const info = await lstat(path), pair = await internalPair(path, "owner"); const raw = await regularRead(path, pair ? 2n : 1n); const prior: unknown = JSON.parse(raw); exactV3(prior, ["pid", "token"]); uuid(prior.token);
           if (!Number.isSafeInteger(prior.pid) || Number(prior.pid) <= 0) v3Fail("invalid_lock_owner");
           let dead = false; try { process.kill(Number(prior.pid), 0); } catch (error) { dead = (error as NodeJS.ErrnoException).code === "ESRCH"; }
           if (!dead) v3Fail("runtime_owner_active");
-          const current = await lstat(path); if (current.dev !== info.dev || current.ino !== info.ino) v3Fail("runtime_lock_changed"); await unlink(path);
+          const current = await lstat(path); if (current.dev !== info.dev || current.ino !== info.ino) v3Fail("runtime_lock_changed"); if (pair) await removeInternalPair(path, pair); await unlink(path);
         } catch (error) { if (!absent(error)) throw error; }
       }
       try { await link(temporary, path); } catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") v3Fail("runtime_locked"); throw error; }
       identity = await lstat(path); await unlink(temporary);
       const save = async (state: V3RuntimeState, expected: V3RuntimeSnapshot): Promise<V3RuntimeSnapshot> => {
         assertV3RuntimeState(state);
-        const current = await this.load(recoverDeadOwner); if (current.generation !== expected.generation || current.hash !== expected.hash) v3Fail("runtime_cas_conflict");
+        const current = await this.load(recoverDeadOwner);
+        if (current.generation !== expected.generation || current.hash !== expected.hash) v3Fail("runtime_cas_conflict");
+        if (recoverDeadOwner) for (let generation = 1; generation <= current.generation; generation++) {
+          const path = join(this.root, `${String(generation).padStart(10, "0")}.json`), pair = await internalPair(path, "state");
+          if (pair) await removeInternalPair(path, pair);
+        }
         if (state.plan_path !== this.plan_path || state.target_root !== this.target_root || state.governance_root !== this.governance_root) v3Fail("runtime_foreign_binding");
         // A new revision cannot erase earlier execution identities or revise finalized evidence.
         if (current.state?.invalidated_revisions.some(id => !state.invalidated_revisions.includes(id))) v3Fail("runtime_revocation_rewrite");
