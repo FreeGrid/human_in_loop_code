@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { BaselineProvider, BaselineReference, PhaseContext } from "../phase-contracts.ts";
 import { canonicalTaskDefinition } from "../tasks.ts";
 import { inspectExecutionNotes } from "../execution-notes.ts";
@@ -62,6 +62,21 @@ async function locate(input: PhaseContext): Promise<Located> {
   const rawGitDir = await textGit(target_root, ["rev-parse", "--absolute-git-dir"]);
   const gitDir = await canonicalDirectory(rawGitDir);
   if (rawGitDir !== gitDir) throw new Error("Symlink Git directory is unsupported");
+  const rawCommonDir = await textGit(target_root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  const commonDir = await canonicalDirectory(rawCommonDir);
+  if (rawCommonDir !== commonDir) throw new Error("Symlink common Git directory is unsupported");
+  const within = (parent: string, path: string) => {
+    const suffix = relative(parent, path);
+    return suffix !== ".." && !suffix.startsWith(`..${sep}`) && !isAbsolute(suffix);
+  };
+  // Only the standard .git namespace is excluded by path validation/discovery.
+  // Reject other embedded metadata before reading policy/docs or claiming runtime,
+  // including a shared object directory for a linked worktree.
+  for (const metadata of [gitDir, commonDir]) {
+    if (within(target_root, metadata) && !within(join(target_root, ".git"), metadata)) {
+      throw new Error("Unsupported embedded Git metadata directory outside the standard .git namespace");
+    }
+  }
   // Also reject .git indirection through a symlink, while ordinary linked-worktree .git files work.
   if ((await lstat(join(target_root, ".git"))).isSymbolicLink()) throw new Error("Symlink .git is unsupported");
   const docs = await textGit(target_root, ["rev-parse", "--path-format=absolute", "--git-path", "docsync"]);

@@ -127,6 +127,12 @@ recheck again before accepting/writing against them.
 
 Per-execution `baseline.json` lives under the canonical directory returned by
 `git rev-parse --git-path docsync`, including linked-worktree Git directories.
+A separate Git metadata directory inside the target worktree but outside its
+standard `.git` namespace is unsupported, even when ignored by Git. Both per-worktree
+and common Git directories are checked before document reads or runtime creation,
+so Git internals cannot become document targets or source changes. Ordinary `.git`,
+external separate Git directories and linked worktrees remain supported.
+
 It is uncommitted runtime data, not a second Task checklist or a saved full diff.
 The execution directory is an exclusive claim; publication is atomic and does not
 replace an existing baseline. A partial claim, missing file, corrupt envelope,
