@@ -1,0 +1,15 @@
+# Optional execution kernel integration
+
+The ordinary Plan API never opens an execution store. Manual completion remains valid, including when a file is copied to a fresh session. This integration is for hosts that explicitly choose additional execution controls; a failure here does not restrict ordinary Plan editing or host work.
+
+`prepareReadableContract(plan, policy)` creates a typed contract for the current task. Its definition contains the current brief, task text and current small work. The trusted host supplies the policy: verification methods tied to exact requirement quotations, read/write/forbidden paths, allowed executables and any prior-task dependencies. These fields are not part of the readable domain and cannot be supplied as model tool authority. Each current subtask needs a verification criterion. Future task edits do not enter the current contract unless they affect an explicitly declared dependency.
+
+Quotation checks establish traceability, not semantic completeness. The trusted policy author must check that each method tests its quoted requirement and introduces no extra deliverable. A new limit, output, file or capability belongs in the user-owned brief first. Permission to write paths or run executables requires a separate concrete Human decision at the governed host boundary; planning does not grant it.
+
+`createV3Runtime(configuration)` requires explicit canonical Plan, target and governance paths, a separate runtime root and a persisted authentication key of at least 32 bytes. Protect persisted runtime/evidence key paths from child execution. Product runtime code must not discover or depend on a private control repository. The authentication key remains in trusted host memory; it is not stored in the Plan or exposed through model schemas.
+
+The optional store authenticates journal generations and its committed head, binds execution revisions and Human receipts, and preserves pending checkbox projection intent. Transactions use owned locks and compare the expected generation. Recovery can inspect interrupted head advancement and exact private publication links after process death; unknown aliases or active owners are rejected. This internal recovery history has no user-facing Plan representation.
+
+Restoring the entire authenticated store together with its head cannot be detected without an external rollback anchor. The readable file remains usable independently. Ordinary checkboxes do not become verified receipts when a store is reconstructed; verified completion is a separate query inside the governed integration.
+
+The contract and runtime primitives are available from `v3-contract.ts` and `v3-runtime.ts`. They are deliberately absent from the ordinary entry's static import graph. The authority/verification/review/finalize adapter is a separate layer.
