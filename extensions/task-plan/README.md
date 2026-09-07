@@ -8,18 +8,20 @@ success automatically accepts a phase.
 
 ## Availability and fail-closed boundary
 
-This delivery supplies phase contracts, bounded progress, resume and finalization
-services, plus `BaselineProvider`, `DocSyncGate` and `MaintainerRunner` interfaces.
-It does **not** yet supply the production Git content-comparison engine, document
-candidate/debt policy or restricted Maintainer writer.
+This delivery supplies phase contracts, bounded progress, resume and finalization,
+plus a **default real Git BaselineProvider** and deterministic document/README
+candidate engine. The DocSync decision/debt gate and restricted Maintainer writer
+remain future capabilities; there is no production stub that passes their checks.
 
-Consequently, default new phase execution reports `capability_unavailable` when
-its baseline provider is absent. Finalize with DocSync on blocks when its gate is
-absent. There is no production stub that passes these checks. Planning operations
-remain usable; do not confuse a registered command with a working synchronization
-backend. Disabling DocSync does not bypass a missing baseline or Task acceptance.
+New phase execution can capture a supported Git repository's original content.
+Finalize with DocSync on still blocks when its gate is absent. Missing/corrupt Git
+baselines remain errors even with Human off. Missing or malformed YAML policy is
+separate: a trusted Git baseline can exist and Human can switch off, while candidate
+construction explicitly reports the policy error. See the [Git and dependency
+guide](docsync/README.md) for configuration, support limits and the read-only API.
 
-Applications embedding the extension may pass reviewed adapters using the
+Applications embedding the extension may override the default Git provider or pass
+reviewed gate/runner adapters using the
 `phase` property of `TaskPlanExtensionConfig`, or supply `PhaseDependencies` to
 `PhaseExecutionService`. Adapter injection is a trusted host API, not a model tool
 or an automatic discovery mechanism. Runtime adapters must not depend on any
