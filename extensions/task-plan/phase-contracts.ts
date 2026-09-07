@@ -14,6 +14,7 @@ export interface PhaseContext {
 /** Reference only. The provider owns uncommitted runtime baseline data, never task state. */
 export interface BaselineReference { id: string; initial_version: string }
 export interface BaselineProvider {
+  inspect?(context:PhaseContext,baseline:BaselineReference):Promise<import("./docsync/contracts.ts").RepositoryFacts>;
   capture(context: PhaseContext): Promise<BaselineReference>;
   /** Throws on missing/foreign baseline; returns current content identity without resetting it.
    * Exclude this Plan's execution-only metadata from that identity; Plan bytes have their own CAS.
@@ -85,7 +86,10 @@ export function readHumanDecision(token: HumanDecisionToken | undefined, action:
   return decision?.action === action ? { ...decision } : undefined;
 }
 
+export interface ReportBatchReceipt { idempotency_key:string; request_hash:string; operation_id:string; generation:number; report_ids:string[]; content_version:string }
 export interface PhaseRecord {
+  generation?:number;
+  report_batches?:ReportBatchReceipt[];
   version: 1;
   implementer_session_id?: string;
   verification?: Array<SealedEvidence<VerificationReceipt>>;

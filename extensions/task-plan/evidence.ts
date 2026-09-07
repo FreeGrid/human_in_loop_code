@@ -1,3 +1,4 @@
+import { runSandboxedProcess, type ExecutionSandbox } from "./execution-sandbox.ts";
 import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -42,6 +43,11 @@ export interface VerificationAuthority { readonly [verifierBrand]: true }
 declare const reviewerBrand: unique symbol;
 export interface ReviewAuthority { readonly [reviewerBrand]: true }
 const signerKeys = new WeakMap<ReceiptSigner, Buffer>();
+const signerPaths = new WeakMap<ReceiptSigner,string[]>();
+const processSandboxes = new WeakMap<VerificationAuthority,ExecutionSandbox>();
+export function protectReceiptSignerPath(signer:ReceiptSigner,path:string):void {if(!signerKeys.has(signer)||!isAbsolute(path))fail("signer_storage_path");signerPaths.set(signer,[...new Set([...(signerPaths.get(signer)??[]),path])]);}
+export function receiptSignerProtectedPaths(signer:ReceiptSigner):readonly string[]{if(!signerKeys.has(signer))fail("signer");return Object.freeze([...(signerPaths.get(signer)??[])]);}
+export function verificationProcessSandbox(authority:VerificationAuthority):ExecutionSandbox {return processSandboxes.get(authority)??fail("sandboxed_process_authority_required");}
 const verifiers = new WeakMap<VerificationAuthority, { role: "controller" | "reproducer"; session_id: string; signer: ReceiptSigner; run: (input: Readonly<VerificationInput>) => Promise<VerificationFacts> }>();
 const reviewers = new WeakMap<ReviewAuthority, { session_id: string; implementer_session_id: string; fresh: boolean; signer: ReceiptSigner; run: (input: Readonly<ReviewInput>) => Promise<ReviewFacts> }>();
 const HASH = /^[0-9a-f]{64}$/;
@@ -190,13 +196,13 @@ export async function verifyArtifactContents(receipt: VerificationReceipt): Prom
   }
 }
 /** Fixed commands are supplied only from an approved contract by the Controller.
- * execFile avoids a shell; this helper does NOT establish a sandbox or limit filesystem/network access.
+ * Modern phases require the opaque OS sandbox; absent sandbox is legacy-only behavior.
  */
 export function configureProcessVerificationAuthority(config: {
   role: "controller" | "reproducer"; session_id: string; signer: ReceiptSigner;
   approved_input: VerificationInput; executable: string; args: string[]; cwd: string;
   kind: "deterministic_test" | "static_check" | "clean_reproduction"; artifact_paths?: string[];
-  timeout_ms?: number; env?: Record<string, string>;
+  timeout_ms?: number; env?: Record<string, string>; sandbox?:ExecutionSandbox;
 }): VerificationAuthority {
   input(config.approved_input); string(config.executable, 4096); string(config.cwd, 4096); strings(config.args);
   if (!isAbsolute(config.executable) || !isAbsolute(config.cwd)) fail("absolute_process_paths_required");
@@ -204,9 +210,11 @@ export function configureProcessVerificationAuthority(config: {
   const fixed = structuredClone({ approved_input: config.approved_input, executable: config.executable, args: config.args, cwd: config.cwd, kind: config.kind, artifact_paths: config.artifact_paths ?? [], timeout_ms: config.timeout_ms ?? 60000, env: config.env ?? {} });
   strings(fixed.artifact_paths); if (fixed.artifact_paths.some(p => !isAbsolute(p))) fail("artifact_absolute_path_required");
   if (!Number.isSafeInteger(fixed.timeout_ms) || fixed.timeout_ms < 1 || fixed.timeout_ms > 300000) fail("timeout");
-  return configureVerificationAuthority({ role: config.role, session_id: config.session_id, signer: config.signer, run: async request => {
+  const sandbox=config.sandbox;
+  const authority=configureVerificationAuthority({ role: config.role, session_id: config.session_id, signer: config.signer, run: async request => {
     if (canonicalEvidenceJson(request) !== canonicalEvidenceJson(fixed.approved_input)) fail("approved_command_binding");
-    const facts = await new Promise<{ actual: string; exit_code: number }>((resolve, reject) => {
+    const sandboxResult=sandbox?await runSandboxedProcess(sandbox,{executable:fixed.executable,args:fixed.args,cwd:fixed.cwd,env:fixed.env,timeout_ms:fixed.timeout_ms,max_buffer_bytes:1024*1024}):undefined;
+    const facts = sandboxResult ? {actual:JSON.stringify(sandboxResult),exit_code:sandboxResult.timed_out||sandboxResult.output_limit_exceeded||sandboxResult.signal ? 1 : sandboxResult.exit_code ?? 1} : await new Promise<{ actual: string; exit_code: number }>((resolve, reject) => {
       execFile(fixed.executable, fixed.args, { cwd: fixed.cwd, env: fixed.env, timeout: fixed.timeout_ms, maxBuffer: 1024 * 1024, encoding: "utf8" }, (error, stdout, stderr) => {
         if (error && (typeof error.code !== "number" || error.killed || error.signal)) { reject(new Error("verification_process_unavailable", { cause: error })); return; }
         resolve({ actual: JSON.stringify({ stdout, stderr }), exit_code: error ? Number(error.code) : 0 });
@@ -215,6 +223,8 @@ export function configureProcessVerificationAuthority(config: {
     const artifact_refs = await Promise.all(fixed.artifact_paths.map(async path => ({ path, sha256: createHash("sha256").update(await readFile(path)).digest("hex") })));
     return { ...facts, verification_kind: fixed.kind, artifact_refs, result: facts.exit_code === 0 ? "passed" : "failed" };
   }});
+  if(sandbox)processSandboxes.set(authority,sandbox);
+  return authority;
 }
 
 /** A fresh launcher, not a model-supplied boolean, must configure review identity above.
