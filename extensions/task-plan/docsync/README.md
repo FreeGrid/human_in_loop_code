@@ -140,7 +140,9 @@ verified internal LF/CRLF normalization. A symlink can be a Git link-change fact
 it is not followed to read a document. Submodules, unmerged indices, sparse/skip-
 worktree/assume-unchanged modes and stat settings that hide changes are rejected.
 External filters, encoding transforms and ident expansion are not executed.
-External diff, textconv and fsmonitor helpers are disabled/not invoked.
+External diff, textconv and fsmonitor helpers are disabled/not invoked. Lazy
+promisor fetching and all Git transport protocols are disabled for every query;
+missing objects fail without running remote/SSH/credential helpers.
 
 Effective Git normalization configuration and attributes are checked, including
 external attributes files. Rule drift deliberately blocks rather than interpreting

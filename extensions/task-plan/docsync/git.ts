@@ -16,8 +16,10 @@ export function safeName(path: string): void {
 /** Never inherit repository selectors, object overrides, external filters or helper programs. */
 export async function git(root: string, args: string[], input?: Buffer): Promise<Buffer> {
   if (Object.keys(process.env).some(key => /^(GIT_CONFIG(?:_|$)|GIT_ATTR_(?:NOSYSTEM|SOURCE)$)/.test(key))) throw new Error("Unsupported Git configuration/attribute environment override; remove it rather than silently changing normalization");
-  const env = { ...process.env, LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" };
-  for (const key of Object.keys(env)) if (key.startsWith("GIT_") && !["GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT", "GIT_NO_REPLACE_OBJECTS"].includes(key)) delete (env as Record<string, string | undefined>)[key];
+  // Object inspection must never turn a missing promisor object into a fetch/helper.
+  // The empty protocol allowlist is defense in depth if Git attempts any transport.
+  const env = { ...process.env, LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1", GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" };
+  for (const key of Object.keys(env)) if (key.startsWith("GIT_") && !["GIT_OPTIONAL_LOCKS", "GIT_TERMINAL_PROMPT", "GIT_NO_REPLACE_OBJECTS", "GIT_NO_LAZY_FETCH", "GIT_ALLOW_PROTOCOL"].includes(key)) delete (env as Record<string, string | undefined>)[key];
   return new Promise((resolveResult, reject) => {
     const child = spawn("git", ["--no-pager", "-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false", "-c", "core.quotePath=false", "-c", "diff.external=", "-C", root, ...args], { env, stdio: ["pipe", "pipe", "pipe"] });
     let size = 0; const output: Buffer[] = []; const errors: Buffer[] = []; let failed = false;
