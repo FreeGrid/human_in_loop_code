@@ -175,7 +175,7 @@ export const AUTHORITY_TRANSITION_MATRIX: readonly AuthorityTransition[] = Objec
   transition(["executing"], "docsync_on", "unchanged", ["execution_authorization"]),
   transition(["executing"], "docsync_off", "unchanged", ["execution_authorization"]),
   transition(["executing"], "finalize", "executing_or_awaiting_round_decision", ["execution_authorization", "verification:accepted", "review:passed", "dependency_finalize:accepted", "scope_verification:passed"]),
-  transition(["executing", "awaiting_round_decision"], "reopen", "executing", [], ["verification", "finalize", "dependent_execution"]),
+  transition(["tasks", "awaiting_execution_approval", "executing", "awaiting_round_decision"], "reopen", "executing", [], ["verification", "finalize", "dependent_execution"]),
   transition([...ACTIVE], "abandon", "abandoned", [], ["pending_capabilities", "execution_binding"]),
   transition(["awaiting_round_decision"], "complete", "completed", ["all_current_nodes_finalize:accepted"]),
   transition(["awaiting_round_decision"], "next_round", "plan", ["all_current_nodes_finalize:accepted"], ["plan_approval", "contract_approval", "review"]),

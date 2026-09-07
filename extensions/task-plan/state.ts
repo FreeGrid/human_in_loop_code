@@ -1,4 +1,5 @@
-import { nodeContractHash } from "./receipt-state.ts";
+import { readNodeApprovals, selectedNode, requireNodeApproval } from "./node-approval.ts";
+import { nodeContractHash, assertAllFinalizedHistory, requireNodeReview, type EvidenceRuntime } from "./receipt-state.ts";
 import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash, replaceFrontmatter } from "./plan-file.ts";
 import { parseTasks } from "./tasks.ts";
 import { inspectPhaseRecords } from "./phase-record.ts";
@@ -13,7 +14,8 @@ export interface ReconcileResult {
   text: string;
 }
 
-export function reconcileState(document: PlanDocument): ReconcileResult {
+export function reconcileState(document: PlanDocument, runtime?:EvidenceRuntime): ReconcileResult {
+  if(document.metadata.identity_policy === "node-v1") return reconcileNodes(document,runtime);
   const current = { ...document.metadata };
   const next = { ...current };
   const whatWhyHash = canonicalSectionHash(document.sections.what_why);
@@ -114,4 +116,40 @@ function isExecutionRelated(stage: PlanMetadata["stage"]): boolean {
 
 function changed(document: PlanDocument, metadata: PlanMetadata, reason: string): ReconcileResult {
   return { changed: true, reason, metadata, text: replaceFrontmatter(document.text, metadata) };
+}
+
+/** Pure diagnostic proposal. Unrelated node edits never erase a running node's authority. */
+function reconcileNodes(document:PlanDocument,runtime?:EvidenceRuntime):ReconcileResult {
+  const metadata={...document.metadata}, unchanged=()=>({changed:false,metadata,text:document.text});
+  if(metadata.approved_what_why_hash && metadata.approved_what_why_hash!==canonicalSectionHash(document.sections.what_why)) {
+    delete metadata.approved_what_why_hash; delete metadata.approved_plan_hash; delete metadata.node_approvals;
+    delete metadata.selected_node;delete metadata.pending_node;
+    metadata.stage="what_why";metadata.stage_status="ready_for_review";
+    return changed(document,metadata,"what_why_hash_mismatch");
+  }
+  if(!["tasks","awaiting_execution_approval","executing","awaiting_round_decision"].includes(metadata.stage))return unchanged();
+  const records=inspectPhaseRecords(document.sections.tasks);
+  if(records.errors.length)return {...unchanged(),conflict:"invalid_phase_record"};
+  if(!runtime && (metadata.selected_node || metadata.pending_node || Object.keys(records.records).length))return {...unchanged(),conflict:"capability_unavailable: trusted runtime required to diagnose node evidence"};
+  try {
+    assertAllFinalizedHistory(document,runtime);
+    const approvals=readNodeApprovals(metadata);
+    let invalidated=false;
+    for(const id of Object.keys(approvals)) {
+      try{requireNodeApproval(document,id,runtime,!!approvals[id]?.execution_authorization_ref);}
+      catch {
+        delete approvals[id];invalidated=true;
+        if(metadata.selected_node===id || metadata.pending_node===id){delete metadata.selected_node;delete metadata.pending_node;metadata.stage="tasks";metadata.stage_status="ready_for_review";}
+      }
+    }
+    if(metadata.stage==="awaiting_execution_approval") {
+      try{requireNodeReview(document,selectedNode(document),runtime);}
+      catch {delete metadata.pending_node;delete metadata.selected_node;metadata.stage="tasks";metadata.stage_status="ready_for_review";invalidated=true;}
+    }
+    if(metadata.stage==="executing") {const id=selectedNode(document);requireNodeApproval(document,id,runtime);requireNodeReview(document,id,runtime);}
+    if(invalidated){metadata.node_approvals=JSON.stringify(approvals);return changed(document,metadata,"node_contract_invalidated");}
+    const issues=validateProgress(document).issues.filter(i=>i.severity==="error");
+    if(issues.length)return {...unchanged(),conflict:`invalid_plan_state: ${issues.map(i=>i.code).join(", ")}`};
+    return unchanged();
+  } catch(error) {return {...unchanged(),conflict:String((error as Error).message)};}
 }

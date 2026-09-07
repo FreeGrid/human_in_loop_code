@@ -2,6 +2,7 @@ import { nodeEvidencePolicy, nodeContractHash } from "./receipt-state.ts";
 import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash } from "./plan-file.ts";
 import { inspectPhaseRecords } from "./phase-record.ts";
 import { inspectExecutionNotes } from "./execution-notes.ts";
+import { parsePlanCandidate } from "./plan-integrity.ts";
 import { extractAllSections } from "./sections.ts";
 import { parseTasks, taskField, taskRequiredFields } from "./tasks.ts";
 import { HARNESS, STAGE_STATUS, type PlanDocument, type ValidationIssue, type ValidationResult } from "./types.ts";
@@ -13,7 +14,7 @@ function warn(code: string, message: string): ValidationIssue { return { severit
 export function validateFrontmatter(document: PlanDocument): ValidationResult {
   const m = document.metadata;
   const issues: ValidationIssue[] = [];
-  if (m.harness !== HARNESS) issues.push(error("invalid_harness", `harness must be ${HARNESS}`));
+  if (m.harness !== HARNESS && !(m.harness === "pi-plan/v2" && m.format === "pi-plan/v2" && m.identity_policy === "node-v1")) issues.push(error("invalid_harness", `harness must be ${HARNESS}`));
   if (!/^P\d{3}$/.test(String(m.plan_id ?? ""))) issues.push(error("invalid_plan_id", "plan_id must use PNNN"));
   if (!Number.isInteger(m.round) || m.round < 0) issues.push(error("invalid_round", "round must be an integer >= 0"));
   if (!(m.stage in STAGE_STATUS)) issues.push(error("invalid_stage", "stage is not recognized"));
@@ -23,7 +24,7 @@ export function validateFrontmatter(document: PlanDocument): ValidationResult {
 }
 
 export function validateSections(text: string): ValidationResult {
-  try { extractAllSections(text); return result([]); } catch (e) { return result([error("invalid_sections", (e as Error).message)]); }
+  try { parsePlanCandidate("/validation/plan.md",text); return result([]); } catch (e) { return result([error("invalid_sections", (e as Error).message)]); }
 }
 
 export function validateWhatWhy(markdown: string): ValidationResult {
@@ -87,7 +88,7 @@ export function validateTasks(markdown: string, currentRound: number, options: {
     for (const heading of task.definition.matchAll(/^(#{1,4}) (.+)$/gm)) {
       if (heading[0] === task.completionLine) continue;
       const field = heading[2]!.trim();
-      if (heading[1] !== "####" || ![...taskRequiredFields(), "Round", "Verification"].includes(field)) issues.push(error("unsupported_task_heading", `${task.id} contains unsupported heading: ${heading[0]}`));
+      if (heading[1] !== "####" || ![...taskRequiredFields(), "Round", "Verification", "Scopes", "Forbidden", "Non-Goals", "Review Policy"].includes(field)) issues.push(error("unsupported_task_heading", `${task.id} contains unsupported heading: ${heading[0]}`));
     }
     try { nodeEvidencePolicy(task); } catch(error) { issues.push({severity:"error",code:"invalid_verification_policy",message:String((error as Error).message)}); }
     validateSubtaskMarkers(task.definition, task.id).forEach((issue) => issues.push(issue));
@@ -95,7 +96,7 @@ export function validateTasks(markdown: string, currentRound: number, options: {
     for (const line of taskField(task.definition, "Acceptance").split(/\r?\n/).map((line) => line.trim())) {
       if (line.startsWith("- ") && !/^- \[(?: |x|X)\] .+$/.test(line)) issues.push(error("invalid_acceptance_marker", `${task.id} Acceptance items must use leading checkboxes`));
     }
-    for (const field of [...taskRequiredFields(), "Verification"]) {
+    for (const field of [...taskRequiredFields(), "Verification", "Scopes", "Forbidden", "Non-Goals", "Review Policy"]) {
       if ([...task.definition.matchAll(new RegExp(`^#### ${escapeRegExp(field)}[ \\t]*$`, "gm"))].length > 1) issues.push(error("duplicate_task_field", `${task.id} has duplicate ${field} fields`));
     }
     if (task.round < 0) issues.push(error("invalid_task_round", `${task.id} has invalid Round`));
@@ -116,6 +117,7 @@ export function validateApprovalHashes(document: PlanDocument): ValidationResult
   const issues: ValidationIssue[] = [];
   const { metadata: m, sections } = document;
   if (m.approved_what_why_hash && m.approved_what_why_hash !== canonicalSectionHash(sections.what_why)) issues.push(error("what_why_hash_mismatch", "What / Why changed after approval"));
+  if (m.identity_policy === "node-v1") return result(issues);
   if (m.approved_plan_hash && m.approved_plan_hash !== canonicalSectionHash(sections.plan)) issues.push(error("plan_hash_mismatch", "Plan changed after approval"));
   if (m.reviewed_tasks_hash && m.reviewed_tasks_hash !== canonicalTasksDefinitionHash(sections.tasks)) issues.push(error("tasks_hash_mismatch", "Task definitions changed after review"));
   return result(issues);
@@ -128,7 +130,7 @@ export function validateProgress(document: PlanDocument): ValidationResult {
     const records = inspectPhaseRecords(document.sections.tasks);
     for (const task of parseTasks(document.sections.tasks).filter((item) => item.completed)) {
       const record = records.records[task.id];
-      if (!record?.finalized?.evidence || record.finalized.evidence.receipt.contract_hash !== nodeContractHash(document,task.id) || task.workItems.some((item) => !item.completed) || task.acceptance.some((item) => !item.completed)) issues.push(error("completion_evidence_missing", `${task.id} requires a phase finalize receipt, not manual completion markers`));
+      if (!record?.finalized?.evidence || (document.metadata.identity_policy !== "node-v1" && record.finalized.evidence.receipt.contract_hash !== nodeContractHash(document,task.id)) || task.workItems.some((item) => !item.completed) || task.acceptance.some((item) => !item.completed)) issues.push(error("completion_evidence_missing", `${task.id} requires a phase finalize receipt, not manual completion markers`));
     }
   }
   if (document.metadata.stage === "executing") {

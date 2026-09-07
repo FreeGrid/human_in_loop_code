@@ -13,7 +13,8 @@ import { inspectExecutionNotes, upsertExecutionNote, validateExecutionNote, type
 import { type PhaseDependencies, type PhaseRecord } from "./phase-contracts.ts";
 import { inspectPhaseRecords, upsertPhaseRecord, validatePhaseRecord } from "./phase-record.ts";
 import { acquirePhaseFinalizeLock, canonicalSectionHash, canonicalTasksDefinitionHash, executionDefinitionHash, readPlanDocument, replaceFrontmatter, writeIfDocumentHash } from "./plan-file.ts";
-import { replaceSection } from "./sections.ts";
+import { replaceLogicalSection } from "./plan-domain.ts";
+import { selectedNode, requireNodeApproval } from "./node-approval.ts";
 import { parseTasks } from "./tasks.ts";
 import type { PlanDocument, TaskBlock } from "./types.ts";
 import type { PlanOperationResult } from "./operation-result.ts";
@@ -41,7 +42,7 @@ export class PhaseExecutionService {
         if (params.governance_root && await realpath(params.governance_root) !== record.context.governance_root) fail("root_mismatch: governance root differs from original execution");
         return { status: "ok", path: d.path, document_hash: d.document_hash, message: `Resumed ${task.id}, execute ${record.context.execute_id}; DocSync ${record.docsync.enabled ? "on" : "off"}. ${SWITCH_HELP}`, snapshot: record };
       }
-      const receipt = await consumeDocumentAuthority(d, params.decision, "execute", task.id, params);
+      const receipt = await consumeDocumentAuthority(d, params.decision, "execute", task.id, params,this.dependencies.evidence);
       const authorization = { ...receipt.provenance, action: "execute" as const };
       if (!params.target_root || !params.governance_root) fail("roots_required: explicitly supply target Git root and governance root");
       if (![params.target_root, params.governance_root].every(p => typeof p === "string" && isAbsolute(p))) fail("invalid_roots: explicitly supply absolute roots");
@@ -100,7 +101,7 @@ export class PhaseExecutionService {
       if (!task.acceptance.some(item => item.id === acceptance_id)) fail("unknown_acceptance");
       const runtime = this.dependencies.evidence ?? fail("capability_unavailable: trusted evidence runtime is required");
       const producer = runtime.verificationAuthority ?? fail("capability_unavailable: trusted verification authority is not configured");
-      const request = verificationInputFor(d, task.id, acceptance_id, version);
+      const request = verificationInputFor(d, task.id, acceptance_id, version,this.dependencies.evidence);
       if (request.command_or_method === "manual") fail("manual_gate_requires_human: use the explicit Human acceptance adapter");
       const handle = await producer(Object.freeze(structuredClone(request)), Object.freeze(structuredClone(record.context)));
       const evidence = await runVerification(handle, request);
@@ -121,7 +122,7 @@ export class PhaseExecutionService {
     const { task, records } = this.select(d, task_id);
     const record = records[task.id] ?? fail("execution_missing");
     const version = await this.verify(d, task, record);
-    const request = verificationInputFor(d, task.id, acceptance_id, version);
+    const request = verificationInputFor(d, task.id, acceptance_id, version,this.dependencies.evidence);
     if (request.command_or_method !== "manual") fail("manual_gate_not_in_contract");
     return request;
   }
@@ -135,9 +136,9 @@ export class PhaseExecutionService {
       const version = await this.verify(d, task, record);
       const runtime = this.dependencies.evidence ?? fail("capability_unavailable: trusted evidence runtime is required");
       const { evidence, authorization } = runManualAcceptance(authority, capability);
-      const expected = verificationInputFor(d, task.id, evidence.receipt.acceptance_id, version);
+      const expected = verificationInputFor(d, task.id, evidence.receipt.acceptance_id, version,this.dependencies.evidence);
       if (expected.command_or_method !== "manual") fail("manual_gate_not_in_contract");
-      const expectedContext = manualAcceptanceContext(await documentAuthorityContext(d, task.id), { approved_input: expected, actual: evidence.receipt.actual, artifact_refs: evidence.receipt.artifact_refs });
+      const expectedContext = manualAcceptanceContext(await documentAuthorityContext(d, task.id,{},this.dependencies.evidence), { approved_input: expected, actual: evidence.receipt.actual, artifact_refs: evidence.receipt.artifact_refs });
       if (canonicalJson(authorization.context) !== canonicalJson(expectedContext)) fail("manual_authorization_context_mismatch");
       const receipt = assertVerificationEvidence(evidence, runtime.signer, expected);
       if (receipt.authorization_ref !== authorization.receipt_hash) fail("manual_authorization_reference_mismatch");
@@ -157,7 +158,7 @@ export class PhaseExecutionService {
       const { task, records } = this.select(d, task_id);
       const record = records[task.id] ?? fail("execution_missing");
       await this.verify(d, task, record);
-      const receipt = await consumeDocumentAuthority(d, decision, enabled ? "docsync_on" : "docsync_off", task.id);
+      const receipt = await consumeDocumentAuthority(d, decision, enabled ? "docsync_on" : "docsync_off", task.id,{},this.dependencies.evidence);
       record.docsync = { enabled, decision: { ...receipt.provenance, action: enabled ? "docsync_on" : "docsync_off" } };
       delete record.last_finalize;
       return this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `DocSync ${enabled ? "on" : "off"}. ${SWITCH_HELP}`, record, receipt);
@@ -169,7 +170,7 @@ export class PhaseExecutionService {
       const release = await acquirePhaseFinalizeLock(document.path, task_id);
       try {
         const current = await this.current(document);
-        const receipt = await consumeDocumentAuthority(current, decision, "finalize", task_id);
+        const receipt = await consumeDocumentAuthority(current, decision, "finalize", task_id,{},this.dependencies.evidence);
         return await this.finalizeLocked(current, task_id, receipt);
       } finally { await release(); }
     });
@@ -191,12 +192,12 @@ export class PhaseExecutionService {
       const verification = [];
       for (const item of task.acceptance) {
         const evidence = record.verification?.find(entry => entry.receipt.acceptance_id === item.id) ?? fail("acceptance_incomplete: every Acceptance requires a trusted verification receipt");
-        const receipt = assertVerificationEvidence(evidence, runtime.signer, verificationInputFor(d, task.id, item.id, version));
+        const receipt = assertVerificationEvidence(evidence, runtime.signer, verificationInputFor(d, task.id, item.id, version,this.dependencies.evidence));
         await verifyArtifactContents(receipt);
         verification.push(receipt);
       }
       if (await this.verify(d, task, record) !== version) fail("acceptance_stale: repository changed while checking verification artifacts");
-      operation = await beginPlanOperation(d,{kind:"phase_finalize",node_id:task.id,execute_id:record.context.execute_id,baseline_id:record.baseline.id,target_root:record.context.target_root,governance_root:record.context.governance_root,authority_ref:authorization.receipt_hash,contract_hash:nodeContractHash(d,task.id),content_version:version});
+      operation = await beginPlanOperation(d,{kind:"phase_finalize",node_id:task.id,execute_id:record.context.execute_id,baseline_id:record.baseline.id,target_root:record.context.target_root,governance_root:record.context.governance_root,authority_ref:authorization.receipt_hash,contract_hash:nodeContractHash(d,task.id,this.dependencies.evidence),content_version:version});
       let finalized: NonNullable<PhaseRecord["finalized"]>;
       if (!record.docsync.enabled) {
         finalized = { check: "skipped", summary: "Documentation check explicitly disabled by Human; Task Acceptance verified.", content_version: version, debt_refs: [], human_exceptions: [] };
@@ -217,7 +218,7 @@ export class PhaseExecutionService {
       if (after !== version) fail("acceptance_stale_after_docsync: documentation changed verified content; rerun every Acceptance");
       if (after !== finalized.content_version) fail("content_changed: repository changed after documentation verification");
       for (const receipt of verification) await verifyArtifactContents(receipt);
-      finalized.evidence = sealFinalizeEvidence(runtime.signer, { plan_id: d.metadata.plan_id, node_id: task.id, contract_hash: nodeContractHash(d, task.id), content_version: after, verification_refs: verification.map(receipt => receipt.receipt_hash), review_ref: review.receipt_hash, dependency_refs: dependencies, authorization_ref: authorization.receipt_hash, docsync_check: finalized.check });
+      finalized.evidence = sealFinalizeEvidence(runtime.signer, { plan_id: d.metadata.plan_id, node_id: task.id, contract_hash: nodeContractHash(d, task.id,this.dependencies.evidence), content_version: after, verification_refs: verification.map(receipt => receipt.receipt_hash), review_ref: review.receipt_hash, dependency_refs: dependencies, authorization_ref: authorization.receipt_hash, docsync_check: finalized.check });
       if (!validatePhaseRecord(record)) fail("invalid_finalize_evidence");
       await this.current(d); // Recheck Plan contract and document version after asynchronous gate work.
       let markdown = inspectPhaseRecords(d.sections.tasks).definition;
@@ -238,10 +239,10 @@ export class PhaseExecutionService {
       records[task.id] = record;
       for (const [id, r] of Object.entries(records)) markdown = upsertPhaseRecord(markdown, id, r);
       const completedTask = parseTasks(markdown).find(item => item.id === task.id);
-      if (!completedTask?.completed || completedTask.workItems.some(item => !item.completed) || completedTask.acceptance.some(item => !item.completed) || canonicalTasksDefinitionHash(markdown) !== d.metadata.reviewed_tasks_hash || !validateTasks(markdown, d.metadata.round).ok) fail("incomplete_batch: refusing a partial or definition-changing completion write");
+      if (!completedTask?.completed || completedTask.workItems.some(item => !item.completed) || completedTask.acceptance.some(item => !item.completed) || (d.metadata.identity_policy !== "node-v1" && canonicalTasksDefinitionHash(markdown) !== d.metadata.reviewed_tasks_hash) || !validateTasks(markdown, d.metadata.round).ok) fail("incomplete_batch: refusing a partial or definition-changing completion write");
       const allDone = parseTasks(markdown).filter(t => t.round === d.metadata.round).every(t => t.completed);
-      let text = replaceSection(d.text, "tasks", markdown);
-      text = replaceFrontmatter(text, { ...d.metadata, stage: allDone ? "awaiting_round_decision" : "executing", stage_status: allDone ? "awaiting_human" : "in_progress" });
+      let text = replaceLogicalSection(d, "tasks", markdown);
+      text = replaceFrontmatter(text, { ...d.metadata, stage: allDone ? "awaiting_round_decision" : d.metadata.identity_policy === "node-v1" ? "tasks" : "executing", stage_status: allDone ? "awaiting_human" : d.metadata.identity_policy === "node-v1" ? "ready_for_review" : "in_progress", ...(d.metadata.identity_policy === "node-v1" ? {selected_node:undefined,pending_node:undefined} : {}) });
       // No implicit next-phase start. One CAS contains every target checkbox and the receipt.
       const finalVersion = await this.dependencies.baseline!.verify(structuredClone(record.context), structuredClone(record.baseline));
       if (finalVersion !== finalized.content_version) fail("content_changed: repository changed before completion write");
@@ -268,11 +269,14 @@ export class PhaseExecutionService {
     const phases = inspectPhaseRecords(d.sections.tasks);
     if (phases.errors.length || !validateTasks(d.sections.tasks, d.metadata.round).ok) fail("invalid_tasks_or_phase_records");
     if (inspectExecutionNotes(phases.definition).errors.length) fail("invalid_execution_notes");
+    if(d.metadata.identity_policy === "node-v1") {requireNodeApproval(d,selectedNode(d),this.dependencies.evidence);return d;}
     if (!d.metadata.approved_what_why_hash || d.metadata.approved_what_why_hash !== canonicalSectionHash(d.sections.what_why) || !d.metadata.approved_plan_hash || d.metadata.approved_plan_hash !== canonicalSectionHash(d.sections.plan) || !d.metadata.reviewed_tasks_hash || d.metadata.reviewed_tasks_hash !== canonicalTasksDefinitionHash(d.sections.tasks)) fail("stale_approval_contract: approved/reviewed definitions are required");
     return d;
   }
 
   private select(d: PlanDocument, id?: string): { task: TaskBlock; records: Record<string, PhaseRecord> } {
+    if(d.metadata.identity_policy === "node-v1" && id && id!==selectedNode(d))fail("node_not_authorized: requested node differs from selected authority");
+    id ??= d.metadata.identity_policy === "node-v1" ? selectedNode(d) : undefined;
     const tasks = parseTasks(d.sections.tasks);
     const records = inspectPhaseRecords(d.sections.tasks).records;
     const available = tasks.filter(t => t.round === d.metadata.round && !t.completed);
@@ -295,7 +299,7 @@ export class PhaseExecutionService {
   }
 
 private contract(d: PlanDocument, nodeId: string): string {
-    return executionDefinitionHash(d, nodeId);
+    return d.metadata.identity_policy === "node-v1" ? nodeContractHash(d,nodeId,this.dependencies.evidence) : executionDefinitionHash(d, nodeId);
   }
 
   private async roots(c: PhaseRecord["context"]): Promise<void> {
@@ -323,7 +327,7 @@ private contract(d: PlanDocument, nodeId: string): string {
   }
 
   private async save(d: PlanDocument, tasks: string, message: string, record: PhaseRecord, receipt?: AuthorizationReceipt, options:PhaseWriteOptions = {}): Promise<PlanOperationResult> {
-    const text = replaceSection(d.text, "tasks", tasks);
+    const text = replaceLogicalSection(d, "tasks", tasks);
     return this.write(d, receipt ? appendAuthorization(text, receipt) : text, message, record,options);
   }
   private async write(d: PlanDocument, text: string, message: string, record: PhaseRecord,options:PhaseWriteOptions = {}): Promise<PlanOperationResult> {

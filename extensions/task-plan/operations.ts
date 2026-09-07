@@ -6,7 +6,10 @@ import type { AuthorityAction, HumanCapability } from "./authority.ts";
 import { readFile, realpath } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash, parseFrontmatter, createPlanSkeleton, findUnfinishedHarnessPlans, readPlanDocument, replaceFrontmatter, sha256, writeIfDocumentHash } from "./plan-file.ts";
-import { replaceSection } from "./sections.ts";
+import { replaceLogicalSection, editNativeNode, domainFor } from "./plan-domain.ts";
+import { parsePlanCandidate } from "./plan-integrity.ts";
+import { readNodeApprovals, requireNodeApproval, selectedNode } from "./node-approval.ts";
+import type { PlanCreationOptions } from "./plan-file.ts";
 import { currentRoundTasks, parseTasks } from "./tasks.ts";
 import { approvePlan, approveWhatWhy, authorizeExecution, closePlan, markTasksReviewed, reconcileState, rollForward, abandonPlan } from "./state.ts";
 import type { TaskPlanModelSwitchState } from "./model-switch.ts";
@@ -30,6 +33,7 @@ export interface TaskBinding {
 
 export interface TaskPlanSessionState {
   currentPlanPath?: string;
+  creationOptions?: PlanCreationOptions;
   binding?: TaskBinding;
   reportedThisTurn?: boolean;
   modelSwitch?: TaskPlanModelSwitchState;
@@ -45,7 +49,7 @@ export class TaskPlanService {
   async start(goal: string, titleOverride?: string): Promise<PlanOperationResult> {
     if (!goal.trim()) return validation("Plan goal is required", []);
     try {
-      const doc = await createPlanSkeleton(this.cwd, goal.trim(), titleOverride);
+      const doc = await createPlanSkeleton(this.cwd, goal.trim(), titleOverride, this.sessionState.creationOptions);
       this.sessionState.currentPlanPath = doc.path;
       return { ...ok("created", "Created Harness Plan skeleton", doc), snapshot: snapshot(doc, this.sessionState.binding) };
     } catch (error) {
@@ -56,7 +60,7 @@ export class TaskPlanService {
   async get(planPath?: string): Promise<PlanOperationResult> {
     const loaded = await this.load(planPath,true);
     if ("status" in loaded) return loaded;
-    const proposed = reconcileState(loaded);
+    const proposed = reconcileState(loaded,this.sessionState.phaseDependencies?.evidence);
     const issues = [...validateFrontmatter(loaded).issues,...validateApprovalHashes(loaded).issues,...validateProgress(loaded).issues];
     if (proposed.conflict) issues.push({severity:"error",code:"reconciliation_conflict",message:proposed.conflict});
     try { await assertOperationWritable(await realpath(loaded.path)); } catch(error) { issues.push({severity:"error",code:"operation_recovery_required",message:String((error as Error).message)}); }
@@ -71,7 +75,7 @@ export class TaskPlanService {
     const loaded = await this.load(params.planPath,true);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
-    const proposed = reconcileState(loaded);
+    const proposed = reconcileState(loaded,this.sessionState.phaseDependencies?.evidence);
     if (proposed.conflict) return conflict(proposed.conflict);
     if (!proposed.changed && loaded.metadata.operation_runtime !== undefined) return {...ok("ok","No reconciliation required",loaded),snapshot:snapshot(loaded,this.sessionState.binding)};
     if (!loaded.metadata.operation_runtime && Object.keys(inspectPhaseRecords(loaded.sections.tasks).records).length) return conflict("runtime_binding_required: legacy execution needs explicit baseline-preserving operator recovery");
@@ -105,18 +109,30 @@ export class TaskPlanService {
     }catch(error){return conflict(String((error as Error).message));}
   }
 
-  async submitSection(params: { expected_document_hash: string; content: string; planPath?: string }): Promise<PlanOperationResult> {
+  async submitSection(params: { expected_document_hash: string; content: string; section?: "plan" | "tasks"; planPath?: string }): Promise<PlanOperationResult> {
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
-    const reconciled = reconcileState(loaded);
+    const reconciled = reconcileState(loaded,this.sessionState.phaseDependencies?.evidence);
     if (reconciled.changed) return conflict(`reconciliation_required: ${reconciled.reason}`);
-    const section = sectionForStage(loaded.metadata.stage);
+    const activeV1=loaded.format === "v1" && loaded.metadata.identity_policy === "node-v1" && loaded.metadata.stage === "executing";
+    const section = activeV1 ? params.section ?? "tasks" : sectionForStage(loaded.metadata.stage);
+    if(params.section && !activeV1 && params.section!==section)return validation("section_not_current",[]);
     if (!section) return validation(`Cannot submit section while stage is ${loaded.metadata.stage}`, []);
+    if(loaded.format === "v2" && section === "tasks")return validation("native_node_edit_required: submit one canonical node",[]);
     if (section === "tasks" && !preservesExecutionState(loaded.sections.tasks, params.content)) return conflict("reserved_execution_state_changed: Tasks editing cannot add, modify or delete execution records/notes");
-    const candidateIssues = validateCandidate(section, params.content, loaded.metadata).issues;
+    const candidateIssues = (loaded.format === "v2" && section === "plan" ? {issues:[]} : validateCandidate(section, params.content, loaded.metadata)).issues;
     if (candidateIssues.some((i) => i.severity === "error")) return validation("Section validation failed", candidateIssues);
-    let text = replaceSection(loaded.text, section, params.content);
+    let text = replaceLogicalSection(loaded, section, params.content);
+    if(activeV1) {
+      try {
+        const candidate=parsePlanCandidate(loaded.path,text);
+        for(const id of Object.keys(inspectPhaseRecords(loaded.sections.tasks).records))if(nodeContractHash(loaded,id,this.sessionState.phaseDependencies?.evidence)!==nodeContractHash(candidate,id,this.sessionState.phaseDependencies?.evidence))return conflict("active_contract_edit_requires_recovery");
+        const mapping=validatePlanNodeMapping(candidate.sections.plan,candidate.sections.tasks,{currentNodeId:selectedNode(loaded)}).filter(i=>i.severity==="error");
+        if(mapping.length)return validation("Plan/Tasks contract mapping failed",mapping);
+        return this.write(loaded,text,"Submitted unrelated future definition; active node authority preserved");
+      }catch(error){return validation(String((error as Error).message),[]);}
+    }
     const metadata = { ...loaded.metadata, stage_status: "ready_for_review" as const };
     if (section === "tasks" && ["awaiting_execution_approval", "executing", "awaiting_round_decision"].includes(loaded.metadata.stage)) {
       metadata.stage = "tasks";
@@ -128,33 +144,56 @@ export class TaskPlanService {
     return this.write(loaded, text, "Submitted current section");
   }
 
+  async submitNode(params:{expected_document_hash:string;node_id:string;content:string;planPath?:string}):Promise<PlanOperationResult> {
+    const loaded=await this.load(params.planPath,true);
+    if("status" in loaded)return loaded;
+    if(loaded.document_hash!==params.expected_document_hash)return conflict("stale_document_hash");
+    if(!["plan","tasks","awaiting_execution_approval","executing"].includes(loaded.metadata.stage))return validation("Native node editing requires plan/tasks/execution stage",[]);
+    try {
+      if(domainFor(loaded).nodes.find(n=>n.id===params.node_id)?.progress==="completed")return validation("reopen_required: finalized contract cannot be edited",[]);
+      let text=editNativeNode(loaded,params.node_id,params.content);
+      const candidate=parsePlanCandidate(loaded.path,text);
+      if(inspectPhaseRecords(loaded.sections.tasks).records[params.node_id] && nodeContractHash(loaded,params.node_id,this.sessionState.phaseDependencies?.evidence)!==nodeContractHash(candidate,params.node_id,this.sessionState.phaseDependencies?.evidence))return conflict("active_contract_edit_requires_recovery: preserve the original execution contract and baseline");
+      const proposed=reconcileState(candidate,this.sessionState.phaseDependencies?.evidence);
+      if(proposed.conflict && loaded.metadata.stage === "executing")return conflict(proposed.conflict);
+      if(proposed.changed)text=proposed.text;
+      const metadata=parseFrontmatter(text).metadata;
+      if(["plan","tasks"].includes(metadata.stage))text=replaceFrontmatter(text,{...metadata,stage_status:"ready_for_review"});
+      return this.write(loaded,text,"Submitted canonical node candidate");
+    }catch(error){return validation(String((error as Error).message),[]);}
+  }
+
   async advance(params: { expected_document_hash: string; action?: "next" | "approve_contract" | "execute" | "next_round" | "complete"; reason?: string; planPath?: string }): Promise<PlanOperationResult> {
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
-    const reconciled = reconcileState(loaded);
+    const reconciled = reconcileState(loaded,this.sessionState.phaseDependencies?.evidence);
     if (reconciled.changed) return conflict(`reconciliation_required: ${reconciled.reason}`);
     if (loaded.metadata.stage_status === "drafting") return validation("Drafting content cannot be advanced; submit or review it first", []);
     let metadata: PlanMetadata;
     let authorityAction: AuthorityAction;
+    let authorityNode="$plan";
     if (loaded.metadata.stage === "what_why") {
       const v = validateWhatWhy(loaded.sections.what_why); if (!v.ok) return validation("What / Why validation failed", v.issues);
       authorityAction = "approve_what_why";
       metadata = approveWhatWhy(loaded.metadata, loaded.sections.what_why);
     } else if (loaded.metadata.stage === "plan") {
       if (!loaded.metadata.approved_what_why_hash) return validation("What / Why is not approved", []);
-      const v = validatePlan(loaded.sections.plan, loaded.metadata.round); if (!v.ok) return validation("Plan validation failed", v.issues);
+      const v = validateDocumentPlan(loaded); if (!v.ok) return validation("Plan validation failed", v.issues);
       authorityAction = "approve_plan";
       metadata = approvePlan(loaded.metadata, loaded.sections.plan);
     } else if (loaded.metadata.stage === "awaiting_execution_approval") {
       const v = this.executionReadiness(loaded); if (!v.ok) return validation("Execution readiness validation failed", v.issues);
+      if(loaded.metadata.identity_policy === "node-v1")authorityNode=selectedNode(loaded);
       if (params.action === "execute") {
-        if (loaded.metadata.approved_contract_hash !== phaseExecutionDefinitionHash(loaded)) return validation("contract_approval_required: approve the detailed contract separately", []);
+        if(loaded.metadata.identity_policy === "node-v1") {
+          try{requireNodeApproval(loaded,authorityNode,this.sessionState.phaseDependencies?.evidence,false);}catch(error){return validation(String((error as Error).message),[]);}
+        } else if (loaded.metadata.approved_contract_hash !== phaseExecutionDefinitionHash(loaded)) return validation("contract_approval_required: approve the detailed contract separately", []);
         authorityAction = "authorize_execution";
         metadata = authorizeExecution(loaded.metadata);
       } else if (!params.action || params.action === "next" || params.action === "approve_contract") {
         authorityAction = "approve_contract";
-        metadata = { ...loaded.metadata, approved_contract_hash: phaseExecutionDefinitionHash(loaded) };
+        metadata = loaded.metadata.identity_policy === "node-v1" ? {...loaded.metadata} : { ...loaded.metadata, approved_contract_hash: phaseExecutionDefinitionHash(loaded) };
       } else return validation("Explicit contract approval or execution authorization required", []);
     } else if (loaded.metadata.stage === "awaiting_round_decision") {
       try { assertAllFinalizedHistory(loaded,this.sessionState.phaseDependencies?.evidence); } catch(error) { return validation(String((error as Error).message),[]); }
@@ -168,51 +207,56 @@ export class TaskPlanService {
     } else {
       return validation(`Cannot advance from ${loaded.metadata.stage}`, []);
     }
-    return this.authorizedWrite(loaded, replaceFrontmatter(loaded.text, metadata), `Advanced to ${metadata.stage}`, authorityAction);
+    return this.authorizedWrite(loaded, replaceFrontmatter(loaded.text, metadata), `Advanced to ${metadata.stage}`, authorityAction, authorityNode);
   }
 
-  async review(params: { expected_document_hash: string; candidate_tasks?: string; summary?: string; planPath?: string }): Promise<PlanOperationResult> {
+  async review(params: { expected_document_hash: string; candidate_tasks?: string; task_id?:string; summary?: string; planPath?: string }): Promise<PlanOperationResult> {
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
-    const reconciled = reconcileState(loaded);
+    const reconciled = reconcileState(loaded,this.sessionState.phaseDependencies?.evidence);
     if (reconciled.changed) return conflict(`reconciliation_required: ${reconciled.reason}`);
     if (loaded.metadata.stage === "what_why") {
       const v = validateWhatWhy(loaded.sections.what_why); if (!v.ok) return validation("What / Why review failed", v.issues);
       return this.write(loaded, replaceFrontmatter(loaded.text, { ...loaded.metadata, stage_status: "ready_for_review" }), "What / Why ready for Human review");
     }
     if (loaded.metadata.stage === "plan") {
-      const v = validatePlan(loaded.sections.plan, loaded.metadata.round); if (!v.ok) return validation("Plan review failed", v.issues);
+      const v = validateDocumentPlan(loaded); if (!v.ok) return validation("Plan review failed", v.issues);
       return this.write(loaded, replaceFrontmatter(loaded.text, { ...loaded.metadata, stage_status: "ready_for_review" }), "Plan ready for Human review");
     }
     if (loaded.metadata.stage !== "tasks") return this.get(loaded.path);
+    if(loaded.format === "v2" && params.candidate_tasks!==undefined)return validation("native_node_edit_required",[]);
     const nextTasks = params.candidate_tasks ?? loaded.sections.tasks;
     if (!preservesExecutionState(loaded.sections.tasks, nextTasks)) return conflict("reserved_execution_state_changed: Review cannot add, modify or delete execution records/notes");
-    const v = validateTasks(nextTasks, loaded.metadata.round, { requireCurrentOpen: true, historicalCompleted: true });
+    const v = validateTasks(nextTasks, loaded.metadata.round, { requireCurrentOpen: loaded.metadata.identity_policy !== "node-v1", historicalCompleted: true });
     if (!v.ok) return validation("Tasks review failed", v.issues);
     const mapping = validatePlanNodeMapping(loaded.sections.plan, nextTasks, {currentNodeId:currentRoundTasks(nextTasks,loaded.metadata.round)[0]?.id}).filter(i=>i.severity === "error");
     if (mapping.length) return validation("Plan/Tasks contract mapping failed", mapping);
     const runtime = this.sessionState.phaseDependencies?.evidence;
     if (!runtime) return validation("capability_unavailable: trusted reviewer and receipt signer required", []);
     try {
-      let text = replaceSection(loaded.text, "tasks", nextTasks);
-      const candidate = {...loaded,text,sections:{...loaded.sections,tasks:nextTasks}};
+      let text = replaceLogicalSection(loaded, "tasks", nextTasks);
+      const candidate = parsePlanCandidate(loaded.path,text);
       const summaries: string[] = [];
       let passed = true;
-      for (const task of currentRoundTasks(nextTasks,loaded.metadata.round)) {
+      const open=currentRoundTasks(nextTasks,loaded.metadata.round).filter(t=>!t.completed);
+      const node=loaded.metadata.identity_policy === "node-v1" ? (params.task_id ? open.find(t=>t.id===params.task_id) : open.length===1 ? open[0] : undefined) : undefined;
+      if(loaded.metadata.identity_policy === "node-v1" && !node)return validation("phase_selection_required: review one open node",[]);
+      for (const task of node ? [node] : currentRoundTasks(nextTasks,loaded.metadata.round)) {
+        if(node)dependencyFinalizations(candidate,task.id,runtime);
         const risk = effectiveNodeRisk(task,runtime);
         const reviewer = runtime.reviewer ?? (risk === "low" ? configureReviewAuthority({signer:runtime.signer,session_id:`controller-structural:${runtime.implementer_session_id}`,implementer_session_id:runtime.implementer_session_id,fresh:false,run:async()=>({review_type:"deterministic",result:"passed",summary:"Task structure and Plan mapping passed deterministic validation",evidence_refs:["task-plan:structural-review/v1"]})}) : undefined);
         if (!reviewer) return validation("capability_unavailable: fresh independent review required for unknown/medium/high risk", []);
-        const evidence = await runReview(reviewer,{node_id:task.id,contract_hash:nodeContractHash(candidate,task.id),risk});
-        authenticateReviewEvidence(evidence,runtime.signer,{node_id:task.id,contract_hash:nodeContractHash(candidate,task.id),risk,implementer_session_id:runtime.implementer_session_id});
+        const evidence = await runReview(reviewer,{node_id:task.id,contract_hash:nodeContractHash(candidate,task.id,runtime),risk});
+        authenticateReviewEvidence(evidence,runtime.signer,{node_id:task.id,contract_hash:nodeContractHash(candidate,task.id,runtime),risk,implementer_session_id:runtime.implementer_session_id});
         text = writeReviewEvidence(text,task.id,evidence);
         summaries.push(`${task.id}: ${evidence.receipt.result} — ${evidence.receipt.summary}`);
         passed &&= evidence.receipt.result === "passed";
       }
       // Model summaries are candidate commentary; only the configured review result is authoritative.
-      text = replaceSection(text,"review",upsertReview(loaded.sections.review,loaded.metadata.round,summaries.join("\n\n")));
+      text = replaceLogicalSection(parsePlanCandidate(loaded.path,text),"review",upsertReview(loaded.sections.review,loaded.metadata.round,summaries.join("\n\n")));
       const metadata = parseFrontmatter(text).metadata;
-      if (passed) text = replaceFrontmatter(text,markTasksReviewed(metadata,nextTasks));
+      if (passed) text = replaceFrontmatter(text,node ? {...metadata,pending_node:node.id,selected_node:undefined,stage:"awaiting_execution_approval",stage_status:"awaiting_human"} : markTasksReviewed(metadata,nextTasks));
       else {
         delete metadata.reviewed_tasks_hash;
         delete metadata.approved_contract_hash;
@@ -232,6 +276,7 @@ export class TaskPlanService {
     const task = currentRoundTasks(loaded.sections.tasks, loaded.metadata.round).find((candidate) => candidate.id === params.task_id);
     if (!task) return validation(`Task ${params.task_id} is not in current round`, []);
     if (task.completed) return validation(`Task ${params.task_id} is already complete`, []);
+    if(loaded.metadata.identity_policy === "node-v1" && task.id!==selectedNode(loaded))return validation("node_not_authorized",[]);
     try { dependencyFinalizations(loaded,task.id,this.sessionState.phaseDependencies?.evidence); } catch(error) { return validation(String((error as Error).message),[]); }
     const binding = { task_id: task.id, plan_path: loaded.path, round: loaded.metadata.round, task_definition_hash: canonicalTasksDefinitionHash(task.definition), contract: task };
     this.sessionState.binding = binding;
@@ -340,9 +385,16 @@ export class TaskPlanService {
     const task = currentRoundTasks(loaded.sections.tasks, loaded.metadata.round).find((candidate) => candidate.id === params.task_id);
     if (!task) return validation(`Task ${params.task_id} is not in current round`, []);
     if (params.status === "completed" && loaded.metadata.stage !== "executing") return validation("Human completion requires executing stage", []);
-    if (params.status === "open" && !["executing", "awaiting_round_decision"].includes(loaded.metadata.stage)) return validation("Human reopen requires executing or awaiting_round_decision stage", []);
+    if (params.status === "open" && !["executing", "awaiting_round_decision", ...(loaded.metadata.identity_policy === "node-v1" ? ["tasks","awaiting_execution_approval"] : [])].includes(loaded.metadata.stage)) return validation("Human reopen requires an execution or node selection stage", []);
     if (params.status === "completed") return this.finalizePhase(params);
-    try { assertReopenRecoverable(loaded,task.id); } catch(error) { return validation(String((error as Error).message),[]); }
+    try {
+      if(loaded.metadata.identity_policy === "node-v1") {
+        if(!inspectPhaseRecords(loaded.sections.tasks).records[task.id])throw new Error("reopen_execution_required: an unstarted node has no execution to reopen");
+        requireNodeApproval(loaded,task.id,this.sessionState.phaseDependencies?.evidence);
+        requireNodeReview(loaded,task.id,this.sessionState.phaseDependencies?.evidence);
+      }
+      assertReopenRecoverable(loaded,task.id);
+    } catch(error) { return validation(String((error as Error).message),[]); }
     // Reopening invalidates all previous evidence, but preserves execution identity/baseline.
     let definition = task.definition.replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/m, "$1 [ ]")
       .replace(/^([ \t]*- )\[(?: |x|X)\]/gm, "$1[ ]")
@@ -357,7 +409,7 @@ export class TaskPlanService {
       for (const work of task.workItems) definition = upsertExecutionNote(definition, work.id, { version: 1, status: "in_progress", summary: "Reopened by Human; previous evidence invalidated", files: [], change_types: [] });
     }
     const tasks = loaded.sections.tasks.replace(task.definition, definition);
-    const text = replaceFrontmatter(replaceSection(loaded.text, "tasks", tasks), { ...loaded.metadata, stage: "executing", stage_status: "in_progress" });
+    const text = replaceFrontmatter(replaceLogicalSection(loaded, "tasks", tasks), { ...loaded.metadata, stage: "executing", stage_status: "in_progress", ...(loaded.metadata.identity_policy === "node-v1" ? {selected_node:task.id,pending_node:undefined} : {}) });
     delete this.sessionState.binding;
     return this.authorizedWrite(loaded, text, `Task ${task.id} reopened; previous acceptance invalidated`, "reopen", task.id);
   }
@@ -387,7 +439,7 @@ export class TaskPlanService {
       if (!path) return conflict("No unfinished Harness Plan found");
       const doc = await readPlanDocument(path);
       this.sessionState.currentPlanPath = doc.path;
-      const reconciled = reconcileState(doc);
+      const reconciled = reconcileState(doc,this.sessionState.phaseDependencies?.evidence);
       if (!allowCompletionConflict && reconciled.conflict) return conflict(reconciled.conflict);
       if (!allowCompletionConflict && reconciled.changed) return conflict(`reconciliation_required: ${reconciled.reason}`);
       return doc;
@@ -404,7 +456,10 @@ export class TaskPlanService {
   private executionReadiness(document: PlanDocument) {
     const result = validateExecutionReadiness(document);
     try {
-      for (const task of currentRoundTasks(document.sections.tasks,document.metadata.round).filter(t=>!t.completed)) {
+      const modern=document.metadata.identity_policy === "node-v1";
+      const id=modern ? selectedNode(document) : undefined;
+      for (const task of currentRoundTasks(document.sections.tasks,document.metadata.round).filter(t=>!t.completed && (!modern || t.id===id))) {
+        if(modern && document.metadata.stage === "executing")requireNodeApproval(document,task.id,this.sessionState.phaseDependencies?.evidence);
         requireNodeReview(document,task.id,this.sessionState.phaseDependencies?.evidence);
         // Dependency readiness is evaluated when a node is actually bound/executed, not when reviewing future work.
       }
@@ -421,7 +476,17 @@ export class TaskPlanService {
 
   private async authorizedWrite(loaded: PlanDocument, text: string, message: string, action: AuthorityAction, nodeId = "$plan"): Promise<PlanOperationResult> {
     try {
-      const receipt = await consumeDocumentAuthority(loaded, this.takeCapability(), action, nodeId);
+      const receipt = await consumeDocumentAuthority(loaded, this.takeCapability(), action, nodeId,{},this.sessionState.phaseDependencies?.evidence);
+      if(loaded.metadata.identity_policy === "node-v1" && ["approve_contract","authorize_execution"].includes(action)) {
+        const metadata=parseFrontmatter(text).metadata, approvals=readNodeApprovals(metadata);
+        if(action==="approve_contract")approvals[nodeId]={contract_hash:receipt.context.contract_hash,contract_authorization_ref:receipt.receipt_hash};
+        else {
+          requireNodeApproval(loaded,nodeId,this.sessionState.phaseDependencies?.evidence,false);
+          approvals[nodeId]={...approvals[nodeId]!,execution_authorization_ref:receipt.receipt_hash};
+          metadata.selected_node=nodeId;delete metadata.pending_node;
+        }
+        text=replaceFrontmatter(text,{...metadata,node_approvals:JSON.stringify(approvals)});
+      }
       return this.write(loaded, appendAuthorization(text, receipt), message);
     } catch (error) { return validation(String((error as Error).message), []); }
   }
@@ -473,10 +538,11 @@ function validateExecutionReadiness(document: PlanDocument) {
     ...validateFrontmatter(document).issues,
     ...validateProgress(document).issues,
     ...validateSections(document.text).issues,
-    ...validatePlanNodeMapping(document.sections.plan,document.sections.tasks,{currentNodeId:currentRoundTasks(document.sections.tasks,document.metadata.round)[0]?.id}),
+    ...validatePlanNodeMapping(document.sections.plan,document.sections.tasks,{currentNodeId:String(document.metadata.selected_node ?? document.metadata.pending_node ?? currentRoundTasks(document.sections.tasks,document.metadata.round).find(t=>!t.completed)?.id ?? "")}),
     ...validateTasks(document.sections.tasks, document.metadata.round, { historicalCompleted: true }).issues,
   ];
   if (!document.metadata.approved_what_why_hash || document.metadata.approved_what_why_hash !== canonicalSectionHash(document.sections.what_why)) issues.push({ severity: "error" as const, code: "what_why_not_approved", message: "What / Why hash is not approved" });
+  if(document.metadata.identity_policy === "node-v1")return {ok:issues.every(i=>i.severity!=="error"),issues};
   if (!document.metadata.approved_plan_hash || document.metadata.approved_plan_hash !== canonicalSectionHash(document.sections.plan)) issues.push({ severity: "error" as const, code: "plan_not_approved", message: "Plan hash is not approved" });
   if (!document.metadata.reviewed_tasks_hash || document.metadata.reviewed_tasks_hash !== canonicalTasksDefinitionHash(document.sections.tasks)) issues.push({ severity: "error" as const, code: "tasks_not_reviewed", message: "Tasks hash is not reviewed" });
   return { ok: issues.every((i) => i.severity !== "error"), issues };
@@ -501,7 +567,9 @@ function snapshot(document: PlanDocument, binding?: TaskBinding) {
     document_hash: document.document_hash,
     metadata: document.metadata,
     sections: document.sections,
-    nodes: readPlanNodes(document.sections.plan, document.sections.tasks),
+    format:document.format ?? "v1",
+    domain:document.domain,
+    nodes: document.format === "v2" ? domainFor(document).nodes : readPlanNodes(document.sections.plan, document.sections.tasks),
     node_mapping_issues: validatePlanNodeMapping(document.sections.plan, document.sections.tasks, { currentNodeId: currentNodeId(document) }),
     binding,
   };
@@ -516,3 +584,11 @@ function ok(status: PlanOperationResult["status"], message: string, document: Pl
 function conflict(message: string): PlanOperationResult { return { status: "conflict", message, conflicts: [{ message }] }; }
 function validation(message: string, issues: ValidationIssue[]): PlanOperationResult { return { status: "validation_error", message, issues }; }
 function resolvePath(cwd: string, path: string): string { return isAbsolute(path) ? resolve(path) : resolve(cwd, path); }
+
+function validateDocumentPlan(document:PlanDocument) {
+  if(document.format!=="v2")return validatePlan(document.sections.plan,document.metadata.round);
+  const domain=domainFor(document), issues:ValidationIssue[]=[];
+  for(const name of ["Strategy","Key Decisions","Risks / Unknowns","Replan Conditions"])if(!domain.strategy.includes(`### ${name}`))issues.push({severity:"error",code:"missing_plan_field",message:`Missing shared ${name}`});
+  if(!domain.nodes.length || domain.nodes.some(n=>!n.outcome.trim()))issues.push({severity:"error",code:"missing_node_outcome",message:"Plan needs nodes with defined outcomes"});
+  return {ok:!issues.length,issues};
+}
