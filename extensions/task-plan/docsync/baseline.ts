@@ -1,3 +1,5 @@
+import { assertAuthorizationReceipt } from "../authority.ts";
+import { parseFrontmatter } from "../plan-file.ts";
 import { constants } from "node:fs";
 import { link, lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -96,8 +98,24 @@ function planBytes(bytes: Buffer): Buffer {
   if (!Buffer.from(text).equals(bytes)) throw new Error("Non-UTF8 Plan");
   // Completion changes this validated lifecycle pair in addition to the checklist.
   // Normalize only these two exact pairs, never arbitrary frontmatter/approvals.
-  const header = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(text);
+  let header = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(text);
   if (header) {
+    const authorityLines = [...header[1]!.matchAll(/^authority_receipts: ([^\r\n]*)\r?$/gm)];
+    if (authorityLines.length > 1) throw new Error("Duplicate authority receipts");
+    if (authorityLines.length) {
+      const metadata = parseFrontmatter(text).metadata;
+      const receipts: unknown = JSON.parse(String(metadata.authority_receipts));
+      if (!Array.isArray(receipts) || receipts.length > 4096 || JSON.stringify(JSON.stringify(receipts)) !== authorityLines[0]![1]) throw new Error("Noncanonical authority receipts");
+      const ids = new Set<string>();
+      for (const receipt of receipts) {
+        assertAuthorizationReceipt(receipt);
+        if (receipt.context.plan_id !== metadata.plan_id || ids.has(receipt.id)) throw new Error("Foreign or duplicate authority receipt");
+        ids.add(receipt.id);
+      }
+      // Event evidence is not contract content. Approval hashes and all other fields remain covered.
+      text = text.replace(/^authority_receipts: [^\r\n]*\r?\n/m, "");
+      header = /^---\r?\n([\s\S]*?)\r?\n---(?=\r?\n|$)/.exec(text)!;
+    }
     const stages = [...header[1]!.matchAll(/^stage: ([^\r\n]*)\r?$/gm)];
     const statuses = [...header[1]!.matchAll(/^stage_status: ([^\r\n]*)\r?$/gm)];
     if (stages.length === 1 && statuses.length === 1 && ((stages[0]![1] === "executing" && statuses[0]![1] === "in_progress") || (stages[0]![1] === "awaiting_round_decision" && statuses[0]![1] === "awaiting_human"))) {
