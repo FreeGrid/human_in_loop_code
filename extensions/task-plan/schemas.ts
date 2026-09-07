@@ -31,7 +31,6 @@ export const PlanReportTaskResultParameters = Type.Object({
   change_types: Type.Optional(Type.Array(StringEnum(["api", "cli", "config", "extension", "code", "docs", "test", "other"] as const), { maxItems: 8 })),
   result: StringEnum(["in_progress", "blocked", "completed"] as const),
   summary: Type.String(),
-  acceptance_results: Type.Optional(Type.Array(Type.Object({ item: Type.String(), satisfied: Type.Boolean() }))),
 });
 export type PlanReportTaskResultParams = Static<typeof PlanReportTaskResultParameters>;
 
@@ -48,7 +47,6 @@ export const PlanReportTaskResultsParameters = Type.Object({
     change_types: Type.Optional(Type.Array(StringEnum(["api", "cli", "config", "extension", "code", "docs", "test", "other"] as const), { maxItems: 8 })),
     result: StringEnum(["in_progress", "blocked", "completed"] as const),
     summary: Type.String(),
-    acceptance_results: Type.Optional(Type.Array(Type.Object({ item: Type.String(), satisfied: Type.Boolean() }))),
   }), { minItems: 1, maxItems: 64 }),
 });
 export const PlanFinalizeParameters = Type.Object({ expected_document_hash: ExpectedHash, planPath: PlanPath, task_id: Type.String({ pattern: "^T\\d{3}$" }) });
@@ -59,3 +57,5 @@ export type PlanReportTaskResultsParams = Static<typeof PlanReportTaskResultsPar
 
 export const PlanAbandonParameters = Type.Object({ expected_document_hash: ExpectedHash, reason: Type.Optional(Type.String()), planPath: PlanPath });
 export type PlanAbandonParams = Static<typeof PlanAbandonParameters>;
+
+export const PlanVerifyAcceptanceParameters = Type.Object({expected_document_hash:ExpectedHash,planPath:PlanPath,task_id:Type.String({pattern:"^T\\d{3}$"}),acceptance_id:Type.String({pattern:"^T\\d{3}\\.A\\d{3}$"})});
