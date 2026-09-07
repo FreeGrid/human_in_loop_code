@@ -1,3 +1,7 @@
+import { selectedNode } from "./node-approval.ts";
+import { nodeContractHash } from "./receipt-state.ts";
+import { parsePlanCandidate } from "./plan-integrity.ts";
+import type { PlanCreationOptions } from "./plan-file.ts";
 import { randomUUID } from "node:crypto";
 import { issueHumanCapability, type AuthorityAction } from "./authority.ts";
 import { documentAuthorityContext } from "./authority-context.ts";
@@ -40,7 +44,7 @@ export * from "./tasks.ts";
 export * from "./types.ts";
 export * from "./validators.ts";
 
-export interface TaskPlanExtensionConfig extends TaskPlanModelSwitchConfig { phase?: PhaseDependencies }
+export interface TaskPlanExtensionConfig extends TaskPlanModelSwitchConfig { phase?: PhaseDependencies; creationOptions?:PlanCreationOptions }
 
 export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExtensionConfig = {}): void {
   const envConfig = taskPlanModelConfigFromEnv();
@@ -50,7 +54,7 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
     planning: { ...envConfig.planning, ...config.planning },
     normal: { ...envConfig.normal, ...config.normal },
   });
-  const state: TaskPlanSessionState = { modelSwitch: {}, phaseDependencies: { baseline: new GitBaselineProvider(), ...config.phase } };
+  const state: TaskPlanSessionState = { modelSwitch: {}, creationOptions:config.creationOptions, phaseDependencies: { baseline: new GitBaselineProvider({planIdentityResolver:async(context,text)=>({policy:"node-v1",identity:nodeContractHash(parsePlanCandidate(context.plan_path,text),context.phase_id,config.phase?.evidence)})}), ...config.phase } };
   registerTaskPlanTools(pi, state);
   registerTaskPlanCommands(pi, state, modelConfig);
 
@@ -109,7 +113,8 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
       ctx.ui.notify("No unambiguous context-bound authorization issued. First execution requires /plan:execute and explicit roots.", "info");
       return { action: "continue" };
     }
-    const context = await documentAuthorityContext(document, node);
+    if(document.metadata.identity_policy === "node-v1" && ["approve_contract","authorize_execution"].includes(action))node=selectedNode(document);
+    const context = await documentAuthorityContext(document, node,{},state.phaseDependencies?.evidence);
     state.humanCapability = issueHumanCapability(action, context, { source: event.source, input_id: randomUUID(), text: event.text });
     if (action === "docsync_on" || action === "docsync_off") {
       const result = await service.setPhaseDocSync({ expected_document_hash: document.document_hash, task_id: node, enabled: action === "docsync_on" });

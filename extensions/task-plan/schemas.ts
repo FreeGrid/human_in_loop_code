@@ -12,13 +12,13 @@ export type PlanStartParams = Static<typeof PlanStartParameters>;
 export const PlanGetParameters = Type.Object({ planPath: PlanPath });
 export type PlanGetParams = Static<typeof PlanGetParameters>;
 
-export const PlanSubmitSectionParameters = Type.Object({ expected_document_hash: ExpectedHash, content: Type.String(), planPath: PlanPath });
+export const PlanSubmitSectionParameters = Type.Object({ expected_document_hash: ExpectedHash, section:Type.Optional(StringEnum(["plan","tasks"] as const)), content: Type.String(), planPath: PlanPath });
 export type PlanSubmitSectionParams = Static<typeof PlanSubmitSectionParameters>;
 
 export const PlanAdvanceParameters = Type.Object({ expected_document_hash: ExpectedHash, action: Type.Optional(StringEnum(["next", "approve_contract", "execute", "next_round", "complete"] as const)), reason: Type.Optional(Type.String()), planPath: PlanPath });
 export type PlanAdvanceParams = Static<typeof PlanAdvanceParameters>;
 
-export const PlanReviewParameters = Type.Object({ expected_document_hash: ExpectedHash, candidate_tasks: Type.Optional(Type.String()), summary: Type.Optional(Type.String()), planPath: PlanPath });
+export const PlanReviewParameters = Type.Object({ expected_document_hash: ExpectedHash, task_id:Type.Optional(Type.String({pattern:"^T\\d{3}$"})), candidate_tasks: Type.Optional(Type.String()), summary: Type.Optional(Type.String()), planPath: PlanPath });
 export type PlanReviewParams = Static<typeof PlanReviewParameters>;
 
 export const PlanBindTaskParameters = Type.Object({ expected_document_hash: ExpectedHash, task_id: Type.String({ pattern: "^T\\d{3}$" }), planPath: PlanPath });
@@ -64,3 +64,5 @@ export const PlanReconcileParameters = Type.Object({expected_document_hash:Expec
 
 export const PlanRecoveryStatusParameters = Type.Object({operation_id:Type.Optional(Type.String({format:"uuid"})),planPath:PlanPath});
 export const PlanRecoverParameters = Type.Object({operation_id:Type.String({format:"uuid"}),expected_document_hash:ExpectedHash,expected_journal_head:Type.String({pattern:"^[a-f0-9]{64}$"}),planPath:PlanPath});
+
+export const PlanSubmitNodeParameters = Type.Object({expected_document_hash:ExpectedHash,node_id:Type.String({pattern:"^T\\d{3}$"}),content:Type.String(),planPath:PlanPath});
