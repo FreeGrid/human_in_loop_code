@@ -84,6 +84,8 @@ export function assertV3RuntimeState(value: unknown): asserts value is V3Runtime
     ids.add(String(revision.revision_id)); executions.add(String(revision.execute_id));
     for (const field of ["approval", "authorization", "finalize_authorization"] as const) if (revision[field] !== null) {
       assertAuthorizationReceipt(revision[field]); const receipt = revision[field];
+      const action = field === "approval" ? "approve_contract" : field === "authorization" ? "authorize_execution" : "finalize";
+      if (receipt.context.payload_hash !== canonicalHash({ action, revision_id: revision.revision_id, execute_id: revision.execute_id })) v3Fail("runtime_authority_revision_binding");
       if (receipt.action !== (field === "approval" ? "approve_contract" : field === "authorization" ? "authorize_execution" : "finalize") || receipt.context.plan_id !== value.plan_id || receipt.context.node_id !== revision.contract.node_id || receipt.context.contract_hash !== revision.contract.contract_hash || receipt.context.target_root !== value.target_root || receipt.context.governance_root !== value.governance_root) v3Fail("runtime_authority_binding");
     }
     if (revision.baseline !== null) { assertV3Baseline(revision.baseline); if (revision.baseline.root !== value.target_root) v3Fail("runtime_baseline_binding"); }
@@ -93,7 +95,7 @@ export function assertV3RuntimeState(value: unknown): asserts value is V3Runtime
     if (revision.finalized !== null) { sealed(revision.finalized, parseFinalizeReceipt);
       if ((revision.finalized as unknown as SealedEvidence<FinalizeReceipt>).receipt.authorization_ref !== (revision.finalize_authorization as AuthorizationReceipt | null)?.receipt_hash) v3Fail("finalize_authority_binding");
     }
-    if (revision.stage === "prepared" && (revision.approval || revision.authorization || revision.baseline || revision.verification.length || revision.review || revision.finalized) || revision.stage === "approved" && (!revision.approval || revision.authorization || revision.baseline || revision.verification.length || revision.review || revision.finalized) || ["authorized", "finalized"].includes(String(revision.stage)) && (!revision.approval || !revision.authorization || !revision.baseline) || revision.stage === "finalized" && (!revision.finalize_authorization || !revision.finalized || !revision.review || !revision.verification.length) || revision.stage === "authorized" && (revision.finalized || revision.finalize_authorization)) v3Fail("invalid_revision_transition_state");
+    if (revision.stage === "prepared" && (revision.approval || revision.authorization || revision.finalize_authorization || revision.baseline || revision.verification.length || revision.review || revision.finalized) || revision.stage === "approved" && (!revision.approval || revision.authorization || revision.finalize_authorization || revision.baseline || revision.verification.length || revision.review || revision.finalized) || ["authorized", "finalized"].includes(String(revision.stage)) && (!revision.approval || !revision.authorization || !revision.baseline) || revision.stage === "finalized" && (!revision.finalize_authorization || !revision.finalized || !revision.review || !revision.verification.length) || revision.stage === "authorized" && (revision.finalized || revision.finalize_authorization)) v3Fail("invalid_revision_transition_state");
   }
   if (!Array.isArray(value.invalidated_revisions) || value.invalidated_revisions.some(id => typeof id !== "string" || !ids.has(id)) || new Set(value.invalidated_revisions).size !== value.invalidated_revisions.length) v3Fail("invalid_revocation_list");
   if (value.active_revision !== null && (typeof value.active_revision !== "string" || !ids.has(value.active_revision))) v3Fail("invalid_active_revision");
@@ -123,7 +125,7 @@ async function regularRead(path: string): Promise<string> {
   try {
     const actual = await handle.stat({ bigint: true }); if (actual.dev !== before.dev || actual.ino !== before.ino) v3Fail("runtime_changed");
     const bytes = await handle.readFile(), after = await handle.stat({ bigint: true }), current = await lstat(path, { bigint: true });
-    if (after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs || current.ino !== before.ino || current.dev !== before.dev || current.nlink !== 1n) v3Fail("runtime_changed");
+    if (BigInt(bytes.length) !== before.size || after.size !== before.size || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs || current.ino !== before.ino || current.dev !== before.dev || current.nlink !== 1n) v3Fail("runtime_changed");
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } finally { await handle.close(); }
 }
