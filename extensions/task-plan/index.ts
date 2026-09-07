@@ -1,3 +1,4 @@
+import { GitBaselineProvider } from "./docsync/baseline.ts";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { registerTaskPlanCommands } from "./commands.ts";
 import { TaskPlanService, isCurrentHarnessPlanPath, type TaskPlanSessionState } from "./operations.ts";
@@ -9,6 +10,7 @@ import { decisionFromInput, explicitPhaseAction } from "./phase-input.ts";
 import type { PhaseDependencies } from "./phase-contracts.ts";
 import { renderPlanOperationResult } from "./operation-result.ts";
 
+export * from "./docsync/index.ts";
 export * from "./execution-notes.ts";
 export * from "./phase-contracts.ts";
 export * from "./phase-execution.ts";
@@ -35,7 +37,7 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
     planning: { ...envConfig.planning, ...config.planning },
     normal: { ...envConfig.normal, ...config.normal },
   });
-  const state: TaskPlanSessionState = { modelSwitch: {}, phaseDependencies: config.phase };
+  const state: TaskPlanSessionState = { modelSwitch: {}, phaseDependencies: { baseline: new GitBaselineProvider(), ...config.phase } };
   registerTaskPlanTools(pi, state);
   registerTaskPlanCommands(pi, state, modelConfig);
 
