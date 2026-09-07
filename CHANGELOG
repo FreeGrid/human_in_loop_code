@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Default Task Plan to readable `pi-plan/v3`: current requirements, current-only rolling detail, concise edits and ordinary manual completion without runtime state.
+- Preserve V1/V2 through explicit `legacy-index.ts` selection and read-only views; migration remains preview-only. Named legacy APIs moved to that entry, and legacy configuration through the default entry is awaitable.
+- Add an optional governed host with bound Human confirmation, real scoped execution, verification/review/finalize, cancellation and inspected recovery behind the readable Plan.
+
 - Added `/control:enter` as the required one-action handoff after Agent-tool initialization, using the remembered control path so the command stays short and the Human-in-the-Loop workflow continues from the control repository.
 - Added name-only Agent initialization: a local creation request with a workspace name now derives `<cwd>/<name>_control` and `<cwd>/<name>_code` without asking the user to supply redundant absolute paths.
 - Added a name-first `/control:init` path that creates `<name>_control` and `<name>_code` together, plus a separate existing-repositories path with immediate validation, visible profile defaults, and an explicit final apply action.
