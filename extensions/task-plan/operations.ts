@@ -1,3 +1,5 @@
+import { consumeDocumentAuthority, appendAuthorization } from "./authority-context.ts";
+import type { AuthorityAction, HumanCapability } from "./authority.ts";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { canonicalSectionHash, canonicalTasksDefinitionHash, createPlanSkeleton, findUnfinishedHarnessPlans, readPlanDocument, replaceFrontmatter, sha256, writeIfDocumentHash } from "./plan-file.ts";
@@ -29,7 +31,8 @@ export interface TaskPlanSessionState {
   reportedThisTurn?: boolean;
   modelSwitch?: TaskPlanModelSwitchState;
   phaseDependencies?: PhaseDependencies;
-  humanDecision?: HumanDecisionToken;
+  humanDecision?: HumanDecisionToken; // Legacy proposals confer no authority.
+  humanCapability?: HumanCapability;
   phaseTaskId?: string;
 }
 
@@ -85,7 +88,7 @@ export class TaskPlanService {
     return this.write(loaded, text, "Submitted current section");
   }
 
-  async advance(params: { expected_document_hash: string; action?: "next" | "execute" | "next_round" | "complete"; reason?: string; planPath?: string }): Promise<PlanOperationResult> {
+  async advance(params: { expected_document_hash: string; action?: "next" | "approve_contract" | "execute" | "next_round" | "complete"; reason?: string; planPath?: string }): Promise<PlanOperationResult> {
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
@@ -93,28 +96,38 @@ export class TaskPlanService {
     if (reconciled.changed) return this.persistStateChange(loaded, reconciled.text, reconciled.reason);
     if (loaded.metadata.stage_status === "drafting") return validation("Drafting content cannot be advanced; submit or review it first", []);
     let metadata: PlanMetadata;
+    let authorityAction: AuthorityAction;
     if (loaded.metadata.stage === "what_why") {
       const v = validateWhatWhy(loaded.sections.what_why); if (!v.ok) return validation("What / Why validation failed", v.issues);
+      authorityAction = "approve_what_why";
       metadata = approveWhatWhy(loaded.metadata, loaded.sections.what_why);
     } else if (loaded.metadata.stage === "plan") {
       if (!loaded.metadata.approved_what_why_hash) return validation("What / Why is not approved", []);
       const v = validatePlan(loaded.sections.plan, loaded.metadata.round); if (!v.ok) return validation("Plan validation failed", v.issues);
+      authorityAction = "approve_plan";
       metadata = approvePlan(loaded.metadata, loaded.sections.plan);
     } else if (loaded.metadata.stage === "awaiting_execution_approval") {
-      if (params.action && params.action !== "execute" && params.action !== "next") return validation("Use execute to authorize current round", []);
       const v = validateExecutionReadiness(loaded); if (!v.ok) return validation("Execution readiness validation failed", v.issues);
-      metadata = authorizeExecution(loaded.metadata);
+      if (params.action === "execute") {
+        if (loaded.metadata.approved_contract_hash !== canonicalTasksDefinitionHash(loaded.sections.tasks)) return validation("contract_approval_required: approve the detailed contract separately", []);
+        authorityAction = "authorize_execution";
+        metadata = authorizeExecution(loaded.metadata);
+      } else if (!params.action || params.action === "next" || params.action === "approve_contract") {
+        authorityAction = "approve_contract";
+        metadata = { ...loaded.metadata, approved_contract_hash: canonicalTasksDefinitionHash(loaded.sections.tasks) };
+      } else return validation("Explicit contract approval or execution authorization required", []);
     } else if (loaded.metadata.stage === "awaiting_round_decision") {
       const progress = validateProgress(loaded); if (!progress.ok) return validation("Current round is not complete", progress.issues);
-      if (params.action === "next_round") metadata = rollForward(loaded.metadata);
+      if (params.action === "next_round") { authorityAction = "next_round"; metadata = rollForward(loaded.metadata); }
       else if (params.action === "complete") {
         if (hasFutureHorizon(loaded.sections.plan) && !params.reason?.trim()) return validation("Completion with future horizons requires a closure reason", []);
+        authorityAction = "complete";
         metadata = closePlan(loaded.metadata, params.reason?.trim() || "Completed by Human decision");
       } else return validation("Awaiting round decision requires next_round or complete action", []);
     } else {
       return validation(`Cannot advance from ${loaded.metadata.stage}`, []);
     }
-    return this.write(loaded, replaceFrontmatter(loaded.text, metadata), `Advanced to ${metadata.stage}`);
+    return this.authorizedWrite(loaded, replaceFrontmatter(loaded.text, metadata), `Advanced to ${metadata.stage}`, authorityAction);
   }
 
   async review(params: { expected_document_hash: string; candidate_tasks?: string; summary?: string; planPath?: string }): Promise<PlanOperationResult> {
@@ -163,7 +176,8 @@ export class TaskPlanService {
   }
 
   async executePhase(params: { expected_document_hash: string; task_id?: string; target_root?: string; governance_root?: string; planPath?: string }): Promise<PlanOperationResult> {
-    const decision = this.sessionState.humanDecision;
+    const decision = this.sessionState.humanCapability;
+    delete this.sessionState.humanCapability;
     delete this.sessionState.humanDecision;
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
@@ -183,7 +197,8 @@ export class TaskPlanService {
   }
 
   async setPhaseDocSync(params: { expected_document_hash: string; task_id: string; enabled: boolean; planPath?: string }): Promise<PlanOperationResult> {
-    const decision = this.sessionState.humanDecision;
+    const decision = this.sessionState.humanCapability;
+    delete this.sessionState.humanCapability;
     delete this.sessionState.humanDecision;
     const loaded = await this.load(params.planPath);
     if ("status" in loaded) return loaded;
@@ -199,7 +214,7 @@ export class TaskPlanService {
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
     const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("Finalize readiness validation failed", ready.issues);
-    const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).finalize(loaded, params.task_id);
+    const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).finalize(loaded, params.task_id, this.takeCapability());
     if (result.status === "applied") {
       const next = await readPlanDocument(loaded.path);
       const record = inspectPhaseRecords(next.sections.tasks).records[params.task_id];
@@ -263,7 +278,7 @@ export class TaskPlanService {
     const tasks = loaded.sections.tasks.replace(task.definition, definition);
     const text = replaceFrontmatter(replaceSection(loaded.text, "tasks", tasks), { ...loaded.metadata, stage: "executing", stage_status: "in_progress" });
     delete this.sessionState.binding;
-    return this.write(loaded, text, `Task ${task.id} reopened; previous acceptance invalidated`);
+    return this.authorizedWrite(loaded, text, `Task ${task.id} reopened; previous acceptance invalidated`, "reopen", task.id);
   }
 
   async abandon(params: { expected_document_hash: string; reason?: string; planPath?: string }): Promise<PlanOperationResult> {
@@ -272,7 +287,7 @@ export class TaskPlanService {
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
     if (["completed", "abandoned"].includes(loaded.metadata.stage)) return validation("Terminal plans cannot be abandoned again", []);
     const reason = params.reason?.trim() || "No reason provided.";
-    return this.write(loaded, replaceFrontmatter(loaded.text, abandonPlan(loaded.metadata, reason)), "Plan abandoned");
+    return this.authorizedWrite(loaded, replaceFrontmatter(loaded.text, abandonPlan(loaded.metadata, reason)), "Plan abandoned", "abandon");
   }
 
   async updateClosureReason(params: { expected_document_hash: string; reason: string; planPath?: string }): Promise<PlanOperationResult> {
@@ -282,7 +297,7 @@ export class TaskPlanService {
     if (loaded.metadata.stage !== "abandoned" && loaded.metadata.stage !== "completed") return validation("Closure reason can only be updated on a terminal plan", []);
     const reason = params.reason.trim();
     if (!reason) return validation("Closure reason update requires non-empty text", []);
-    return this.write(loaded, replaceFrontmatter(loaded.text, { ...loaded.metadata, closure_reason: reason }), "Updated closure reason");
+    return this.authorizedWrite(loaded, replaceFrontmatter(loaded.text, { ...loaded.metadata, closure_reason: reason }), "Updated closure reason", "update_closure");
   }
 
   private async load(planPath?: string, allowCompletionConflict = false): Promise<PlanDocument | PlanOperationResult> {
@@ -305,6 +320,20 @@ export class TaskPlanService {
   }
 
   private async persistStateChange(loaded: PlanDocument, text: string, reason?: string): Promise<PlanOperationResult> { return this.write(loaded, text, `State changed during reconciliation: ${reason}` as string, "state_changed"); }
+
+  private takeCapability(): HumanCapability | undefined {
+    const token = this.sessionState.humanCapability;
+    delete this.sessionState.humanCapability;
+    delete this.sessionState.humanDecision;
+    return token;
+  }
+
+  private async authorizedWrite(loaded: PlanDocument, text: string, message: string, action: AuthorityAction, nodeId = "$plan"): Promise<PlanOperationResult> {
+    try {
+      const receipt = await consumeDocumentAuthority(loaded, this.takeCapability(), action, nodeId);
+      return this.write(loaded, appendAuthorization(text, receipt), message);
+    } catch (error) { return validation(String((error as Error).message), []); }
+  }
 
   private async write(loaded: PlanDocument, text: string, message: string, status: PlanOperationResult["status"] = "applied"): Promise<PlanOperationResult> {
     const write = await writeIfDocumentHash(loaded.path, loaded.document_hash, text);
