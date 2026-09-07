@@ -1,3 +1,5 @@
+New Plans use a native V2 canonical node format. Existing V1 Plans retain their identity and baseline rules. See [domain and identity contract](domain-identity.md) for creation, node editing, approval selection and baseline compatibility. Migration apply remains disabled.
+
 # Task Plan: recoverable, Human-gated phase execution
 
 Task Plan keeps the approved requirements, staged approach, Tasks, Acceptance and
