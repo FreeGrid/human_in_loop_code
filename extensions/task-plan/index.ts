@@ -169,3 +169,5 @@ function shouldUsePlanningModel(stage: string): boolean {
   return ["what_why", "plan", "tasks", "awaiting_execution_approval", "awaiting_round_decision"].includes(stage);
 }
 export * from "./evidence-key.ts";
+
+export * from "./operation-journal.ts";

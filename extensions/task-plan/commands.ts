@@ -1,3 +1,4 @@
+import type { RecoveryInspection } from "./operation-journal.ts";
 import { PhaseExecutionService } from "./phase-execution.ts";
 import { configureManualVerificationAuthority, manualAcceptanceContext } from "./evidence.ts";
 import { randomUUID } from "node:crypto";
@@ -17,6 +18,22 @@ export function registerTaskPlanCommands(pi: ExtensionAPI, state: TaskPlanSessio
   pi.registerCommand("plan", { description: "Start a guided Harness Plan from a natural-language brief", handler: (args, ctx) => newPlan(pi, args, ctx, state, modelConfig) });
   pi.registerCommand("plan:new", { description: "Create a new one-file Harness Plan skeleton, then ask the Agent to draft What / Why", handler: (args, ctx) => newPlan(pi, args, ctx, state, modelConfig) });
   pi.registerCommand("plan:status", { description: "Show current Harness Plan status", handler: (args, ctx) => run(ctx, state, (s) => s.status(args.trim() || undefined)) });
+  pi.registerCommand("plan:reconcile",{description:"Persist diagnosed state invalidation with CAS",handler:async(args,ctx)=>{
+    const service=new TaskPlanService(ctx.cwd,state);const current=await service.get(args.trim()||undefined);
+    if(!current.document_hash)return notify(ctx,current);
+    return notify(ctx,await service.reconcile({expected_document_hash:current.document_hash,planPath:current.path}));
+  }});
+  pi.registerCommand("plan:recover",{description:"Inspect and confirm recovery: <operation-id> [plan-path]",handler:async(args,ctx)=>{
+    const [operation_id,...path]=args.trim().split(/\s+/);if(!operation_id)return notify(ctx,await new TaskPlanService(ctx.cwd,state).recoveryStatus({}));
+    const service=new TaskPlanService(ctx.cwd,state);const status=await service.recoveryStatus({operation_id,planPath:path.join(" ")||undefined});
+    if(status.status!=="ok")return notify(ctx,status);
+    const inspection=status.snapshot as RecoveryInspection;
+    if(!ctx.hasUI)return ctx.ui.notify("Recovery requires Human confirmation of the exact journal inspection","error");
+    if(inspection.outcome==="conflict")return notify(ctx,status);
+    if(!await ctx.ui.confirm("Confirm this operation recovery?",JSON.stringify(inspection,null,2)))return;
+    state.humanCapability=issueHumanCapability("recover",inspection.authority_context,{source:"slash",input_id:randomUUID(),text:`Human confirmed recovery ${operation_id}: ${inspection.outcome}`});
+    return notify(ctx,await service.recover({operation_id,planPath:status.path,expected_document_hash:inspection.authority_context.document_hash,expected_journal_head:inspection.journal_head}));
+  }});
   pi.registerCommand("plan:edit", { description: "Submit Markdown content for the current Harness Plan stage", handler: (args, ctx) => edit(args, ctx, state) });
   pi.registerCommand("plan:approve", { description: "Apply the current Human approval gate", handler: (args, ctx) => approve(pi, args, ctx, state, modelConfig) });
   pi.registerCommand("plan:review", { description: "Review the current Harness Plan stage", handler: (args, ctx) => review(args, ctx, state) });
