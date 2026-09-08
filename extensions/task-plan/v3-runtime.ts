@@ -56,6 +56,22 @@ export interface V3RuntimeConfiguration {
 interface Envelope { version: 1; generation: number; previous_hash: string | null; state: V3RuntimeState; seal: string }
 export interface V3RuntimeSnapshot { generation: number; hash: string | null; state: V3RuntimeState | null }
 export const v3BytesHash = (text: string | Buffer): string => createHash("sha256").update(text).digest("hex");
+/** Recognize recorded historical pruning without using it for a new projection. */
+export function v3ProjectionKind(projection: V3Projection, contract: ReadableContract): "retained" | "legacy_pruned" {
+  const source = parseReadablePlan(projection.source_text), candidate = parseReadablePlan(projection.candidate_text);
+  const task = source.tasks.find(item => item.id === contract.node_id);
+  if (!task || task.completed || source.plan_id !== contract.plan_id) v3Fail("invalid_projection_source");
+  const firstOpen = source.tasks.find(item => !item.completed);
+  const legacySource = !source.tasks.some(item => !item.completed && item !== firstOpen && item.subtasks.length);
+  const styled = (text: string): string => projection.source_text.includes("\r\n") && !/(?<!\r)\n/.test(projection.source_text) ? text.replace(/\n/g, "\r\n") : text;
+  if (styled(renderReadablePlan(candidate)) !== projection.candidate_text) v3Fail("invalid_projection_candidate");
+  task.completed = true;
+  if (styled(renderReadablePlan(source)) === projection.candidate_text) return "retained";
+  // The old parser and renderer discarded children of every completed root.
+  for (const completed of source.tasks.filter(item => item.completed)) completed.subtasks = [];
+  if (!legacySource || styled(renderReadablePlan(source)) !== projection.candidate_text) v3Fail("invalid_projection_candidate");
+  return "legacy_pruned";
+}
 const uuid = (value: unknown): void => { if (typeof value !== "string" || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)) v3Fail("invalid_execution_identity"); };
 const inside = (root: string, path: string): boolean => path === root || path.startsWith(root + sep);
 const absent = (error: unknown): boolean => (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -104,13 +120,7 @@ export function assertV3RuntimeState(value: unknown): asserts value is V3Runtime
     const p = value.projection; textV3(p.source_text, 1048576); textV3(p.candidate_text, 1048576); hashV3(p.source_hash); hashV3(p.candidate_hash);
     const revision = value.revisions.find(item => item.revision_id === p.revision_id);
     if (!revision || revision.stage !== "finalized" || !["pending", "projected", "conflict"].includes(String(p.status)) || v3BytesHash(p.source_text) !== p.source_hash || v3BytesHash(p.candidate_text) !== p.candidate_hash) v3Fail("invalid_projection");
-    const source = parseReadablePlan(p.source_text), candidate = parseReadablePlan(p.candidate_text);
-    const task = source.tasks.find(item => item.id === revision.contract.node_id);
-    if (!task || task.completed || source.plan_id !== value.plan_id) v3Fail("invalid_projection_source");
-    task.completed = true; task.subtasks = [];
-    const sourceText = p.source_text;
-    const styled = (text: string): string => sourceText.includes("\r\n") && !/(?<!\r)\n/.test(sourceText) ? text.replace(/\n/g, "\r\n") : text;
-    if (styled(renderReadablePlan(source)) !== p.candidate_text || styled(renderReadablePlan(candidate)) !== p.candidate_text) v3Fail("invalid_projection_candidate");
+    v3ProjectionKind(p as unknown as V3Projection, revision.contract as ReadableContract);
   }
   for (const receipt of value.recovery) { assertAuthorizationReceipt(receipt); if (receipt.action !== "recover" || receipt.context.plan_id !== value.plan_id) v3Fail("invalid_recovery_receipt"); }
 }

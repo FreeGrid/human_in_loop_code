@@ -99,10 +99,10 @@ export function prepareReadableContract(plan: ReadablePlan, policy: ReadableExec
   const body = { version: 1 as const, plan_id: plan.plan_id, node_id: task.id, definition, definition_hash: canonicalHash(definition), policy: structuredClone(policy) };
   const result = { ...body, contract_hash: canonicalHash(body) }; assertReadableContract(result); return result;
 }
-/** Collapsing completed task detail is a display operation; material text edits are not. */
+/** Checkboxes are display state; child text and order remain part of the definition. */
 export function readableContractMatches(plan: ReadablePlan, contract: ReadableContract): boolean {
   assertReadableContract(contract);
   const task = plan.tasks.find(task => task.id === contract.node_id);
   return plan.plan_id === contract.plan_id && plan.brief === contract.definition.brief && task?.text === contract.definition.task &&
-    (task.completed && task.subtasks.length === 0 || canonicalJson(task.subtasks.map(subtask => subtask.text)) === canonicalJson(contract.definition.subtasks));
+    canonicalJson(task.subtasks.map(subtask => subtask.text)) === canonicalJson(contract.definition.subtasks);
 }

@@ -5,7 +5,7 @@ import { runSandboxedProcess, type ExecutionSandbox, type SandboxedProcessReques
 import { currentReadableTask, parseReadablePlan, renderReadablePlan, type ReadablePlan } from "./v3-format.ts";
 import { readReadablePlan, writeReadablePlan, type ReadablePlanSnapshot } from "./v3-file.ts";
 import { prepareReadableContract, readableContractMatches, textV3, v3Fail, type ReadableContract, type ReadableCriterion, type ReadableExecutionPolicy } from "./v3-contract.ts";
-import { v3BytesHash, type V3ExecutionRevision, type V3Projection, type V3Runtime, type V3RuntimeSnapshot, type V3RuntimeState } from "./v3-runtime.ts";
+import { v3BytesHash, v3ProjectionKind, type V3ExecutionRevision, type V3Projection, type V3Runtime, type V3RuntimeSnapshot, type V3RuntimeState } from "./v3-runtime.ts";
 import { assertV3Sandbox, captureV3Baseline, inspectV3Scope, v3ContentVersion } from "./v3-scope.ts";
 
 export type V3GovernedAction = "approve_contract" | "authorize_execution" | "finalize" | "recover";
@@ -238,7 +238,7 @@ export class V3Governed {
       if (await this.content(revision) !== content) v3Fail("finalize_inputs_changed"); await this.unchanged(source);
       revision.finalized = sealFinalizeEvidence(this.#config.signer, { plan_id: source.plan.plan_id, node_id: revision.contract.node_id, contract_hash: revision.contract.contract_hash, content_version: content, verification_refs: refs, review_ref, dependency_refs: dependencies, authorization_ref: authorization.receipt_hash, docsync_check: "skipped" });
       revision.finalize_authorization = authorization; revision.stage = "finalized";
-      const candidate = structuredClone(source.plan), task = candidate.tasks.find(item => item.id === revision.contract.node_id)!; task.completed = true; task.subtasks = [];
+      const candidate = structuredClone(source.plan), task = candidate.tasks.find(item => item.id === revision.contract.node_id)!; task.completed = true;
       const rendered = renderReadablePlan(candidate), candidate_text = source.text.includes("\r\n") && !/(?<!\r)\n/.test(source.text) ? rendered.replace(/\n/g, "\r\n") : rendered;
       state.projection = { revision_id: revision.revision_id, source_text: source.text, source_hash: source.document_hash, candidate_text, candidate_hash: v3BytesHash(candidate_text), status: "pending" };
       // Acceptance and exact projection intent are durable before a single readable byte changes.
@@ -253,6 +253,10 @@ export class V3Governed {
     }
     if (current.document_hash === projection.candidate_hash) { projection.status = "projected"; await save(state, snapshot); return; }
     if (current.document_hash !== projection.source_hash) { projection.status = "conflict"; await save(state, snapshot); v3Fail("projection_cas_conflict_manual_edit_preserved"); }
+    const revision = state.revisions.find(item => item.revision_id === projection.revision_id)!;
+    if (v3ProjectionKind(projection, revision.contract) === "legacy_pruned") {
+      projection.status = "conflict"; await save(state, snapshot); v3Fail("projection_legacy_pruning_requires_revision");
+    }
     const result = await writeReadablePlan(this.#config.runtime.plan_path, projection.source_hash, parseReadablePlan(projection.candidate_text));
     if (result.document_hash !== projection.candidate_hash) v3Fail("projection_candidate_mismatch");
     await this.#config.runtime.checkpoint("projection_written");
