@@ -31,3 +31,32 @@ oversized range rather than treating omitted content as checked. Git queries
 and reads retain the existing safety/output bounds. Symlink targets and embedded
 alternate Git metadata are not read. Collection detects observed concurrent
 changes but is not an OS transaction.
+
+## Follow documentation impact
+
+`inspectDocumentationImpact` in `delivery-impact.ts` extends the scope input:
+
+- `mappings: [{sources: ["src/cli/**"], docs: ["docs/cli.md"]}]` adds small
+  explicit associations. Optional `governanceRoot` reads the existing
+  `.harness/docsync.yml`; absent/invalid supplied policy remains an explicit
+  question while valid supplied mappings and searches can still run.
+- `terms` supplies up to 16 literal command/configuration/interface names.
+  `codePaths` narrows relevant caller/config-reader search domains; `docPaths`
+  defaults to `README.md` and `docs/**`. Patterns use the existing bounded
+  DocSync wildcard syntax. Search returns file/line locations and short snippets.
+- Follow the next dependency hop by narrowing domains and adding the relevant
+  names from those references. This is explicit on-demand navigation, not a
+  complete language-aware call graph. Stop when user-visible behavior is
+  unaffected; unresolved/unmapped sources remain questions.
+
+Context is explicitly the **current worktree**, not a historical PR checkout.
+A selected final head different from local HEAD is reported for review. Use the
+intended checkout or inspect historical snippets with host tools when needed.
+Changed docs are candidates for semantic review, not automatically accepted.
+
+Inspection limits are 128 files, 256 KiB/file, 2 MiB total, 64 reference snippets
+and 128 candidates. Truncation, missing targets, binary text, unmatched mappings
+and unknown impact are returned explicitly. Narrow the request or inspect those
+items separately rather than treating omitted work as checked. Versions bind
+scope, policy, search domains, exact inspected content and newly matching files.
+No graph, full diff, document result or cache is written to the readable Plan.
