@@ -18,5 +18,5 @@ export function newReadablePlanPrompt(request: string, explicitNew = false): str
 }
 
 export function reviseReadablePlanPrompt(change: string): string {
-  return `默认继续修改当前这份 Markdown，即使任务已全部完成或用户改变目标，也不另开 Plan。先调用 plan_get 读取，再用 plan_update 将这次修改原位应用到需求及受影响的任务。按需原位完善当前和近期未完成任务，保留已完成子任务，远期不补猜测性细节；默认回复只显示变化和影响。\n\n修改：\n${change}`;
+  return `默认继续修改当前这份 Markdown，即使任务已全部完成或用户改变目标，也不另开 Plan。唯一例外：若用户本次明确要求新开或另开 Plan，调用 plan_start 并设置 new_plan=true，保留旧文件；否则按以下原位更新流程处理。先调用 plan_get 读取，再用 plan_update 将这次修改原位应用到需求及受影响的任务。按需原位完善当前和近期未完成任务，保留已完成子任务，远期不补猜测性细节；默认回复只显示变化和影响。\n\n修改：\n${change}`;
 }
