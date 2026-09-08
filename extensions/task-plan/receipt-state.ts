@@ -1,3 +1,4 @@
+import { parseStrictJson } from "./plan-text.ts";
 import { canonicalHash } from "./authority.ts";
 import { assertFinalizeEvidence, assertVerificationEvidence, assertReviewEvidence, type FinalizeDependencyRef, type ReceiptSigner, type ReviewAuthority, type ReviewEvidence, type Risk, type SealedEvidence, type VerificationAuthority, type VerificationInput } from "./evidence.ts";
 import { canonicalTaskDefinition, parseTasks, taskField } from "./tasks.ts";
@@ -27,7 +28,7 @@ export function nodeEvidencePolicy(task: TaskBlock): NodeEvidencePolicy {
   const raw = taskField(inspectPhaseRecords(task.definition).definition, "Verification").trim();
   if (!raw) return { risk: "unknown", verification: {} };
   if (raw.length > 131072) fail("verification_policy_too_large");
-  const value: unknown = JSON.parse(raw);
+  const value: unknown = parseStrictJson(raw);
   if (!object(value) || !keys(value,["risk","verification"]) || !risks.includes(value.risk as Risk) || !object(value.verification)) fail("invalid_verification_policy");
   const v = value as unknown as NodeEvidencePolicy;
   if (Object.keys(v.verification).length > 128) fail("too_many_verification_methods");
@@ -56,13 +57,13 @@ export function readReviewEvidence(document: PlanDocument): Record<string, Seale
   const raw = document.metadata.review_receipts;
   if (raw === undefined) return {};
   if (typeof raw !== "string" || raw.length > 1048576) fail("invalid_review_receipts");
-  const value: unknown = JSON.parse(raw);
+  const value: unknown = parseStrictJson(raw);
   if (!object(value) || Object.keys(value).length > 256) fail("invalid_review_receipts");
   return value as Record<string,SealedEvidence<ReviewEvidence>>;
 }
 export function writeReviewEvidence(text: string, nodeId: string, evidence: SealedEvidence<ReviewEvidence>): string {
   const { metadata } = parseFrontmatter(text);
-  const previous = metadata.review_receipts === undefined ? {} : JSON.parse(String(metadata.review_receipts));
+  const previous = metadata.review_receipts === undefined ? {} : parseStrictJson(String(metadata.review_receipts));
   if (!object(previous)) fail("invalid_review_receipts");
   return replaceFrontmatter(text,{...metadata,review_receipts:JSON.stringify({...previous,[nodeId]:evidence})});
 }

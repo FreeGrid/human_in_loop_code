@@ -1,3 +1,4 @@
+import { assertSafeUnicode } from "./plan-text.ts";
 export interface ExecutionNote {
   version: 1;
   status: "in_progress" | "blocked" | "pending_finalize";
@@ -12,6 +13,7 @@ const TYPES = new Set(["api", "cli", "config", "extension", "code", "docs", "tes
 
 /** Notes are bounded data, never task definitions, readiness state or acceptance evidence. */
 export function validateExecutionNote(value: unknown): value is ExecutionNote {
+  try { assertSafeUnicode(value); } catch { return false; }
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const note = value as Record<string, unknown>;
   if (Object.keys(note).sort().join(",") !== "change_types,files,status,summary,version") return false;

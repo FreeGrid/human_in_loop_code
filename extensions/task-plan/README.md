@@ -200,3 +200,27 @@ contract and the exact current signed evidence referenced by its receipt. Legacy
 checkboxes or unsealed records remain readable but do not authorize execution.
 Reopening a prerequisite with started dependents, or another node while a phase is
 active, is refused before mutation until a coherent dependency recovery transaction exists.
+
+## Read diagnostics and explicit reconciliation
+
+`plan_get`, `plan_status` and session restoration leave Plan bytes unchanged. Reads
+return current metadata, validation issues and a proposed reconciliation. Use
+`plan_reconcile` with the exact document hash, or `/plan:reconcile`, to persist a
+state invalidation. Reconciliation cannot grant contract approval or execution
+permission. A changed contract still requires fresh Review and Human gates.
+
+All candidate writes now parse the complete document before installing it. Scalar
+YAML rejects duplicate keys and unsupported types; strict UTF-8/Unicode checks,
+reserved-marker ownership and canonical machine records prevent a rejected tool
+call from first persisting an unreadable Plan. Discovery distinguishes unrelated
+Markdown from recognizable corrupt Harness candidates and blocks on the latter.
+The parser preserves legacy readable records while execution gates reject missing
+trusted evidence.
+
+Writes return an `operation_id`. `plan_recovery_status` can list IDs after a lost
+response or inspect exact source/candidate and journal hashes. `/plan:recover`
+confirms a concrete inspection; recovery never reruns a gate or captures a baseline.
+The Plan binds its external runtime directory, so changing host configuration
+cannot hide an unresolved write. See [operation integrity and recovery](operation-journal.md)
+for crash checkpoints, Human authority, quiescent-owner checks and the explicit
+offline boundary for unknown pre-intent locks.

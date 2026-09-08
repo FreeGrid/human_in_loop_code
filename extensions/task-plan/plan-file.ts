@@ -1,11 +1,14 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { extractAllSections } from "./sections.ts";
 import { canonicalTaskDefinition, parseTasks } from "./tasks.ts";
 import { HARNESS, type PlanDocument, type PlanMetadata } from "./types.ts";
 
-const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+import { FRONTMATTER, assertNoReservedPlanMarkup, decodePlanUtf8, parseFrontmatter, renderFrontmatter } from "./plan-text.ts";
+import { parsePlanCandidate } from "./plan-integrity.ts";
+import { PLAN_RUNTIME_ROOT, assertOperationWritable, beginPlanOperation, commitPlanOperation, journalCheckpoint, markOwnedPlanLockQuiescent, prepareOperationCandidate, recordOperationFailure, registerOwnedPlanLock, releaseOwnedPlanLock, syncDirectory, type LockIdentity, type OperationContext, type OperationIntent } from "./operation-journal.ts";
+export { parseFrontmatter, renderFrontmatter } from "./plan-text.ts";
 
 export function sha256(text: string | Buffer): string {
   return createHash("sha256").update(text).digest("hex");
@@ -37,31 +40,6 @@ export function nodeExecutionDefinitionHash(document: PlanDocument, nodeId: stri
   return sha256(JSON.stringify([document.metadata.plan_id, document.metadata.round, nodeId, canonicalSectionHash(outline), task ? canonicalTasksDefinitionHash(task.definition) : ""]));
 }
 
-export function parseFrontmatter(text: string): { metadata: PlanMetadata; body: string } {
-  const match = text.match(FRONTMATTER);
-  if (!match) throw new Error("Plan document is missing frontmatter");
-  const raw = match[1]!;
-  const metadata: Record<string, unknown> = {};
-  for (const line of raw.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    const colon = line.indexOf(":");
-    if (colon < 0) throw new Error(`Invalid frontmatter line: ${line}`);
-    const key = line.slice(0, colon).trim();
-    const value = line.slice(colon + 1).trim();
-    metadata[key] = parseScalar(value);
-  }
-  return { metadata: metadata as PlanMetadata, body: text.slice(match[0].length) };
-}
-
-export function renderFrontmatter(metadata: PlanMetadata): string {
-  const ordered = [
-    "harness", "plan_id", "round", "stage", "stage_status",
-    "approved_what_why_hash", "approved_plan_hash", "reviewed_tasks_hash", "closure_reason",
-  ];
-  const keys = [...ordered.filter((k) => metadata[k] !== undefined && metadata[k] !== ""), ...Object.keys(metadata).filter((k) => !ordered.includes(k) && metadata[k] !== undefined).sort()];
-  return `---\n${keys.map((key) => `${key}: ${formatScalar(metadata[key])}`).join("\n")}\n---\n`;
-}
-
 export function replaceFrontmatter(text: string, metadata: PlanMetadata): string {
   const match = text.match(FRONTMATTER);
   if (!match) throw new Error("Plan document is missing frontmatter");
@@ -70,9 +48,8 @@ export function replaceFrontmatter(text: string, metadata: PlanMetadata): string
 
 export async function readPlanDocument(path: string): Promise<PlanDocument> {
   const bytes = await readFile(path);
-  const text = bytes.toString("utf8");
-  const { metadata, body } = parseFrontmatter(text);
-  return { path, text, document_hash: sha256(bytes), metadata, body, sections: extractAllSections(text) };
+  const text = decodePlanUtf8(bytes);
+  return { ...parsePlanCandidate(path, text), document_hash: sha256(bytes) };
 }
 
 export async function atomicWriteFile(path: string, content: string): Promise<void> {
@@ -84,34 +61,78 @@ export async function atomicWriteFile(path: string, content: string): Promise<vo
   } finally { await rm(tmp, { force: true }); }
 }
 
-export async function writeIfDocumentHash(path: string, expectedHash: string, content: string): Promise<{ ok: true; document_hash: string } | { ok: false; conflict: string }> {
+export interface PlanWriteOptions { operation?: OperationContext; completion?: "success" | "blocked_projection"; kind?: OperationIntent["kind"] }
+export type PlanWriteResult = { ok: true; document_hash: string; operation_id: string } | { ok: false; conflict: string; operation_id?: string; observed_document_hash?: string };
+export async function writeIfDocumentHash(path: string, expectedHash: string, content: string, options: PlanWriteOptions = {}): Promise<PlanWriteResult> {
+  const requested = parsePlanCandidate(path, content); // No persistence before whole-candidate validity.
+  if (requested.metadata.operation_runtime !== undefined && requested.metadata.operation_runtime !== PLAN_RUNTIME_ROOT) throw new Error("operation_runtime_mismatch");
+  content = replaceFrontmatter(content, { ...requested.metadata, operation_runtime: PLAN_RUNTIME_ROOT });
+  const candidate = parsePlanCandidate(path, content);
   let canonical: string;
   try { canonical = await realpath(path); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: false, conflict: "missing_file" };
-    throw error;
-  }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: false, conflict: "missing_file" }; throw error; }
   const lockPath = join(dirname(canonical), `.${basename(canonical)}.pi-plan.lock`);
   let lock;
   try { lock = await open(lockPath, "wx", 0o600); }
-  catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") return { ok: false, conflict: "plan_write_locked" };
-    throw error;
-  }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "EEXIST") return { ok: false, conflict: "plan_write_locked" }; throw error; }
+  let owned: LockIdentity | undefined;
   const tmp = join(dirname(canonical), `.${basename(canonical)}.${process.pid}.${randomUUID()}.tmp`);
+  let operation = options.operation, renamed = false, preserveLock = false, checkpoint = "lock_setup";
   try {
+    const lockInfo = await lock.stat(); owned = registerOwnedPlanLock(lockPath, lockInfo);
+    checkpoint = "source_check";
+    if (operation && (operation.plan_path !== canonical || operation.expected_document_hash !== expectedHash)) throw new Error("operation_document_mismatch");
+    await assertOperationWritable(canonical, operation?.operation_id);
     const current = await readFile(canonical);
     if (sha256(current) !== expectedHash) return { ok: false, conflict: "stale_document_hash" };
+    const original = parsePlanCandidate(canonical, decodePlanUtf8(current));
+    operation ??= await beginPlanOperation(original, { kind: options.kind ?? "mutation" });
+    await prepareOperationCandidate(operation, content, options.completion);
+    checkpoint = "prepared"; await journalCheckpoint(checkpoint, operation);
     const mode = (await stat(canonical)).mode & 0o777;
     const file = await open(tmp, "wx", mode);
     try { await file.writeFile(content, "utf8"); await file.sync(); } finally { await file.close(); }
-    // The exclusive lock covers all Harness writers; recheck late to detect external edits too.
-    if (sha256(await readFile(canonical)) !== expectedHash) return { ok: false, conflict: "stale_document_hash" };
-    await rename(tmp, canonical);
-    return { ok: true, document_hash: sha256(Buffer.from(content, "utf8")) };
+    checkpoint = "before_rename"; await journalCheckpoint(checkpoint, operation);
+    if (sha256(await readFile(canonical)) !== expectedHash) {
+      await recordOperationFailure(operation, { code: "stale_document_hash", checkpoint, side_effects_possible: false });
+      return { ok: false, conflict: "stale_document_hash", operation_id: operation.operation_id };
+    }
+    await rename(tmp, canonical); renamed = true;
+    checkpoint = "after_rename"; await journalCheckpoint(checkpoint, operation);
+    await syncDirectory(dirname(canonical));
+    checkpoint = "before_commit"; await journalCheckpoint(checkpoint, operation);
+    await commitPlanOperation(operation, candidate.document_hash);
+    return { ok: true, document_hash: candidate.document_hash, operation_id: operation.operation_id };
+  } catch (error) {
+    const code = error instanceof Error ? error.message : String(error);
+    preserveLock = renamed;
+    if (operation) {
+      try { await recordOperationFailure(operation, { code, checkpoint, side_effects_possible: renamed, write_uncertain: renamed }); }
+      catch { preserveLock = true; }
+    }
+    if (preserveLock) return { ok: false, conflict: "operation_recovery_required", operation_id: operation?.operation_id, ...(renamed ? { observed_document_hash: candidate.document_hash } : {}) };
+    throw error;
   } finally {
-    try { await rm(tmp, { force: true }); }
-    finally { try { await lock.close(); } finally { await rm(lockPath); } }
+    let cleanupFailure: unknown;
+    try { if (operation) await journalCheckpoint("before_cleanup", operation); } catch (error) { cleanupFailure = error; }
+    try { await rm(tmp, { force: true }); } catch (error) { cleanupFailure ??= error; }
+    try { await lock.close(); } catch (error) { cleanupFailure ??= error; }
+    if (cleanupFailure && renamed) preserveLock = true;
+    if (owned) {
+      if (!preserveLock) {
+        try { if (operation) await journalCheckpoint("before_lock_release", operation); await releaseOwnedPlanLock(owned); }
+        catch (error) { cleanupFailure ??= error; preserveLock = renamed; }
+      }
+      if (preserveLock) markOwnedPlanLockQuiescent(owned);
+    }
+    if (cleanupFailure) {
+      if (operation) {
+        try { await recordOperationFailure(operation, { code: String(cleanupFailure), checkpoint: "cleanup", side_effects_possible: renamed, write_uncertain: renamed }); }
+        catch { /* Durable prepare/commit and retained ownership require explicit inspection. */ }
+      }
+      if (renamed) return { ok: false, conflict: "operation_recovery_required", operation_id: operation?.operation_id, observed_document_hash: candidate.document_hash };
+      throw new Error(`plan_write_cleanup_failed: ${String(cleanupFailure)}`);
+    }
   }
 }
 
@@ -126,7 +147,10 @@ export async function acquirePhaseFinalizeLock(path: string, taskId: string): Pr
     if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("phase_finalize_locked: another finalize attempt is active or needs explicit crash recovery");
     throw error;
   }
-  return async () => { try { await handle.close(); } finally { await rm(lockPath); } };
+  let owned: LockIdentity;
+  try { const info = await handle.stat(); owned = registerOwnedPlanLock(lockPath, info); }
+  catch (error) { await handle.close(); throw new Error(`phase_finalize_lock_initialization_failed: preserved unknown lock: ${String(error)}`); }
+  return async () => { try { await handle.close(); } finally { await releaseOwnedPlanLock(owned); } };
 }
 
 export async function detectLegacyWorkspaceConflict(root: string): Promise<string[]> {
@@ -164,12 +188,15 @@ export async function findUnfinishedHarnessPlans(root: string): Promise<string[]
     for (const entry of await readdir(plans)) {
       if (!/^\d{3}-.*\.md$/.test(entry)) continue;
       const path = join(plans, entry);
-      try {
-        const document = await readPlanDocument(path);
-        if (document.metadata.harness === HARNESS && !["completed", "abandoned"].includes(String(document.metadata.stage))) found.push(path);
-      } catch {
-        // Non-harness markdown may have arbitrary content and is ignored for unfinished detection.
-      }
+      const bytes = await readFile(path);
+      // Classification is independent of parsing, including malformed UTF-8/frontmatter.
+      const signature = bytes.toString("latin1");
+      const harnessCandidate = /<!--\s*pi-plan:/i.test(signature) || /(?:harness|format)["']?\s*:\s*["']?pi-plan\//i.test(signature);
+      if (!harnessCandidate) continue;
+      let document: PlanDocument;
+      try { document = parsePlanCandidate(path, decodePlanUtf8(bytes)); }
+      catch (error) { throw new Error(`corrupt_harness_plan: ${path}: ${(error as Error).message}`); }
+      if (!["completed", "abandoned"].includes(document.metadata.stage)) found.push(path);
     }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
@@ -198,32 +225,44 @@ export async function createPlanSkeleton(root: string, goal: string, titleOverri
   const planId = `P${String(sequence).padStart(3, "0")}`;
   const title = titleOverride?.trim() || planTitleFromGoal(goal);
   const path = join(root, "plans", `${String(sequence).padStart(3, "0")}-${slugify(title)}.md`);
+  assertNoReservedPlanMarkup(goal, "Original Request");
+  assertNoReservedPlanMarkup(title, "title");
+  if (/[\r\n\u2028\u2029]/u.test(title)) throw new Error("invalid_plan_title");
+  const text = renderSkeleton(planId, goal, title), candidate = parsePlanCandidate(path, text);
   await mkdir(dirname(path), { recursive: true });
-  const fh = await open(path, "wx");
-  try { await fh.writeFile(renderSkeleton(planId, goal, title), "utf8"); } finally { await fh.close(); }
-  return readPlanDocument(path);
+  const operation = await beginPlanOperation(candidate, { kind: "create" });
+  const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  let installed = false;
+  try {
+    await prepareOperationCandidate(operation, text);
+    const fh = await open(temp, "wx", 0o600); try { await fh.writeFile(text, "utf8"); await fh.sync(); } finally { await fh.close(); }
+    await journalCheckpoint("before_create", operation);
+    await link(temp, path); installed = true; // Exclusive install: never overwrite a competing creator.
+    await journalCheckpoint("after_create", operation);
+    await syncDirectory(dirname(path)); await commitPlanOperation(operation, candidate.document_hash);
+    return { ...candidate, path };
+  } catch (error) {
+    try { await recordOperationFailure(operation, { code: (error as Error).message, checkpoint: installed ? "after_create" : "before_create", side_effects_possible: installed, write_uncertain: installed }); } catch { /* Preserve prepare for explicit recovery. */ }
+    if (installed) throw new Error(`operation_recovery_required: ${operation.operation_id}`);
+    throw error;
+  } finally {
+    try { await rm(temp, { force: true }); }
+    catch (error) {
+      if (installed) {
+        try { await recordOperationFailure(operation, { code: String(error), checkpoint: "create_cleanup", side_effects_possible: true, write_uncertain: true }); } catch { /* Explicit inspection uses the durable prepare/commit. */ }
+        throw new Error(`operation_recovery_required: ${operation.operation_id}`);
+      }
+      throw error;
+    }
+  }
 }
 
 function renderSkeleton(planId: string, goal: string, title = planTitleFromGoal(goal)): string {
-  return `${renderFrontmatter({ harness: HARNESS, plan_id: planId, round: 0, stage: "what_why", stage_status: "drafting" })}\n# ${planId} — ${title}\n\n## Original Request\n\n${goal}\n\n---\n\n<!-- pi-plan:what-why:start -->\n\nPending.\n\n<!-- pi-plan:what-why:end -->\n\n---\n\n## Plan\n\n<!-- pi-plan:plan:start -->\n\nPending approval of What / Why.\n\n<!-- pi-plan:plan:end -->\n\n<!-- pi-plan:tasks:start -->\n\nPending approval of Plan.\n\n<!-- pi-plan:tasks:end -->\n\n<!-- pi-plan:review:start -->\n\nNot run.\n\n<!-- pi-plan:review:end -->\n`;
+  return `${renderFrontmatter({ harness: HARNESS, plan_id: planId, round: 0, stage: "what_why", stage_status: "drafting", operation_runtime: PLAN_RUNTIME_ROOT })}\n# ${planId} — ${title}\n\n## Original Request\n\n${goal}\n\n---\n\n<!-- pi-plan:what-why:start -->\n\nPending.\n\n<!-- pi-plan:what-why:end -->\n\n---\n\n## Plan\n\n<!-- pi-plan:plan:start -->\n\nPending approval of What / Why.\n\n<!-- pi-plan:plan:end -->\n\n<!-- pi-plan:tasks:start -->\n\nPending approval of Plan.\n\n<!-- pi-plan:tasks:end -->\n\n<!-- pi-plan:review:start -->\n\nNot run.\n\n<!-- pi-plan:review:end -->\n`;
 }
 
 async function exists(path: string): Promise<boolean> {
   try { await stat(path); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
 }
 
-function parseScalar(value: string): unknown {
-  if (value === "") return undefined;
-  if (/^-?\d+$/.test(value)) return Number(value);
-  if (value.startsWith('"')) return JSON.parse(value);
-  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1).replace(/''/g, "'");
-  return value;
-}
-
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&"); }
-
-function formatScalar(value: unknown): string {
-  if (value === undefined || value === null) return "";
-  const text = String(value);
-  return /[:#\n"\\]|^\s|\s$/.test(text) ? JSON.stringify(text) : text;
-}

@@ -71,9 +71,9 @@ export function reconcileState(document: PlanDocument): ReconcileResult {
     return changed(document, next, "current_round_reopened");
   }
 
-  validateApprovalHashes(document);
-  validateProgress(document);
-  return { changed: false, metadata: current, text: document.text };
+  const issues = [...validateApprovalHashes(document).issues,...validateProgress(document).issues];
+  const errors = issues.filter(issue => issue.severity === "error");
+  return { changed: false, metadata: current, text: document.text, ...(errors.length ? {conflict:`invalid_plan_state: ${errors.map(issue=>issue.code).join(", ")}`} : {}) };
 }
 
 export function approveWhatWhy(metadata: PlanMetadata, whatWhy: string): PlanMetadata {

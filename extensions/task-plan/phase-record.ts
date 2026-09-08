@@ -1,3 +1,4 @@
+import { assertSafeUnicode } from "./plan-text.ts";
 import { parseFinalizeReceipt, parseVerificationReceipt } from "./evidence.ts";
 import type { PhaseRecord } from "./phase-contracts.ts";
 
@@ -15,6 +16,7 @@ function serialize(v: unknown): string {
 }
 
 export function validatePhaseRecord(v: unknown): v is PhaseRecord {
+  try { assertSafeUnicode(v); } catch { return false; }
   if (!object(v) || !keys(v, ["version", "context", "definition_hash", "baseline", "authorization", "docsync", "acceptance"], ["last_finalize", "finalized", "implementer_session_id", "verification"]) || v.version !== 1) return false;
   if (v.implementer_session_id !== undefined && (!text(v.implementer_session_id, 256) || /[\u0000]|\p{Surrogate}/u.test(v.implementer_session_id))) return false;
   const c = v.context;

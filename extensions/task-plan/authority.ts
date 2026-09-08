@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type { PlanStage } from "./types.ts";
 
-export const AUTHORITY_ACTIONS = ["approve_what_why", "approve_plan", "approve_contract", "authorize_execution", "execute", "docsync_on", "docsync_off", "finalize", "reopen", "abandon", "complete", "next_round", "update_closure", "migrate", "manual_accept"] as const;
+export const AUTHORITY_ACTIONS = ["approve_what_why", "approve_plan", "approve_contract", "authorize_execution", "execute", "docsync_on", "docsync_off", "finalize", "reopen", "abandon", "complete", "next_round", "update_closure", "migrate", "manual_accept", "recover"] as const;
 export type AuthorityAction = typeof AUTHORITY_ACTIONS[number];
 export interface AuthorityContext {
   plan_id: string;
@@ -100,7 +100,7 @@ const issued = new WeakSet<HumanCapability>();
 /** Trusted input boundary only. Copy and freeze caller data to prevent later mutation of authority. */
 export function issueHumanCapability(requestedAction: AuthorityAction, boundContext: AuthorityContext, human: HumanProvenance): HumanCapability {
   action(requestedAction); context(boundContext); provenance(human);
-  if (requestedAction === "manual_accept" && !boundContext.payload_hash) invalid("Manual acceptance requires an exact displayed payload hash");
+  if (["manual_accept", "recover"].includes(requestedAction) && !boundContext.payload_hash) invalid("Manual acceptance/recovery requires an exact displayed payload hash");
   const now = Date.now();
   const token = Object.freeze({}) as HumanCapability;
   pending.set(token, { action: requestedAction, context: Object.freeze({ ...boundContext }), provenance: Object.freeze({ ...human }), issued_at: new Date(now).toISOString(), issued_ms: now, nonce: randomUUID() });
@@ -126,7 +126,7 @@ export function consumeHumanCapability(token: HumanCapability | undefined, reque
   const now = Date.now();
   if (!entry || now < entry.issued_ms || now - entry.issued_ms >= MAX_AGE_MS) throw new AuthorityError("replay_or_expired", "Capability has already been consumed or expired");
   action(requestedAction); context(actualContext);
-  if (requestedAction === "manual_accept" && !actualContext.payload_hash) invalid("Manual acceptance requires an exact displayed payload hash");
+  if (["manual_accept", "recover"].includes(requestedAction) && !actualContext.payload_hash) invalid("Manual acceptance/recovery requires an exact displayed payload hash");
   if (entry.action !== requestedAction || CONTEXT_KEYS.some(key => entry.context[key] !== actualContext[key]) || entry.context.payload_hash !== actualContext.payload_hash) throw new AuthorityError("context_mismatch", "Capability does not authorize this action and context");
   const unsigned = { version: 1 as const, id: randomUUID(), action: entry.action, context: entry.context, provenance: entry.provenance, issued_at: entry.issued_at, consumed_at: new Date(now).toISOString(), nonce: entry.nonce };
   return Object.freeze({ ...unsigned, receipt_hash: canonicalHash(unsigned) });
@@ -138,6 +138,7 @@ export function assertAuthorizationReceipt(value: unknown): asserts value is Aut
     record(value, ["version", "id", "action", "context", "provenance", "issued_at", "consumed_at", "nonce", "receipt_hash"]);
     if (value.version !== 1 || typeof value.id !== "string" || !UUID.test(value.id) || typeof value.nonce !== "string" || !UUID.test(value.nonce)) invalid("Invalid receipt identity");
     action(value.action); context(value.context); provenance(value.provenance);
+    if (value.action === "recover" && !value.context.payload_hash) invalid("Recovery receipt requires exact inspection binding");
     for (const field of ["issued_at", "consumed_at"] as const) {
       validString(value[field]);
       const time = Date.parse(value[field]);
@@ -181,6 +182,7 @@ export const AUTHORITY_TRANSITION_MATRIX: readonly AuthorityTransition[] = Objec
   transition(["completed", "abandoned"], "update_closure", "unchanged", []),
   transition([], "migrate", "unchanged", ["dual_read_conformance:passed", "migration_equivalence:passed"], ["review", "contract_approval", "execution_authorization"], false),
   transition(["executing"], "manual_accept", "unchanged", ["execution_authorization", "contract_manual_gate"]),
+  transition([...ACTIVE,"completed","abandoned"], "recover", "unchanged", ["operation_inspection", "quiescent_owner", "exact_source_or_candidate"]),
 ]);
 
 /** The action/state gate is necessary but does not replace receipt and structure checks. */

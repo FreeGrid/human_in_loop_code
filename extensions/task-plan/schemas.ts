@@ -59,3 +59,8 @@ export const PlanAbandonParameters = Type.Object({ expected_document_hash: Expec
 export type PlanAbandonParams = Static<typeof PlanAbandonParameters>;
 
 export const PlanVerifyAcceptanceParameters = Type.Object({expected_document_hash:ExpectedHash,planPath:PlanPath,task_id:Type.String({pattern:"^T\\d{3}$"}),acceptance_id:Type.String({pattern:"^T\\d{3}\\.A\\d{3}$"})});
+
+export const PlanReconcileParameters = Type.Object({expected_document_hash:ExpectedHash,planPath:PlanPath});
+
+export const PlanRecoveryStatusParameters = Type.Object({operation_id:Type.Optional(Type.String({format:"uuid"})),planPath:PlanPath});
+export const PlanRecoverParameters = Type.Object({operation_id:Type.String({format:"uuid"}),expected_document_hash:ExpectedHash,expected_journal_head:Type.String({pattern:"^[a-f0-9]{64}$"}),planPath:PlanPath});

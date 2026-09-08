@@ -1,3 +1,4 @@
+import { beginPlanOperation, recordOperationFailure, type OperationContext } from "./operation-journal.ts";
 import { validatePlanNodeMapping } from "./nodes.ts";
 import { assertVerificationEvidence, authenticateVerificationEvidence, manualAcceptanceContext, runManualAcceptance, runVerification, sealFinalizeEvidence, verifyArtifactContents, type ManualVerificationAuthority, type VerificationInput } from "./evidence.ts";
 import { authenticateFinalizedNode, dependencyFinalizations, nodeContractHash, requireNodeReview, verificationInputFor } from "./receipt-state.ts";
@@ -21,6 +22,7 @@ import { validateFrontmatter, validateTasks } from "./validators.ts";
 const exec = promisify(execFile);
 const fail = (message: string): never => { throw new Error(message); };
 const SWITCH_HELP = "DocSync: /docsync off · /docsync on. Human may also explicitly say ‘turn off DocSync’ or ‘turn on DocSync’.";
+type PhaseWriteOptions = {operation?:OperationContext;completion?:"success"|"blocked_projection"};
 type Report = { task_id: string; work_item_id?: string; result: "in_progress" | "blocked" | "completed"; summary: string; files?: string[]; change_types?: ExecutionNote["change_types"]; acceptance_results?: Array<{ item: string; satisfied: boolean }> };
 
 /** Plan owns progress; providers own only baseline/runtime facts and the documentation decision. */
@@ -28,6 +30,7 @@ export class PhaseExecutionService {
   constructor(private readonly dependencies: PhaseDependencies = {}) {}
 
   async start(document: PlanDocument, params: { task_id?: string; target_root?: string; governance_root?: string; decision?: HumanCapability }): Promise<PlanOperationResult> {
+    let starting: OperationContext | undefined;
     return this.operation(document, async () => {
       const d = await this.current(document);
       const { task, records } = this.select(d, params.task_id);
@@ -46,11 +49,23 @@ export class PhaseExecutionService {
       const context = { execute_id: randomUUID(), phase_id: task.id, round: d.metadata.round, plan_path: await realpath(d.path), target_root: await realpath(params.target_root!), governance_root: await realpath(params.governance_root!) };
       await this.roots(context);
       const provider = this.dependencies.baseline ?? fail("capability_unavailable: BaselineProvider is not configured");
+      starting = await beginPlanOperation(d,{kind:"phase_start",node_id:task.id,execute_id:context.execute_id,target_root:context.target_root,governance_root:context.governance_root,authority_ref:receipt.receipt_hash,contract_hash:this.contract(d,task.id)});
       const baseline = await provider.capture({ ...context });
       record = { version: 1, implementer_session_id: this.dependencies.evidence!.implementer_session_id, verification: [], context, definition_hash: this.contract(d, task.id), baseline, authorization, docsync: { enabled: true }, acceptance: [] };
       if (!validatePhaseRecord(record)) fail("baseline_invalid: provider returned an invalid baseline reference");
       await this.verify(d, task, record);
-      return this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `Started ${task.id}, execute ${context.execute_id}; DocSync on. ${SWITCH_HELP}`, record, receipt);
+      const saved = await this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `Started ${task.id}, execute ${context.execute_id}; DocSync on. ${SWITCH_HELP}`, record, receipt,{operation:starting});
+      if(saved.status !== "applied") {
+        if(saved.message.includes("operation_recovery_required")) return {...saved,operation_id:starting.operation_id};
+        await recordOperationFailure(starting,{code:"phase_start_not_committed",checkpoint:"after_capture",side_effects_possible:true});
+        return {...saved,operation_id:starting.operation_id,message:`${saved.message}; operation_recovery_required: captured baseline is preserved`};
+      }
+      return saved;
+    },async message=>{
+      if(!starting)return undefined;
+      if(message.includes("operation_recovery_required"))return {status:"conflict",path:document.path,operation_id:starting.operation_id,message};
+      await recordOperationFailure(starting,{code:"phase_start_failed",checkpoint:"capture_or_save",side_effects_possible:true});
+      return {status:"conflict",path:document.path,operation_id:starting.operation_id,message:`${message}; operation_recovery_required: inspect the original capture attempt`};
     });
   }
 
@@ -162,6 +177,7 @@ export class PhaseExecutionService {
 
   private async finalizeLocked(document: PlanDocument, task_id: string, authorization: AuthorizationReceipt): Promise<PlanOperationResult> {
     let attempt: { document: PlanDocument; record: PhaseRecord } | undefined;
+    let operation: OperationContext | undefined;
     return this.operation(document, async () => {
       const d = await this.current(document);
       const { task, records } = this.select(d, task_id);
@@ -180,6 +196,7 @@ export class PhaseExecutionService {
         verification.push(receipt);
       }
       if (await this.verify(d, task, record) !== version) fail("acceptance_stale: repository changed while checking verification artifacts");
+      operation = await beginPlanOperation(d,{kind:"phase_finalize",node_id:task.id,execute_id:record.context.execute_id,baseline_id:record.baseline.id,target_root:record.context.target_root,governance_root:record.context.governance_root,authority_ref:authorization.receipt_hash,contract_hash:nodeContractHash(d,task.id),content_version:version});
       let finalized: NonNullable<PhaseRecord["finalized"]>;
       if (!record.docsync.enabled) {
         finalized = { check: "skipped", summary: "Documentation check explicitly disabled by Human; Task Acceptance verified.", content_version: version, debt_refs: [], human_exceptions: [] };
@@ -228,15 +245,17 @@ export class PhaseExecutionService {
       // No implicit next-phase start. One CAS contains every target checkbox and the receipt.
       const finalVersion = await this.dependencies.baseline!.verify(structuredClone(record.context), structuredClone(record.baseline));
       if (finalVersion !== finalized.content_version) fail("content_changed: repository changed before completion write");
-      return this.write(d, appendAuthorization(text, authorization), `${task.id} finalized: ${finalized.check}${finalized.debt_refs.length ? `; debt: ${finalized.debt_refs.join(", ")}` : ""}${finalized.human_exceptions.length ? `; Human exceptions: ${finalized.human_exceptions.join(", ")}` : ""}. ${allDone ? "Awaiting Human round decision." : "Other phases remain open."}`, record);
+      return this.write(d, appendAuthorization(text, authorization), `${task.id} finalized: ${finalized.check}${finalized.debt_refs.length ? `; debt: ${finalized.debt_refs.join(", ")}` : ""}${finalized.human_exceptions.length ? `; Human exceptions: ${finalized.human_exceptions.join(", ")}` : ""}. ${allDone ? "Awaiting Human round decision." : "Other phases remain open."}`, record,{operation});
     }, async message => {
+      if (message.includes("operation_recovery_required")) return {status:"conflict",path:document.path,operation_id:operation?.operation_id,message};
       if (!attempt) return undefined;
+      if (operation) await recordOperationFailure(operation,{code:"phase_finalize_failed",checkpoint:"gate_or_finalize",side_effects_possible:attempt.record.docsync.enabled});
       const { document: d, record } = attempt;
       // Only append failure evidence to the same inspected Plan version. Never persist
       // a gate-mutated receipt, replace its baseline, or overwrite a concurrent edit.
       record.last_finalize = { outcome: "blocked", summary: message.slice(0, 2000) || "Finalize failed" };
       const markdown = upsertPhaseRecord(d.sections.tasks, record.context.phase_id, record);
-      const saved = await this.save(d, markdown, message, record);
+      const saved = await this.save(d, markdown, message, record,undefined,{operation,completion:"blocked_projection"});
       return saved.status === "applied" ? { ...saved, status: "validation_error", message } : { ...saved, message: `${message}; failure receipt not saved: ${saved.message}` };
     });
   }
@@ -303,13 +322,13 @@ private contract(d: PlanDocument, nodeId: string): string {
     return version;
   }
 
-  private async save(d: PlanDocument, tasks: string, message: string, record: PhaseRecord, receipt?: AuthorizationReceipt): Promise<PlanOperationResult> {
+  private async save(d: PlanDocument, tasks: string, message: string, record: PhaseRecord, receipt?: AuthorizationReceipt, options:PhaseWriteOptions = {}): Promise<PlanOperationResult> {
     const text = replaceSection(d.text, "tasks", tasks);
-    return this.write(d, receipt ? appendAuthorization(text, receipt) : text, message, record);
+    return this.write(d, receipt ? appendAuthorization(text, receipt) : text, message, record,options);
   }
-  private async write(d: PlanDocument, text: string, message: string, record: PhaseRecord): Promise<PlanOperationResult> {
-    const result = await writeIfDocumentHash(d.path, d.document_hash, text);
-    return result.ok ? { status: "applied", path: d.path, document_hash: result.document_hash, message, snapshot: record } : { status: "conflict", path: d.path, message: result.conflict };
+  private async write(d: PlanDocument, text: string, message: string, record: PhaseRecord,options:PhaseWriteOptions = {}): Promise<PlanOperationResult> {
+    const result = await writeIfDocumentHash(d.path, d.document_hash, text,options);
+    return result.ok ? { status: "applied", path: d.path, document_hash: result.document_hash, operation_id:result.operation_id, message, snapshot: record } : { status: "conflict", path: d.path, message: result.conflict,operation_id:result.operation_id,observed_document_hash:result.observed_document_hash };
   }
   private async operation(document: PlanDocument, action: () => Promise<PlanOperationResult>, onFailure?: (message: string) => Promise<PlanOperationResult | undefined>): Promise<PlanOperationResult> {
     try { return await action(); }

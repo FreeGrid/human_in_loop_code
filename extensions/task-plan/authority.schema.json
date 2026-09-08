@@ -2,47 +2,172 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:pi-plan:authorization-receipt:1",
   "title": "Task Plan Authorization Receipt",
-  "description": "Durable integrity record issued when a process-local Human capability is consumed. Schema and hash validation do not establish issuer authenticity; only trusted transition writers may persist this record. Capabilities themselves are never serialized. New manual_accept capabilities require context.payload_hash binding the displayed approved input, observation and artifact references; absent payload is legacy read-only evidence. Runtime also checks canonical timestamps, lifetime below ten minutes, absolute roots and SHA-256 canonical JSON hash excluding receipt_hash.",
+  "description": "Durable integrity record issued when a process-local Human capability is consumed. Schema and hash validation do not establish issuer authenticity; only trusted transition writers may persist this record. Capabilities themselves are never serialized. New manual_accept capabilities require context.payload_hash binding the displayed approved input, observation and artifact references; absent payload is legacy read-only evidence. Runtime also checks canonical timestamps, lifetime below ten minutes, absolute roots and SHA-256 canonical JSON hash excluding receipt_hash. Recovery always requires context.payload_hash for the exact operation and inspected journal head.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["version", "id", "action", "context", "provenance", "issued_at", "consumed_at", "nonce", "receipt_hash"],
+  "required": [
+    "version",
+    "id",
+    "action",
+    "context",
+    "provenance",
+    "issued_at",
+    "consumed_at",
+    "nonce",
+    "receipt_hash"
+  ],
   "properties": {
-    "version": { "const": 1 },
-    "id": { "$ref": "#/$defs/uuid" },
-    "action": { "enum": ["approve_what_why", "approve_plan", "approve_contract", "authorize_execution", "execute", "docsync_on", "docsync_off", "finalize", "reopen", "abandon", "complete", "next_round", "update_closure", "migrate", "manual_accept"] },
+    "version": {
+      "const": 1
+    },
+    "id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "action": {
+      "enum": [
+        "approve_what_why",
+        "approve_plan",
+        "approve_contract",
+        "authorize_execution",
+        "execute",
+        "docsync_on",
+        "docsync_off",
+        "finalize",
+        "reopen",
+        "abandon",
+        "complete",
+        "next_round",
+        "update_closure",
+        "migrate",
+        "manual_accept",
+        "recover"
+      ]
+    },
     "context": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["plan_id", "node_id", "document_hash", "contract_hash", "target_root", "governance_root"],
+      "required": [
+        "plan_id",
+        "node_id",
+        "document_hash",
+        "contract_hash",
+        "target_root",
+        "governance_root"
+      ],
       "properties": {
-        "plan_id": { "$ref": "#/$defs/text", "pattern": "^P[0-9]{3,}$" },
-        "node_id": { "$ref": "#/$defs/text", "pattern": "^(?:T[0-9]{3,}|\\$plan)$" },
-        "document_hash": { "$ref": "#/$defs/hash" },
-        "contract_hash": { "$ref": "#/$defs/hash" },
-        "target_root": { "$ref": "#/$defs/text" },
-        "governance_root": { "$ref": "#/$defs/text" },
-        "payload_hash": { "$ref": "#/$defs/hash" }
+        "plan_id": {
+          "$ref": "#/$defs/text",
+          "pattern": "^P[0-9]{3,}$"
+        },
+        "node_id": {
+          "$ref": "#/$defs/text",
+          "pattern": "^(?:T[0-9]{3,}|\\$plan)$"
+        },
+        "document_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "contract_hash": {
+          "$ref": "#/$defs/hash"
+        },
+        "target_root": {
+          "$ref": "#/$defs/text"
+        },
+        "governance_root": {
+          "$ref": "#/$defs/text"
+        },
+        "payload_hash": {
+          "$ref": "#/$defs/hash"
+        }
       }
     },
     "provenance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source", "input_id", "text"],
+      "required": [
+        "source",
+        "input_id",
+        "text"
+      ],
       "properties": {
-        "source": { "enum": ["interactive", "rpc", "slash"] },
-        "input_id": { "$ref": "#/$defs/text" },
-        "text": { "$ref": "#/$defs/text" }
+        "source": {
+          "enum": [
+            "interactive",
+            "rpc",
+            "slash"
+          ]
+        },
+        "input_id": {
+          "$ref": "#/$defs/text"
+        },
+        "text": {
+          "$ref": "#/$defs/text"
+        }
       }
     },
-    "issued_at": { "$ref": "#/$defs/timestamp" },
-    "consumed_at": { "$ref": "#/$defs/timestamp" },
-    "nonce": { "$ref": "#/$defs/uuid" },
-    "receipt_hash": { "$ref": "#/$defs/hash" }
+    "issued_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "consumed_at": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "nonce": {
+      "$ref": "#/$defs/uuid"
+    },
+    "receipt_hash": {
+      "$ref": "#/$defs/hash"
+    }
   },
   "$defs": {
-    "text": { "type": "string", "minLength": 1, "maxLength": 65536, "allOf": [{ "pattern": "\\S" }, { "not": { "pattern": "\\u0000" } }] },
-    "hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-    "uuid": { "type": "string", "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$" },
-    "timestamp": { "type": "string", "format": "date-time", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$" }
-  }
+    "text": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 65536,
+      "allOf": [
+        {
+          "pattern": "\\S"
+        },
+        {
+          "not": {
+            "pattern": "\\u0000"
+          }
+        }
+      ]
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "action": {
+            "const": "recover"
+          }
+        },
+        "required": [
+          "action"
+        ]
+      },
+      "then": {
+        "properties": {
+          "context": {
+            "required": [
+              "payload_hash"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

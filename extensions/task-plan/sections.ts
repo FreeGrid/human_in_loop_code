@@ -40,6 +40,27 @@ export function replaceSection(text: string, section: SectionName, content: stri
 }
 
 export function extractAllSections(text: string): Record<SectionName, string> {
+  // Every reserved token has one structural owner, even inside frontmatter/code fences.
+  const positions: Array<{ section: SectionName; start: number; end: number }> = [];
+  let previous = -1;
+  const frontmatterEnd = text.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/)?.[0].length ?? 0;
+  for (const section of Object.keys(MARKER_NAMES) as SectionName[]) {
+    const { start, end } = markersFor(section);
+    extractSection(text, section);
+    const a = text.indexOf(start), b = text.indexOf(end);
+    for (const [index, marker] of [[a, start], [b, end]] as const) {
+      if (index < frontmatterEnd || index && text[index - 1] !== "\n" || !["", "\n", "\r\n"].includes(text.slice(index + marker.length).match(/^(?:\r?\n|$)/)?.[0] ?? "invalid")) throw new Error("invalid_section_marker_line");
+    }
+    if (a <= previous) throw new Error("invalid_section_order_or_overlap");
+    positions.push({ section, start: a + start.length, end: b }); previous = b + end.length;
+  }
+  const tasks = positions.find(p => p.section === "tasks")!;
+  for (const match of text.matchAll(/<!--\s*pi-plan:/gi)) {
+    const index = match.index!;
+    const token = text.slice(index).match(/^<!-- pi-plan:(?:(?:what-why|plan|tasks|review):(?:start|end)|round:R\d{3}|(?:phase:T\d{3}|execution:T\d{3}\.W\d{3}):(?:start|end)) -->/)?.[0];
+    if (!token) throw new Error("unknown_or_malformed_plan_marker");
+    if (/^<!-- pi-plan:(?:phase|execution|round):/.test(token) && !(index >= tasks.start && index < tasks.end)) throw new Error("misplaced_plan_record_marker");
+  }
   return {
     what_why: extractSection(text, "what_why"),
     plan: extractSection(text, "plan"),

@@ -50,7 +50,7 @@ export function validatePlan(markdown: string, round: number): ValidationResult 
     if (/\[(?: |x|X)\]\s*$/.test(stage.title)) issues.push(error("plan_stage_has_completion", `T${String(stage.n).padStart(3, "0")} in Plan must not include a completion marker`));
   }
   if (stages.length) {
-    const sorted = [...seen].sort((a, b) => a - b);
+    const sorted = [...seen];
     for (let i = 0; i < sorted.length; i++) if (sorted[i] !== i + 1) issues.push(error("non_contiguous_stage", "Plan stages must be contiguous from T001"));
   }
   if (!Number.isInteger(round) || round < 0) issues.push(error("invalid_round", "round must start at 0 and stay non-negative"));
@@ -107,7 +107,7 @@ export function validateTasks(markdown: string, currentRound: number, options: {
   }
   for (const task of tasks) for (const dep of task.dependsOn) if (!ids.has(dep)) issues.push(error("unknown_dependency", `${task.id} depends on missing ${dep}`));
   issues.push(...dependencyCycleIssues(tasks));
-  const numeric = tasks.map((t) => Number(t.id.slice(1))).sort((a, b) => a - b);
+  const numeric = tasks.map((t) => Number(t.id.slice(1)));
   for (let i = 1; i < numeric.length; i++) if (numeric[i] === numeric[i - 1] || numeric[i]! <= numeric[i - 1]!) issues.push(error("invalid_task_order", "Task IDs must be globally increasing"));
   return result(issues);
 }
