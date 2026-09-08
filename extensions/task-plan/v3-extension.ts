@@ -37,6 +37,7 @@ function normalizeTasks(items: Array<{ id: string; text: string; completed?: boo
 export function registerReadablePlanExtension(pi: ExtensionAPI, options: ReadableExtensionOptions): ReadableHostState {
   const state: ReadableHostState = { modelSwitch: {} };
   const deliveryChecks = registerDeliveryChecks(pi);
+  let readableGeneration = 0;
   let governedHost: V3GovernedHost | undefined;
   let governedGeneration = 0;
   const governedFactory = options.governed;
@@ -46,13 +47,20 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     if (generation !== governedGeneration) throw new Error("governed_session_changed");
     return governedHost;
   };
-  const service = (cwd: string) => new ReadablePlanService(cwd, state, async (before, next) => {
+  const service = (cwd: string, signal?: AbortSignal) => {
+    const generation = readableGeneration;
+    return new ReadablePlanService(cwd, state, async (before, next) => {
+    signal?.throwIfAborted();
+    if (generation !== readableGeneration) throw new Error("v3_session_changed");
     for (const task of next.tasks) {
       if (!task.completed || before.plan.tasks.find(old => old.id === task.id)?.completed !== false) continue;
       const content = await deliveryChecks.beforeCompletion(before.path, task.id);
+      signal?.throwIfAborted();
+      if (generation !== readableGeneration) throw new Error("v3_session_changed");
       if (content) pi.sendMessage({ customType: "pi-docsync-delivery", display: true, content });
     }
-  });
+    });
+  };
   const switchModel = async (ctx: ExtensionContext, mode: TaskPlanModelMode) => {
     try { return await switchTaskPlanModel(pi, ctx, state.modelSwitch, options.modelConfig, mode); }
     catch {
@@ -124,7 +132,7 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     async execute(_id, params, signal, _update, ctx) {
       if (signal?.aborted) throw new Error("plan_update aborted");
       try {
-        await editable(ctx.cwd, params.path); const svc = service(ctx.cwd), before = await svc.previewEdit(params.path);
+        await editable(ctx.cwd, params.path); const svc = service(ctx.cwd, signal), before = await svc.previewEdit(params.path);
         let nextTasks = params.tasks && normalizeTasks(params.tasks, before.plan.tasks);
         if (params.task_id !== undefined || params.text !== undefined) {
           if (!params.task_id || params.text === undefined || nextTasks) throw new Error("Provide task_id and text together, or tasks.");
@@ -138,12 +146,12 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     } });
   pi.registerTool({ name: "plan_refine", label: "按需细化任务", description: "Refine a named unfinished task in place; omit task_id for the current task. Prefer useful detail for nearby work, keep distant work coarse, and do not force simple tasks to split. Other tasks remain unchanged.",
     parameters: Type.Object({ path: pathField, task_id: Type.Optional(Type.String()), subtasks: Type.Array(Type.String()) }, { additionalProperties: false }), executionMode: "sequential",
-    async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_refine aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd), before = await svc.previewEdit(params.path); return changed(before, await svc.refine(normalizeSubtasks(params.subtasks.map(text => ({ text })), (params.task_id === undefined ? currentReadableTask(before.plan) : before.plan.tasks.find(task => task.id === params.task_id))?.subtasks), params.task_id, params.path)); } catch (error) { return failure(error); } } });
+    async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_refine aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd, signal), before = await svc.previewEdit(params.path); return changed(before, await svc.refine(normalizeSubtasks(params.subtasks.map(text => ({ text })), (params.task_id === undefined ? currentReadableTask(before.plan) : before.plan.tasks.find(task => task.id === params.task_id))?.subtasks), params.task_id, params.path)); } catch (error) { return failure(error); } } });
   pi.registerTool({ name: "plan_set_task_status", label: "勾选任务", description: "During authorized ordinary execution, call this immediately after each subtask finishes using its one-based subtask position. Updating a child checks its parent only when all children are checked, and reopening a child reopens the parent. Preserve all subtask text. Explicit Human/manual completion needs no certification; no result text is appended.",
     parameters: Type.Object({ path: pathField, task_id: Type.String(), completed: Type.Boolean(), subtask: Type.Optional(Type.Integer({ minimum: 1, description: "Optional one-based small-work position." })) }, { additionalProperties: false }), executionMode: "sequential",
-    async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_set_task_status aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd), before = await svc.previewEdit(params.path); return changed(before, await svc.setStatus(params.task_id, params.completed, params.subtask === undefined ? undefined : params.subtask - 1, params.path)); } catch (error) { return failure(error); } } });
+    async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_set_task_status aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd, signal), before = await svc.previewEdit(params.path); return changed(before, await svc.setStatus(params.task_id, params.completed, params.subtask === undefined ? undefined : params.subtask - 1, params.path)); } catch (error) { return failure(error); } } });
   pi.registerTool({ name: "plan_select", label: "选择当前任务", description: "Move an open task to the current position, retaining IDs and all recorded subtasks.", parameters: Type.Object({ path: pathField, task_id: Type.String() }, { additionalProperties: false }), executionMode: "sequential",
-    async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_select aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd), before = await svc.previewEdit(params.path); return changed(before, await svc.select(params.task_id, params.path)); } catch (error) { return failure(error); } } });
+    async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_select aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd, signal), before = await svc.previewEdit(params.path); return changed(before, await svc.select(params.task_id, params.path)); } catch (error) { return failure(error); } } });
   pi.registerTool({ name: "plan_status", label: "当前进度", description: "Show the short checklist and next task without execution records.", parameters: Type.Object({ path: pathField }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, _signal, _update, ctx) { try { const old = await legacy(ctx.cwd, params.path); if (old) return response(legacyViewText(old)); const snapshot = await service(ctx.cwd).peek(params.path); return response(checklist(snapshot)); } catch (error) { return failure(error); } } });
   pi.registerTool({ name: "plan_continue", label: "继续普通工作", description: "When the user requests execution of a ready Plan (including contextual 继续), read its requirements and current work, then use ordinary work tools in the same turn. Not for continuing clarification or planning. No additional permissions or hidden runtime are granted.", parameters: Type.Object({ path: pathField }, { additionalProperties: false }), executionMode: "sequential",
@@ -194,6 +202,7 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
   pi.registerCommand("plan:next", { description: "继续当前任务的普通工作", async handler(args, ctx) { try { const old = await legacy(ctx.cwd, args.trim() || undefined); if (old) return ctx.ui.notify(legacyViewText(old), "info"); const snapshot = await service(ctx.cwd).peek(args.trim() || undefined); state.currentPlanPath = snapshot.path; remember(); if (!currentReadableTask(snapshot.plan)) return ctx.ui.notify("所有任务已勾选完成。", "info"); await switchModel(ctx, "normal"); remember(); queue(continuationContext(snapshot)); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
 
   pi.on("session_start", async (_event, ctx) => {
+    readableGeneration++;
     deliveryChecks.clear();
     governedGeneration++; governedHost?.clear();
     const entry = [...ctx.sessionManager.getEntries()].reverse().find((item: { type: string; customType?: string }) => item.type === "custom" && item.customType === "pi-plan-readable") as { data?: { currentPlanPath?: string; modelSwitch?: TaskPlanModelSwitchState } } | undefined;
