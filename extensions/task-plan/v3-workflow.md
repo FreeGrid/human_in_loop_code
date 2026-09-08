@@ -9,7 +9,9 @@ Start with `/plan` followed by what you want to do. The planner asks at most one
 | See progress | `/plan:status` |
 | Mark ordinary completion | `/plan:task T001 done`, or edit `[ ]` to `[x]` |
 | Reopen work | `/plan:task T001 open` |
-| Continue current work | `/plan:next` |
+| Continue current work | Ask to execute the ready Plan (for example “继续” or “开始做”), or use `/plan:next` |
+
+After a ready Plan, a request to begin or continue implementation tells the Agent to call `plan_continue` and then use ordinary work tools. It receives the current requirements, checklist and first unfinished subtask position. `/plan:next` supplies the same handoff directly. Natural-language intent is interpreted by the model: continuing clarification or discussion does not start implementation, and merely approving a Plan is not an execution request. If the selected file cannot be read, the Agent receives the error and should recover the file or clarify its path rather than guess the work. Other ordinary work remains available.
 
 Only the current task receives new detail. Completed tasks retain their subtasks and each subtask’s checkbox, so the work remains readable later. During authorized ordinary work, the Agent updates each finished subtask without waiting for a separate Human checkbox request. The last completed subtask automatically checks its parent; reopening a child reopens its parent. Unfinished or failed work stays unchecked. Tasks without children can be completed directly. Explicit Human/manual parent checks remain available. Reopening or selecting a task also preserves recorded children. The next task is refined when needed. Changing requirements replaces the old wording in place; affected completed work reopens by default. You remain free to mark work complete yourself. Edits normally report only their changes and impact rather than printing the entire Plan again.
 
