@@ -28,6 +28,7 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
     ...envConfig, ...config,
     planning: { ...envConfig.planning, ...config.planning },
     normal: { ...envConfig.normal, ...config.normal },
+    review: { ...envConfig.review, ...config.review },
   });
   registerReadablePlanExtension(pi, { modelConfig, governed: config.governed });
 }
