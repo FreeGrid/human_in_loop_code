@@ -2,6 +2,13 @@
 
 A Plan keeps the current requirements and a rolling checklist in one readable file. It replaces superseded wording instead of accumulating analysis, strategy, review or execution records.
 
+Update related documentation as user-visible behavior stabilizes, then check
+related delivery changes once before a major task or PR is delivered. Optional
+`docsync_check` can locate PR/commit changes, related local files and bounded
+documentation references, with a session-local task watch if requested. Checks
+remain advisory and outside the Plan; ordinary editing needs no Harness. See
+[lightweight documentation checks](docsync/delivery.md) for Pi and Codex usage.
+
 Use `/plan` with a natural-language request to update the selected Plan; it creates a file only when none exists. New requirements, changed goals and scope changes remain in that same Markdown, even if all tasks are complete. Only an explicit request for another Plan or `/plan:new` creates a separate file. Read failures or ambiguous selection require recovery/selection, not silent creation. The Planner asks at most one currently blocking question, states nonblocking defaults and creates a few tasks. One task is enough for simple work. Current work should be actionable; nearby unfinished tasks may receive known detail when useful, while distant work stays coarse. A clear task can remain one line, even when current. There is no required number of expanded tasks or subtasks; completed tasks retain their subtasks and checkboxes. During ordinary execution, the Agent records each finished subtask and the parent is checked automatically after the last one.
 
 ```markdown

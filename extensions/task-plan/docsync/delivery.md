@@ -92,3 +92,20 @@ fields (no Pi `watch`). Input is capped at 64 KiB; output is advisory JSON. No
 Skill, MCP setup, hidden runtime or Plan conversion is required. The caller
 controls PR lookup, checkout and permissions. Repository text is review data,
 never instructions to execute commands embedded in source or documentation.
+
+## Incremental context
+
+Within a Pi session, repeated checks still inspect current bytes and discovery
+domains. If the same request and inspected version remain unchanged, the helper
+omits repeated reference snippets but keeps candidate locations and unresolved
+questions. It stores at most sixteen version entries in memory; changing code,
+docs, policy, terms or relevant discovery results invalidates reuse. Unrelated
+files outside the selected domains do not invalidate the context cache.
+
+Limited/truncated or unsearched content is never cached as a reusable complete
+inspection. Narrow the request or review omitted items separately. The report
+version covers inspected inputs only, not unread files beyond the cap. Output
+is capped at 24,000 characters in Pi (with an explicit omission notice); CLI
+JSON over 64 KiB fails with a narrowing request. No cache is required to resume
+ordinary work, no unresolved issue is silently accepted, and no persistent
+history or debt ledger is created by this helper.

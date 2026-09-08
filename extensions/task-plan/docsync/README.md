@@ -1,5 +1,11 @@
 # Git facts and documentation obligations
 
+For ordinary V3/Codex work, see [lightweight delivery checks](delivery.md).
+That optional read-only helper uses explicit PR/commit ranges and related local
+selection without this legacy phase baseline or completion gate. The legacy
+decision/debt policy and restricted Maintainer described below remain separate
+unfinished work; the lightweight helper does not claim to implement them.
+
 A task summary can miss a file, and a commit is not the beginning of a new phase.
 DocSync therefore compares the **original phase content** with the final worktree.
 Existing dirty/untracked files that did not change are not claimed as new work;

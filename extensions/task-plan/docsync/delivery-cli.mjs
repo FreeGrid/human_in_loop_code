@@ -11,7 +11,9 @@ try {
     chunks.push(chunk);
   }
   const result = await inspectDocumentationImpact(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-  process.stdout.write(JSON.stringify({ advisory: true, ...result }) + "\n");
+  const output = JSON.stringify({ advisory: true, ...result });
+  if (Buffer.byteLength(output) > 65536) throw new Error("Report exceeds 64 KiB; narrow the scope, mappings or search domains");
+  process.stdout.write(output + "\n");
 } catch (error) {
   process.stderr.write(`Documentation check failed: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 1;
