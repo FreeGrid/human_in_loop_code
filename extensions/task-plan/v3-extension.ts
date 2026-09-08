@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { readPlanSource, readLegacyPlanView, legacyViewText, previewReadableMigration } from "./v3-compat.ts";
 import { currentReadableTask, renderReadablePlan, type ReadableTask, type ReadableSubtask } from "./v3-format.ts";
 import { ReadablePlanService, readableChanges, type ReadableSessionState, type ReadableSnapshot } from "./v3-service.ts";
-import { modelSwitchEntryData, switchTaskPlanModel, type TaskPlanModelSwitchConfig, type TaskPlanModelSwitchState } from "./model-switch.ts";
+import { modelSwitchEntryData, switchTaskPlanModel, type TaskPlanModelSwitchConfig, type TaskPlanModelSwitchState, type TaskPlanModelMode } from "./model-switch.ts";
 import { newReadablePlanPrompt, PLAN_CONTINUE_HINT, READABLE_PLAN_SYSTEM, reviseReadablePlanPrompt } from "./v3-prompts.ts";
 
 export interface ReadableHostState extends ReadableSessionState { modelSwitch: TaskPlanModelSwitchState }
@@ -45,11 +45,12 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     return governedHost;
   };
   const service = (cwd: string) => new ReadablePlanService(cwd, state);
-  const switchModel = async (ctx: ExtensionContext, mode: "planning" | "normal") => {
-    try { await switchTaskPlanModel(pi, ctx, state.modelSwitch, options.modelConfig, mode); }
+  const switchModel = async (ctx: ExtensionContext, mode: TaskPlanModelMode) => {
+    try { return await switchTaskPlanModel(pi, ctx, state.modelSwitch, options.modelConfig, mode); }
     catch {
       // A preference provider can fail independently of the available host model.
       try { ctx.ui.notify("模型偏好暂不可用，继续使用当前模型。", "info"); } catch { /* optional UI */ }
+      return false;
     }
   };
   const selectedSource = async (cwd: string, path?: string) => {
@@ -78,6 +79,12 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     return response(`${lines.length ? `已更新：\n${lines.map(line => `- ${line}`).join("\n")}` : "内容没有变化。"}\n${current ? `当前任务：${current.id} ${current.text}` : "所有任务已勾选完成。"}`);
   };
 
+  pi.registerTool({ name: "plan_set_mode", label: "选择工作阶段", description: "Before drafting a Plan, performing ordinary work, or reviewing code, select planning, normal, or review to apply the globally configured model preference. This grants no permissions and does not create independent review evidence. Do not repeatedly retry an unavailable preference.",
+    parameters: Type.Object({ mode: Type.Union([Type.Literal("planning"), Type.Literal("normal"), Type.Literal("review")]) }, { additionalProperties: false }), executionMode: "sequential",
+    async execute(_id, params, _signal, _update, ctx) {
+      const switched = await switchModel(ctx, params.mode); remember();
+      return response(!options.modelConfig.enabled ? "模型自动切换已关闭，继续使用当前模型。" : switched ? `已切换到 ${params.mode} 模型偏好。按用户要求继续；阶段选择不增加执行权限，也不代表完成或审阅通过。` : "模型偏好暂不可用，继续使用当前模型；不要重复尝试切换。");
+    } });
   pi.registerTool({ name: "plan_start", label: "创建 Plan", description: "Save current deduplicated requirements and a rolling checklist. One task is valid; add new detail only to the current task. This does not start implementation.",
     parameters: Type.Object({ title: Type.String(), brief: Type.String(), tasks }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, signal, _update, ctx) {
@@ -147,6 +154,10 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
   pi.registerCommand("plan", { description: "整理需求并建立简洁 Plan", handler: newPlan });
   pi.registerCommand("plan:new", { description: "建立新的简洁 Plan", handler: newPlan });
   pi.registerCommand("plan:edit", { description: "原位更新需求或任务", async handler(args, ctx) { if (!args.trim()) return ctx.ui.notify("用 /plan:edit 描述修改。", "info"); await switchModel(ctx, "planning"); queue(reviseReadablePlanPrompt(args)); } });
+  pi.registerCommand("plan:review", { description: "使用审阅模型检查代码，不改变任务状态", async handler(args, ctx) {
+    await switchModel(ctx, "review"); remember();
+    queue(`审阅当前代码变更；若已有 Plan，先读取它作为需求依据。${args.trim() ? `用户关注：${args.trim()}。` : ""}检查仓库实际状态，报告有依据的问题、位置及验证局限。没有问题就明确说明。只做审阅，不修改文件或 checklist，不把普通审阅称为 Harness 独立验收。`);
+  } });
   pi.registerCommand("plan:open", { description: "打开已有 Plan 文件", async handler(args, ctx) { try { const old = await legacy(ctx.cwd, args.trim() || undefined, true); if (old) { remember(); return ctx.ui.notify(legacyViewText(old), "info"); } const snapshot = await service(ctx.cwd).get(args.trim() || undefined); remember(); ctx.ui.notify(renderReadablePlan(snapshot.plan), "info"); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
   pi.registerCommand("plan:status", { description: "查看短 checklist", async handler(args, ctx) { try { const old = await legacy(ctx.cwd, args.trim() || undefined); ctx.ui.notify(old ? legacyViewText(old) : checklist(await service(ctx.cwd).peek(args.trim() || undefined)), "info"); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
   pi.registerCommand("plan:task", { description: "勾选或重新打开任务：T001 done|open", async handler(args, ctx) { const match = args.trim().match(/^(T\d{3,})\s+(done|open|完成|重开)$/iu); if (!match) return ctx.ui.notify("用 /plan:task T001 done 或 /plan:task T001 open。", "info"); try { await editable(ctx.cwd); const snapshot = await service(ctx.cwd).setStatus(match[1]!.toUpperCase(), /^(done|完成)$/iu.test(match[2]!)); remember(); ctx.ui.notify(checklist(snapshot), "info"); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
