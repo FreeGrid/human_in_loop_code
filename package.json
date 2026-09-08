@@ -30,6 +30,7 @@
     "extensions/control-init/**/*",
     "skills/collaborating-agents-system/**/*",
     "examples/subagents/**/*",
+    "docs/**/*.md",
     "README.md",
     "CHANGELOG",
     "LICENSE"
