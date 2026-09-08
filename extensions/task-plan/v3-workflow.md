@@ -26,18 +26,18 @@ Model preferences for planning, normal execution and review are configured globa
 | Execution | `PI_TASK_PLAN_NORMAL_MODEL_PROVIDER` | `PI_TASK_PLAN_NORMAL_MODEL_ID` | `PI_TASK_PLAN_NORMAL_THINKING` |
 | Review | `PI_TASK_PLAN_REVIEW_MODEL_PROVIDER` | `PI_TASK_PLAN_REVIEW_MODEL_ID` | `PI_TASK_PLAN_REVIEW_THINKING` |
 
-All three built-in presets use the locally registered Qwen 3.8 model `custom-qwen/qwen38-27b-fp8`, whose registration disables reasoning, so thinking is `off`. These values reproduce the presets; replace the IDs/providers with models configured in your Pi installation:
+All three built-in presets use the locally registered Qwen 3.8 model `custom-qwen/qwen38-27b-fp8`, with thinking `high` for planning/review and `medium` for execution. The local model registration must enable reasoning; a `reasoning: false` setting does not establish that the model lacks thinking support. These values reproduce the presets; replace the IDs/providers with models configured in your Pi installation:
 
 ```sh
 export PI_TASK_PLAN_PLANNING_MODEL_PROVIDER=custom-qwen
 export PI_TASK_PLAN_PLANNING_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_PLANNING_THINKING=off
+export PI_TASK_PLAN_PLANNING_THINKING=high
 export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=custom-qwen
 export PI_TASK_PLAN_NORMAL_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_NORMAL_THINKING=off
+export PI_TASK_PLAN_NORMAL_THINKING=medium
 export PI_TASK_PLAN_REVIEW_MODEL_PROVIDER=custom-qwen
 export PI_TASK_PLAN_REVIEW_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_REVIEW_THINKING=off
+export PI_TASK_PLAN_REVIEW_THINKING=high
 ```
 
 Existing `PI_TASK_PLAN_MODEL_PROVIDER` and `PI_TASK_PLAN_MODEL_ID` remain common fallbacks; explicit stage variables override them. Existing `PI_TASK_PLAN_THINKING` remains a planning alias. Thinking values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh` (existing aliases remain accepted). Explicit host configuration overrides environment values per preset field. `PI_TASK_PLAN_MODEL_SWITCH=0` disables automatic model switching. The default `PI_TASK_PLAN_RESTORE_MODE=configured` selects the configured execution model; `previous` instead restores the model and thinking level saved before entering planning or review.
@@ -51,3 +51,5 @@ The host defaults to V3. `plan_get` and `/plan:open` can also display the title 
 To keep using the original V1/V2 lifecycle, load `extensions/task-plan/legacy-index.ts` instead of the default entry. Existing named legacy APIs are exported there. Programmatic hosts may alternatively `await taskPlanExtension(pi, { legacy: true })`; explicitly configured legacy `creationOptions` or `phase` dependencies take the same awaitable path. `{ creationOptions: { format: "v3" } }` selects V3 even if legacy settings are present. Ordinary host work remains available; the strict legacy lifecycle is not applied to readable completion. [Optional governed execution](v3-governed.md) is separate and never inferred from a checkbox. An unconfigured `/plan:governed` command explains how ordinary work can continue.
 
 See [the format specification](v3-format.md) for the complete file shape. The [legacy guide](legacy-workflow.md) describes the original lifecycle and DocSync support.
+
+For self-hosted Qwen/vLLM, set model `reasoning: true`, `compat.thinkingFormat: "qwen-chat-template"`, and `compat.supportsReasoningEffort: false` if OpenAI effort values are unsupported. Pi sends `chat_template_kwargs.enable_thinking=true` for either high or medium; this mapping does not provide distinct budgets. Reload the Pi model registry after changing its configuration. Server-side thinking and reasoning-output parsing depend on the deployed model/template and vLLM configuration.
