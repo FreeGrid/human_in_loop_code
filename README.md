@@ -74,31 +74,45 @@ original lifecycle remains available through `legacy-index.ts`.
 [Optional governed execution](extensions/task-plan/v3-governed.md) ·
 [Legacy execution and DocSync](extensions/task-plan/legacy-workflow.md)
 
-`/plan` requests the planning preset: `openai-codex/gpt-6-astra` with thinking
-level `xhigh`. `/plan:next` or `plan_continue` requests the normal coding preset:
-`openai-codex/gpt-6-astra` with thinking level `medium`. These settings use Pi's
-current-session model API. Unavailable model preferences leave ordinary planning
-and work available with the current model; checking a task does not switch models.
+Planning, ordinary execution and review have separate global model presets. All
+three currently default to the locally registered Qwen model
+`custom-qwen/qwen38-27b-fp8` (Qwen 3.8), with thinking `off` because that registration
+has reasoning disabled. This provider/model must exist in your Pi model registry;
+otherwise a notice is shown and ordinary work continues with the current model.
 
-Configuration is available through environment variables:
+- `/plan` and `/plan:edit` select the planning model.
+- `/plan:next` and `plan_continue` select the execution model.
+- `/plan:review` selects the ordinary code-review model. Natural-language stage
+  changes use the Agent's `plan_set_mode` tool.
+- Optional Harness review passes the review preset to its independent reviewer
+  callback; the embedding host must launch that model. Switching the current
+  session alone is not independent review.
+
+Set these environment variables before starting Pi (for example in `~/.zshrc`):
 
 ```bash
-# Disable automatic model switching if needed.
-export PI_TASK_PLAN_MODEL_SWITCH=0
-
-# Planning preset.
-export PI_TASK_PLAN_MODEL_PROVIDER=openai-codex
-export PI_TASK_PLAN_MODEL_ID=gpt-6-astra
-export PI_TASK_PLAN_THINKING=xhigh
-
-# Normal/coding preset after planning.
-export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=openai-codex
-export PI_TASK_PLAN_NORMAL_MODEL_ID=gpt-6-astra
-export PI_TASK_PLAN_NORMAL_THINKING=medium
-
-# Optional: restore the model active before /plan instead of the configured normal preset.
-export PI_TASK_PLAN_RESTORE_MODE=previous
+export PI_TASK_PLAN_MODEL_SWITCH=1
+export PI_TASK_PLAN_PLANNING_MODEL_PROVIDER=custom-qwen
+export PI_TASK_PLAN_PLANNING_MODEL_ID=qwen38-27b-fp8
+export PI_TASK_PLAN_PLANNING_THINKING=off
+export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=custom-qwen
+export PI_TASK_PLAN_NORMAL_MODEL_ID=qwen38-27b-fp8
+export PI_TASK_PLAN_NORMAL_THINKING=off
+export PI_TASK_PLAN_REVIEW_MODEL_PROVIDER=custom-qwen
+export PI_TASK_PLAN_REVIEW_MODEL_ID=qwen38-27b-fp8
+export PI_TASK_PLAN_REVIEW_THINKING=off
+export PI_TASK_PLAN_RESTORE_MODE=configured
 ```
+
+Each stage can be changed independently. Existing `PI_TASK_PLAN_MODEL_PROVIDER`
+and `PI_TASK_PLAN_MODEL_ID` remain common fallbacks; explicit stage variables win.
+`PI_TASK_PLAN_THINKING` remains a planning alias. Explicit host configuration wins
+over environment fields. Set `PI_TASK_PLAN_MODEL_SWITCH=0` to disable switching,
+or `PI_TASK_PLAN_RESTORE_MODE=previous` to restore the model active before planning
+or review instead of using the configured execution preset. Environment changes
+require a new Pi process with the updated environment. No model configuration is
+written to the readable Plan. See the [workflow guide](extensions/task-plan/v3-workflow.md)
+for accepted thinking levels and ordinary/independent review boundaries.
 
 Package consumers that import the extension directly can also pass a
 `TaskPlanExtensionConfig` object to the default task-plan extension factory. It

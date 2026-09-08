@@ -21,6 +21,24 @@ plan_id: P001
 
 Change requirements in place with `/plan:edit …`. Use `/plan:status` for progress, `/plan:task T001 done` to check a task, and `/plan:next` to continue ordinary work. You can edit and check the Markdown yourself. Ordinary completion needs no hidden state or certification; a copied Plan remains usable in a fresh session. Planning alone does not request implementation.
 
+Planning, execution and review have separate global model preferences. They currently
+all default to `custom-qwen/qwen38-27b-fp8` (the locally registered Qwen 3.8 model),
+with thinking `off`. Use the exact provider/model registered in your Pi installation.
+
+| Stage | Model ID variable | Entry |
+|---|---|---|
+| Planning | `PI_TASK_PLAN_PLANNING_MODEL_ID` | `/plan`, `/plan:edit` |
+| Execution | `PI_TASK_PLAN_NORMAL_MODEL_ID` | `/plan:next`, `plan_continue` |
+| Review | `PI_TASK_PLAN_REVIEW_MODEL_ID` | `/plan:review` |
+
+Each stage also supports the corresponding `_MODEL_PROVIDER` and `_THINKING`
+variables. Set them before starting Pi; explicit stage variables override the older
+common aliases. `PI_TASK_PLAN_MODEL_SWITCH=0` disables switching. Missing model
+preferences do not block ordinary work. `/plan:review` is ordinary review, while
+Harness review forwards the preset to a separately configured independent reviewer.
+See the [root README configuration example](../../README.md) for all variables.
+Model settings stay outside the Plan file.
+
 - [Ordinary commands and editing](v3-workflow.md)
 - [Minimal format and checkbox semantics](v3-format.md)
 - [Optional governed execution](v3-governed.md) for configured hosts that need additional execution controls

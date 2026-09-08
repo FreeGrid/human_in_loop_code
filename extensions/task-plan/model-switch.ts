@@ -25,9 +25,9 @@ export interface TaskPlanModelSwitchState {
 
 export const DEFAULT_TASK_PLAN_MODEL_CONFIG: Required<TaskPlanModelSwitchConfig> = {
   enabled: true,
-  planning: { provider: "openai-codex", model: "gpt-6-astra", thinkingLevel: "xhigh" },
-  normal: { provider: "openai-codex", model: "gpt-6-astra", thinkingLevel: "medium" },
-  review: { provider: "openai-codex", model: "gpt-6-astra", thinkingLevel: "xhigh" },
+  planning: { provider: "custom-qwen", model: "qwen38-27b-fp8", thinkingLevel: "off" },
+  normal: { provider: "custom-qwen", model: "qwen38-27b-fp8", thinkingLevel: "off" },
+  review: { provider: "custom-qwen", model: "qwen38-27b-fp8", thinkingLevel: "off" },
   restoreMode: "configured",
 };
 
