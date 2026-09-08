@@ -1,3 +1,9 @@
+# Readable V3 workflow
+
+New default sessions use a current requirements brief and rolling checklist. Manual completion is valid and hidden execution state is optional. See [ordinary commands and editing](v3-workflow.md) and the [V3 file format](v3-format.md).
+
+The documentation below describes the explicitly configured V1/V2 compatibility workflow.
+
 New Plans use a native V2 canonical node format. Existing V1 Plans retain their identity and baseline rules. See [domain and identity contract](domain-identity.md) for creation, node editing, approval selection and baseline compatibility. Migration apply remains disabled.
 
 # Task Plan: recoverable, Human-gated phase execution

@@ -18,6 +18,7 @@ import { inspectPhaseRecords } from "./phase-record.ts";
 import { explicitPhaseAction } from "./phase-input.ts";
 import type { PhaseDependencies } from "./phase-contracts.ts";
 import { renderPlanOperationResult } from "./operation-result.ts";
+import { registerReadablePlanExtension } from "./v3-extension.ts";
 
 export * from "./docsync/index.ts";
 export * from "./execution-notes.ts";
@@ -44,7 +45,7 @@ export * from "./tasks.ts";
 export * from "./types.ts";
 export * from "./validators.ts";
 
-export interface TaskPlanExtensionConfig extends TaskPlanModelSwitchConfig { phase?: PhaseDependencies; creationOptions?:PlanCreationOptions }
+export interface TaskPlanExtensionConfig extends TaskPlanModelSwitchConfig { phase?: PhaseDependencies; creationOptions?:PlanCreationOptions | { format: "v3" } }
 
 export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExtensionConfig = {}): void {
   const envConfig = taskPlanModelConfigFromEnv();
@@ -54,6 +55,11 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
     planning: { ...envConfig.planning, ...config.planning },
     normal: { ...envConfig.normal, ...config.normal },
   });
+  // Existing explicitly configured legacy hosts retain their lifecycle. New hosts use ordinary V3.
+  if (config.creationOptions?.format === "v3" || (!config.creationOptions && !config.phase)) {
+    registerReadablePlanExtension(pi, { modelConfig });
+    return;
+  }
   const state: TaskPlanSessionState = { modelSwitch: {}, creationOptions:config.creationOptions, phaseDependencies: { baseline: new GitBaselineProvider({planIdentityResolver:async(context,text)=>({policy:"node-v1",identity:nodeContractHash(parsePlanCandidate(context.plan_path,text),context.phase_id,config.phase?.evidence)})}), ...config.phase } };
   registerTaskPlanTools(pi, state);
   registerTaskPlanCommands(pi, state, modelConfig);
