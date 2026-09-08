@@ -1,34 +1,40 @@
-# Readable Plan V3
+# Readable Plan V3 文件规范
 
-A Plan records the current requirements and a rolling checklist. It is an ordinary Markdown file and remains useful without execution state or a configured Controller.
+[返回 Plan 指南](README.md) · [命令与工作流](v3-workflow.md)
+
+Plan 是普通 Markdown。文件顶部两条元数据告诉程序它是哪种格式、是哪份计划；其余内容供人阅读。读者不需要隐藏运行状态就能理解它。完整例子见 [KM 的两次 Plan 状态](README.md)。
+
+| 位置 | 允许内容 |
+| --- | --- |
+| frontmatter，即文件开头两行 `---` 之间 | 只允许 `format: pi-plan/v3` 和 `plan_id: P001` 这两个字段 |
+| 标题 | 一个 `#` 一级标题 |
+| 需求 | 一段或少量几段当前有效的纯文本需求，包含必要边界、输入输出和约束 |
+| 大任务 | `- [ ] T001 工作描述` 或 `- [x] T001 工作描述` |
+| 子任务 | 两空格缩进的 `- [ ] 工作描述` 或 `- [x] 工作描述`，不再继续嵌套 |
+
+`plan_id` 为 P 后接至少三位数字；大任务为 T001 这样的正整数 ID，不重复。子任务没有单独 ID。任务的顺序决定执行顺序，ID 随任务保留。创建文件使用 `plans/NNN-title.md` 的平铺递增命名，不给每个计划再建立目录。
+
+下面这样只有一项任务也有效，不强制添加 T002 或子任务：
 
 ```markdown
 ---
 format: pi-plan/v3
-plan_id: P001
+plan_id: P002
 ---
 
-# C++ KM matching
+# 修正文档链接
 
-Write a C++17 single-file program within 100 lines for maximum-weight perfect
-matching on a square complete bipartite graph. Integer weights may be negative.
-Read the size and weight matrix; output the total weight and matching.
+修正 README 中指向安装指南的失效链接，保持其他内容不变。
 
-- [ ] T001 Implement the algorithm
-  - [ ] Initialize labels and matching
-  - [ ] Maintain slack and augment
-- [ ] T002 Add input and output
-- [ ] T003 Check the implementation
+- [ ] T001 修正安装指南链接
 ```
 
-Only `format` and `plan_id` are allowed in frontmatter. The body has one title, prose requirements and a two-level checkbox tree. There are no section markers or hidden records. Put each requirement in one place; task labels describe work without repeating the requirements.
+需求中不再分别列 Goal、Scope、Constraints、Success 等章节。正文也不放 Strategy、Acceptance、Verification、执行总结、命令、证据、哈希、权限回执或恢复记录。不要用 HTML 注释、隐藏 JSON 或额外 heading 变相存储它们。一个事实有一个位置，用户的新理解替换旧理解。
 
-The first unchecked top-level task is current. That selection determines execution order, not which unfinished tasks may be refined. Nearby work may gain useful detail in place; distant tasks normally remain one meaningful line. No fixed lookahead window or child count is required; recorded children remain visible under completed or previously selected tasks. A simple Plan may contain one task and no subtasks. IDs remain attached to tasks when their order changes; they do not determine which task is current.
+当前任务是第一个未勾选的大任务。附近的未完成任务可以提前细化，远期通常保持简短；没有固定展开数量。完成项保留子任务，完成、读取、切换选择和普通保存不会为你删除它们。明确修改整个子任务列表仍可调整条目，所以“保留”不代表人工永远不能编辑。
 
-`[x]` means currently considered complete. Humans may check a task directly, including in an external editor. Ordinary completion does not need authentication or evidence. During ordinary execution, the Agent records each completed subtask immediately. A child status update automatically checks its parent when every child is checked; reopening a child reopens its parent. This upward update preserves every subtask's text and order. A task with no subtasks is completed directly. Reading, saving, reopening or selecting another task does not remove recorded children. An explicit Human/manual parent edit remains valid and does not automatically change child checkboxes. Pure reads and unrelated edits do not overwrite that choice. Ordinary aggregation is not governed evidence. Explicitly editing the current subtask list can still revise or remove items. Do not append results, summaries or verification details. A substantive requirement or task edit normally reopens affected work; the Human may mark it complete again.
+`[x]` 表示当前认为完成，人可以手工勾选。通过工具更新子任务时，全部孩子完成才汇总父任务，重开孩子也重开父任务；直接改父任务不连带修改孩子。修改定义后的重新打开规则见 [工作流](v3-workflow.md)。外部编辑器没有调用这些规则时，需要编辑者同步维护一致的进度。
 
-The codec and file APIs are independent of legacy formats and execution state. Reads never create a runtime or acquire a write lock. Writes validate the complete candidate, compare the original file bytes and atomically replace it under a cooperative per-file lock. A stale edit must reread the current file before retrying. An unknown lock affects that write only; it does not prevent reading or ordinary editing with another editor. These locks do not make arbitrary external writers transactional. A post-replacement durability error is reported as uncertain rather than falsely claiming that no write occurred.
+解析和读取不打开执行库或申请写锁。工具写入会先验证完整候选，再比较原始字节并原子替换；过期修改需要重读，未知写锁影响该次写入，不妨碍只读或其他普通编辑器。这些是合作式写入保护，不构成整个文件系统的事务。写后持久化情况不确定时会报告不确定，不伪称完全没写入。
 
-V1/V2 retain their own format and identity interpretation. V3 file writers refuse to overwrite a legacy document. Creating a V3 Plan allocates the next flat `plans/NNN-title.md` identity without rewriting old files. No automatic migration is performed.
-
-Optional governed execution can maintain stricter contracts and authenticated evidence outside this file. Such evidence is not implied by a handwritten checkbox and is never required for ordinary use.
+V3 写入器不会覆盖 V1/V2。旧格式保留原身份和生命周期，没有自动迁移。可选执行内核可以在文件外维护更强合同与证据，但普通 checkbox 不代表这类证据，读取 Plan 也不需要它们。

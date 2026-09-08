@@ -1,15 +1,16 @@
-# Task Plan
+# Task Plan：在实现之前，先让彼此理解的是同一件事
 
-A Plan keeps the current requirements and a rolling checklist in one readable file. It replaces superseded wording instead of accumulating analysis, strategy, review or execution records.
+[返回首页](../../README.md) · [命令与工作流](v3-workflow.md) · [文件格式](v3-format.md) · [模型配置](../../docs/models.md)
 
-Update related documentation as user-visible behavior stabilizes, then check
-related delivery changes once before a major task or PR is delivered. Optional
-`docsync_check` can locate PR/commit changes, related local files and bounded
-documentation references, with a session-local task watch if requested. Checks
-remain advisory and outside the Plan; ordinary editing needs no Harness. See
-[lightweight documentation checks](docsync/delivery.md) for Pi and Codex usage.
+“帮我写一个 100 行内的 C++ KM 算法。”这句话看起来很具体，真正动手时却仍有选择：是否允许负权，是否要求完美匹配，输入是什么，输出只要总权值还是也要配对结果？如果模型直接选了自己的答案，代码越快写出来，人越晚发现偏差，返工的成本就越高。Plan 的价值在于把这些约定提前放到你看得见的位置。
 
-Use `/plan` with a natural-language request to update the selected Plan; it creates a file only when none exists. New requirements, changed goals and scope changes remain in that same Markdown, even if all tasks are complete. Only an explicit request for another Plan or `/plan:new` creates a separate file. Read failures or ambiguous selection require recovery/selection, not silent creation. The Planner asks at most one currently blocking question, states nonblocking defaults and creates a few tasks. One task is enough for simple work. Current work should be actionable; nearby unfinished tasks may receive known detail when useful, while distant work stays coarse. A clear task can remain one line, even when current. There is no required number of expanded tasks or subtasks; completed tasks retain their subtasks and checkboxes. During ordinary execution, the Agent records each finished subtask and the parent is checked automatically after the last one.
+计划也不能让人失去阅读耐心。真实试用里，这个 KM 请求曾被展开成约 135 行 Plan，包含 Original Request、Goal、Strategy、Acceptance、Verification 等多层内容。同一事实被反复表达，一处还在提问，另一处已经作了假设。问题不是单独某个标题太长，而是每次理解得更细，就多留一层文档。短对话里的要求反而变得难以核对。
+
+现在的 Plan 是**当前需求加 rolling checklist**。模糊请求逐渐变清楚时，新的理解在原处替换旧的理解。大任务和小工作只是观察同一个意图的不同尺度，不必同时保存原始请求、需求分析、策略和每轮总结。简单任务可以只有一个 checkbox；需要分工或逐步交付时，再拆成几个有意义的大任务。
+
+## 初次生成：把边界说清，把眼前的事拆到能做
+
+下面是一个已经确认边界后的例子。它没有自行增加规模上限、性能报告或额外的 README 交付要求。是否需要这些，应由实际需求决定。
 
 ```markdown
 ---
@@ -17,41 +18,74 @@ format: pi-plan/v3
 plan_id: P001
 ---
 
-# KM 算法程序
+# 百行内 C++ KM 最大权匹配
 
-实现不超过 100 行的 C++17 单文件 KM 程序，求 n×n 完全二分图的最大权完美匹配。整数权值允许负数。输入 n 和权值矩阵，输出最大总权值及匹配结果。不支持缺边、非方阵或非完美匹配。
+实现不超过 100 行的 C++17 单文件程序，用 KM 算法求 n×n 完全二分图的最大权完美匹配。整数权值允许负数。输入 n 和权值矩阵，输出最大总权值和匹配结果。不支持缺边、非方阵和非完美匹配。
 
-- [ ] T001 实现程序
-  - [ ] 完成核心算法与输入输出
-  - [ ] 检查实现符合需求
+- [ ] T001 实现 KM 核心算法
+  - [ ] 初始化顶标与匹配
+  - [ ] 维护 slack 和交替树
+  - [ ] 完成增广
+- [ ] T002 补齐输入输出
+- [ ] T003 检查实现符合需求
 ```
 
-Change requirements in place with `/plan:edit …`. Use `/plan:status` for progress, `/plan:task T001 done` to check a task, and `/plan:next` to continue ordinary work. You can edit and check the Markdown yourself. Ordinary completion needs no hidden state or certification; a copied Plan remains usable in a fresh session. Planning alone does not request implementation.
+第一次读到这里，建议完整读完需求和每条任务。你不需要理解顶标的代码写法，也能核对“负权”“输出配对”“不支持缺边”是不是自己想要的边界。真正影响当前执行的歧义应先问清；Planner 被要求一次最多询问一个当前阻塞问题，非阻塞项使用明确默认值，避免为了穷尽问题把简单任务拖成问卷。这是对模型的规划指导，生成后仍需要人阅读。
 
-Planning, execution and review have separate global model preferences. They currently
-all default to `custom-qwen/qwen38-27b-fp8` (the locally registered Qwen 3.8 model),
-with thinking `high` for planning/review and `medium` for execution. Enable reasoning
-in the Pi model registration; for vLLM use `qwen-chat-template` compatibility.
-That format maps both levels to thinking enabled, not separate token budgets.
-Use the exact provider/model registered in your Pi installation.
+## Rolling：越近越具体，不是越做越长
 
-| Stage | Model ID variable | Entry |
-|---|---|---|
-| Planning | `PI_TASK_PLAN_PLANNING_MODEL_ID` | `/plan`, `/plan:edit` |
-| Execution | `PI_TASK_PLAN_NORMAL_MODEL_ID` | `/plan:next`, `plan_continue` |
-| Review | `PI_TASK_PLAN_REVIEW_MODEL_ID` | `/plan:review` |
+大项目不可能一开始就知道后面所有细节。rolling 的做法是让当前任务足够明确，给临近任务补充已经确定的工作，远期任务先保持一句清楚的方向。它没有强制的“只能展开一个任务”限制，也没有每个任务必须拆三项的配额。一个已经可以直接执行的任务，保持一行就很好。
 
-Each stage also supports the corresponding `_MODEL_PROVIDER` and `_THINKING`
-variables. Set them before starting Pi; explicit stage variables override the older
-common aliases. `PI_TASK_PLAN_MODEL_SWITCH=0` disables switching. Missing model
-preferences do not block ordinary work. `/plan:review` is ordinary review, while
-Harness review forwards the preset to a separately configured independent reviewer.
-See the [root README configuration example](../../README.md) for all variables.
-Model settings stay outside the Plan file.
+例如，你在做 KM 算法时已经确定了输入格式，可以提前给 T002 加两条工作；论文实验尚未设计，就不必现在列出每张图、每个消融实验。细化应当减少不确定性，而不是把“阅读、分析、实施、检查”机械复制到每个任务下。通常几条有实际含义的小工作就足够，始终只保留大任务和子任务两层。
 
-- [Ordinary commands and editing](v3-workflow.md)
-- [Minimal format and checkbox semantics](v3-format.md)
-- [Optional governed execution](v3-governed.md) for configured hosts that need additional execution controls
-- [Explicit legacy V1/V2 workflow](legacy-workflow.md)
+当 T001 完成，进入 T002 后，同一份 Plan 可以变成：
 
-V1/V2 files are read-only through ordinary V3 tools. Explicit migration preview uses supplied current requirements and never writes the old file. The legacy entry retains the original execution lifecycle. No automatic migration, commit, merge or release follows from a Plan command.
+```markdown
+---
+format: pi-plan/v3
+plan_id: P001
+---
+
+# 百行内 C++ KM 最大权匹配
+
+实现不超过 100 行的 C++17 单文件程序，用 KM 算法求 n×n 完全二分图的最大权完美匹配。整数权值允许负数。输入 n 和权值矩阵，输出最大总权值和匹配结果。不支持缺边、非方阵和非完美匹配。
+
+- [x] T001 实现 KM 核心算法
+  - [x] 初始化顶标与匹配
+  - [x] 维护 slack 和交替树
+  - [x] 完成增广
+- [ ] T002 补齐输入输出
+  - [ ] 读取 n 和权值矩阵
+  - [ ] 输出总权值及配对结果
+- [ ] T003 检查实现符合需求
+```
+
+完成的子任务被保留，你可以回看做过哪些事情。Plan 不追加“实现了多少行”“测试通过”“结果如下”；这些材料应该进入代码、测试或 control 的执行记录。`[x]` 已经表达进度，再增加一段完成总结只会让同一份计划不断膨胀。
+
+## 改主意时，仍然改这一份
+
+默认选中的 Plan 在完成后也继续有效。新增需求、改变范围甚至改变目标，都先更新当前文件；只有你明确说“新开一个 Plan”，或运行 `/plan:new`，才建立另一份。这样不会因为一句补充需求，在目录里生成两份互相竞争的“当前计划”。
+
+例如原来尚未要求负权，你现在说：
+
+```text
+/plan:edit 需要支持负权，但不用支持非方阵。继续修改当前计划。
+```
+
+Agent 应原位更新需求，并调整真正受到影响的算法任务，默认只回复变化和影响。若修改改变了已完成工作的定义，使用 Plan 工具会重新打开相应任务；尚未受影响的进度应保留。需求整体变动而无法确定影响范围时，程序采取较保守的重新打开方式；模型可以在明确影响后提交局部范围。重新勾选仍可由人决定。
+
+## 子任务会自动勾选吗
+
+执行时，Agent 被要求完成一个子任务就记录一个，而不是等人逐项催。**记录动作仍要由 Agent 调用工具；调用之后，父子汇总由程序执行。** 最后一个子任务被勾选时，父任务会自动完成；打开任一子任务，父任务也会重新打开。其他子任务的文字、顺序和已有进度保留。无子任务的大任务可以直接完成。
+
+人也可以直接改 Markdown，或使用 `/plan:task T001 done` 勾选父任务。直接改父任务不自动改子任务，读取或无关修改也不会偷偷覆盖这个选择。因此，普通 checkbox 允许表达人的判断，不强制要求认证。它不能被当作“真实验证通过”的证明。
+
+使用工具修改任务定义与直接用外部编辑器改文字，保证范围也不同：程序能处理自己看到的定义修改和过期写入，却不能追溯任何编辑器里发生过的全部语义变化。手工改了已完成项的含义，记得同时重新打开受影响工作。工具不会因完成而删子任务，但你明确编辑整份子任务列表时，仍可以修订或移除条目。
+
+## 从计划走向工作
+
+先批准计划内容，再明确说“按计划开始执行当前任务”。之后“继续”通常应让模型调用 `plan_continue` 并开始本轮实际工作。自然语言由模型判断，不是一个写死的关键词触发器；如果它继续解释却没有行动，直接输入 `/plan:next`。查看进度用 `/plan:status`，指定另一份文件用 `/plan:open plans/001-km.md`。
+
+普通 Plan 不要求隐藏状态、签名密钥或受治理执行服务。你可以复制到另一个会话，也可以自己勾选。需要真实验证和独立审阅来决定受治理完成时，再显式接入 [可选 Harness](v3-governed.md)。不要把“普通工作仍可用”误解为“已经获得额外的验证保证”。
+
+功能稳定时更新相关用户文档，交付前检查相关变化；这项工作遵循 [文档维护流程](docsync/delivery.md)，不会把文档检查记录塞回 Plan。

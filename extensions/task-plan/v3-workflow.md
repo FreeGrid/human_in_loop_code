@@ -1,60 +1,66 @@
-# Working with a readable Plan
+# Plan 的日常命令与工作流
 
-Use `/plan` followed by what you want to do. It updates the selected Plan by default, including a fully completed Plan; it creates a file only when none exists. All additions and goal/scope changes stay in the same Markdown without judging whether they are related. Explicitly ask for a new/separate Plan, or use `/plan:new`, to create another file. The planner asks at most one currently blocking question, states reasonable nonblocking defaults, and saves the current requirements with a short checklist. A simple request may have just one task. Planning alone does not start implementation.
+[Plan 的意义与例子](README.md) · [格式规范](v3-format.md) · [分阶段模型配置](../../docs/models.md)
 
-| Action | How |
-|---|---|
-| Add or change requirements in the same file | Describe the change, `/plan …`, or `/plan:edit …` |
-| Explicitly create another Plan | `/plan:new …` or explicitly ask for a new Plan |
-| Open an existing file | `/plan:open plans/001-example.md` |
-| See progress | `/plan:status` |
-| Review current code changes | `/plan:review` or `/plan:review focus on negative weights` |
-| Mark ordinary completion | `/plan:task T001 done`, or edit `[ ]` to `[x]` |
-| Reopen work | `/plan:task T001 open` |
-| Continue current work | Ask to execute the ready Plan (for example “继续” or “开始做”), or use `/plan:next` |
+最常用的一条路径是：描述需求，让 Plan 变得可读；确认意思以后，明确请求执行；每完成一部分就更新 checkbox；想法变化时在原位置修改。命令提供直接入口，自然语言让表达更方便。两者共享同一份 Plan，但自然语言能否触发正确工具，仍取决于模型是否遵循指令。
 
-The selected file remains the default after completion. Add new tasks or reopen affected work through the existing update rules; preserve unaffected progress and reply only with changes/impact. Without a selection, the existing discovery rule selects a unique unfinished Plan, or a unique completed Plan if no unfinished one exists. If selection is ambiguous, open the intended file; do not create another one as a workaround. A missing, malformed or unreadable selected file is an error to recover, not proof that no Plan exists. Selected V1/V2 files keep their read-only compatibility boundary; this policy does not migrate them.
+## 先选对文件
 
-`plan_start` is guarded: when a Plan already exists it returns a redirect to `plan_get` and `plan_update`, without creating a file or overwriting requirements. The Agent must submit an intentional update after reading the source. Only an explicit Human new-Plan request uses `new_plan: true`; that flag expresses authoring intent, not an authenticated permission or a new execution grant. `/plan:new` queues this explicit creation request; it does not create a file until the Agent saves it. Direct low-level `ReadablePlanService.start` remains an explicit create API.
+在 Pi 中运行 `/plan 你的需求`，默认修改当前 Plan。没有已选文件时，会尝试选择唯一未完成的 V3 Plan；没有未完成项时，可以选择唯一已完成的 V3 Plan。出现多份候选，应使用 `/plan:open` 明确选择。文件发现只检查 `plans/NNN-*.md` 的有效 V3 文件，不会把其他所有 Markdown 都当作计划。
 
-After a ready Plan, a request to begin or continue implementation tells the Agent to call `plan_continue` and then use ordinary work tools. It receives the current requirements, checklist and first unfinished subtask position. `/plan:next` supplies the same handoff directly. Natural-language intent is interpreted by the model: continuing clarification or discussion does not start implementation, and merely approving a Plan is not an execution request. If the selected file cannot be read, the Agent receives the error and should recover the file or clarify its path rather than guess the work. Other ordinary work remains available.
-
-Refine by need and proximity: make current work actionable, add already-known detail to nearby unfinished tasks when useful, and keep distant goals coarse. A clear directly executable task stays one line. There is no mandatory lookahead window or subtask count. When splitting helps tracking, usually 2–4 meaningful actions suffice; avoid mechanical read/analyze/implement/verify lists. More concrete does not mean more items. Keep two levels and do not invent deliverables while refining. Completed tasks retain their subtasks and each subtask’s checkbox, so the work remains readable later. During authorized ordinary work, the Agent updates each finished subtask without waiting for a separate Human checkbox request. The last completed subtask automatically checks its parent; reopening a child reopens its parent. Unfinished or failed work stays unchecked. Tasks without children can be completed directly. Explicit Human/manual parent checks remain available. Reopening or selecting a task also preserves recorded children. `plan_refine` accepts an unfinished `task_id`, defaulting to the current task when omitted. Refining another task does not select it. Completed tasks must be reopened before using this refinement tool; `plan_update` can redefine completed work and reopen affected completion as before. Redundant unfinished subtasks may be merged or rewritten in place, while completed children remain recorded. Changing requirements replaces the old wording in place; affected completed work reopens by default. You remain free to mark work complete yourself. Edits normally report only their changes and impact rather than printing the entire Plan again.
-
-The ordinary tools are `plan_set_mode`, `plan_start`, `plan_get`, `plan_update`, `plan_refine`, `plan_set_task_status`, `plan_select`, `plan_status`, and `plan_continue`. They work without a signing key, journal, execution approval or hidden state. A copied readable file can be opened in a fresh session. If another editor changes a file after it was read, reread it before retrying the edit. No command blocks ordinary host tools merely because a Plan is selected.
-
-Model preferences for planning, normal execution and review are configured globally through environment variables read when the extension loads. Set them in your shell startup file before launching Pi, then restart/reload the extension after changing them. A running process does not reread later shell changes. The file never stores model settings.
-
-| Stage | Provider | Model ID | Thinking level |
-|---|---|---|---|
-| Planning | `PI_TASK_PLAN_PLANNING_MODEL_PROVIDER` | `PI_TASK_PLAN_PLANNING_MODEL_ID` | `PI_TASK_PLAN_PLANNING_THINKING` |
-| Execution | `PI_TASK_PLAN_NORMAL_MODEL_PROVIDER` | `PI_TASK_PLAN_NORMAL_MODEL_ID` | `PI_TASK_PLAN_NORMAL_THINKING` |
-| Review | `PI_TASK_PLAN_REVIEW_MODEL_PROVIDER` | `PI_TASK_PLAN_REVIEW_MODEL_ID` | `PI_TASK_PLAN_REVIEW_THINKING` |
-
-All three built-in presets use the locally registered Qwen 3.8 model `custom-qwen/qwen38-27b-fp8`, with thinking `high` for planning/review and `medium` for execution. The local model registration must enable reasoning; a `reasoning: false` setting does not establish that the model lacks thinking support. These values reproduce the presets; replace the IDs/providers with models configured in your Pi installation:
-
-```sh
-export PI_TASK_PLAN_PLANNING_MODEL_PROVIDER=custom-qwen
-export PI_TASK_PLAN_PLANNING_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_PLANNING_THINKING=high
-export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=custom-qwen
-export PI_TASK_PLAN_NORMAL_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_NORMAL_THINKING=medium
-export PI_TASK_PLAN_REVIEW_MODEL_PROVIDER=custom-qwen
-export PI_TASK_PLAN_REVIEW_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_REVIEW_THINKING=high
+```text
+/plan:open plans/001-km.md
+/plan:status
 ```
 
-Existing `PI_TASK_PLAN_MODEL_PROVIDER` and `PI_TASK_PLAN_MODEL_ID` remain common fallbacks; explicit stage variables override them. Existing `PI_TASK_PLAN_THINKING` remains a planning alias. Thinking values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh` (existing aliases remain accepted). Explicit host configuration overrides environment values per preset field. `PI_TASK_PLAN_MODEL_SWITCH=0` disables automatic model switching. The default `PI_TASK_PLAN_RESTORE_MODE=configured` selects the configured execution model; `previous` instead restores the model and thinking level saved before entering planning or review.
+已选文件丢失、损坏或无法读取时，应修复或重新选择，不能把读取失败当作“没有 Plan”而偷偷另建。选中的计划完成以后，补充需求仍然改它。`/plan:new` 表达新建意图，先让模型整理，等它调用保存工具后才真正产生文件。
 
-`/plan` and `/plan:edit` select planning; `/plan:next` and `plan_continue` select execution; `/plan:review` selects review. For natural-language activities the Agent is instructed to call `plan_set_mode` before drafting, implementation or review; natural-language selection still depends on the model following that instruction. Recording execution progress alone does not switch back to planning. Missing models or authentication produce a notice and leave ordinary work on the current model.
+## 命令速查
 
-Ordinary `/plan:review` asks the current session to inspect actual changes and report findings without editing files or checklist. It is not independent Harness acceptance. Optional governed review receives the review preset through its trusted reviewer callback, rather than changing the implementer model; the embedding host must honor that request when launching the independent reviewer (see the governed guide). The legacy entry retains its existing two-stage command routing; the new ordinary review entry is V3.
+| 在 Pi 中输入 | 实际用途 |
+| --- | --- |
+| `/plan 需求` | 创建第一份或修改已选 Plan，并进入规划模型阶段 |
+| `/plan:new 需求` | 明确要求另一份 Plan |
+| `/plan:edit 修改` | 读取当前文件，提出局部修改；没有参数时显示提示 |
+| `/plan:open plans/001-km.md` | 打开并选择具体文件 |
+| `/plan:status` | 查看顶层任务的简短进度 |
+| `/plan:next` | 切到普通执行阶段，给出需求、当前任务和首个待做子任务，要求继续实际工作 |
+| `/plan:task T001 done` | 记录父任务普通完成；也支持 `完成` |
+| `/plan:task T001 open` | 重新打开父任务；也支持 `重开` |
+| `/plan:review 关注负权处理` | 当前会话切换审阅模型，阅读真实改动并报告问题，不应修改文件或 checklist |
 
-The host defaults to V3. `plan_get` and `/plan:open` can also display the title and checklist of existing V1/V2 files without importing their old planning layers into ordinary context. These old files are read-only through the V3 tools; their bytes and execution records stay intact. Unsupported historical sketches are rejected without rewriting them. An explicit migration-preview request can supply a new current brief and checklist to `plan_migration_preview`. The preview writes no file, transfers no execution evidence and has no apply action.
+`/plan:status` 和 `/plan:next` 也可提供路径。任务 ID 用来稳定引用，**当前任务由文件中第一个未勾选的大任务决定**，不是选择编号最小的任务。调整任务顺序不应重新编号。
 
-To keep using the original V1/V2 lifecycle, load `extensions/task-plan/legacy-index.ts` instead of the default entry. Existing named legacy APIs are exported there. Programmatic hosts may alternatively `await taskPlanExtension(pi, { legacy: true })`; explicitly configured legacy `creationOptions` or `phase` dependencies take the same awaitable path. `{ creationOptions: { format: "v3" } }` selects V3 even if legacy settings are present. Ordinary host work remains available; the strict legacy lifecycle is not applied to readable completion. [Optional governed execution](v3-governed.md) is separate and never inferred from a checkbox. An unconfigured `/plan:governed` command explains how ordinary work can continue.
+## 一个小改动应该怎样提交
 
-See [the format specification](v3-format.md) for the complete file shape. The [legacy guide](legacy-workflow.md) describes the original lifecycle and DocSync support.
+“让 T001 的第二个子任务完成”只需要一次状态更新，不必重写整个文件。模型使用 `plan_set_task_status` 时，子任务位置从 1 开始。更新子任务后，程序会汇总其父任务；直接更新父任务则保留孩子原有状态。
 
-For self-hosted Qwen/vLLM, set model `reasoning: true`, `compat.thinkingFormat: "qwen-chat-template"`, and `compat.supportsReasoningEffort: false` if OpenAI effort values are unsupported. Pi sends `chat_template_kwargs.enable_thinking=true` for either high or medium; this mapping does not provide distinct budgets. Reload the Pi model registry after changing its configuration. Server-side thinking and reasoning-output parsing depend on the deployed model/template and vLLM configuration.
+“提前细化 T002 的输入输出”使用局部细化就够了，不必把 T002 变成当前任务。`plan_refine` 可指定任一未完成大任务，省略 ID 时才针对当前任务。已完成任务先重开，或者通过定义修改更新它。建议保留有意义的工作，减少机械拆分，不通过新增子任务来悄悄增加需求。
+
+需求与任务定义的更新通过 `plan_update` 完成。需求实质变化默认重新打开受影响工作，调用时可用 `affected_task_ids` 明确收窄影响范围；任务文字改变会重新打开该任务及其子任务。子任务列表变化时，未变文字的已完成项可保留，新条目和改写项保持未完成。仅标题或空白变动不等于重新定义任务。
+
+这些工具先读文件，再检查写入时内容是否仍与所读版本一致。其他编辑器刚改过文件，就重新读后重试，不能覆盖新内容。外部编辑器仍可正常编辑；这种检查不是对所有写文件程序的全局拦截。
+
+## “继续”为什么有时没有行动
+
+模型可能把“继续”理解为继续讨论、继续解释，也可能没有遵循调用工具的提示。扩展明确要求：准备好计划后收到实施请求，先调用 `plan_continue`，再使用普通工具执行当前工作。澄清中的“继续”则不应擅自开始实施。
+
+如果它只复述计划，使用 `/plan:next` 给出直接交接。若所有任务都完成，该命令只会说明当前没有待办，不制造新的任务。先添加真实的新要求或明确新开计划，再继续。仅仅批准 Plan 文字也不等于请求写代码。
+
+模型可使用的普通工具包括 `plan_set_mode`、`plan_start`、`plan_get`、`plan_update`、`plan_refine`、`plan_set_task_status`、`plan_select`、`plan_status`、`plan_continue`。`plan_select` 通过调整未完成任务顺序选择工作，不更改 ID。人不必记住这些工具名，使用命令或自然语言即可；排查流程时，它们可以帮助判断模型到底有没有实际更新。
+
+## 分阶段模型和普通审阅
+
+`/plan`、`/plan:edit` 进入 planning；`/plan:next`、`plan_continue` 进入 normal；`/plan:review` 进入 review。自然语言阶段变更要求模型调用 `plan_set_mode`，没有额外的关键词识别器替它保证路由。单纯记录进度不会强行切回规划模型。
+
+三个阶段可以分别配置，也可以使用同一个模型。完整默认值、环境变量、Qwen/vLLM 示例和配置生效方法集中在 [模型指南](../../docs/models.md)，Plan 文件不保存这些设置。
+
+普通 `/plan:review` 仍然在当前会话中进行，不因为更换了模型就成为独立审阅；它也不会生成受治理验收记录。需要独立身份和证据绑定的审阅，见 [受治理执行](v3-governed.md)。
+
+## 旧计划怎样继续
+
+默认入口使用 V3。明确打开 V1/V2 时，只提供标题和 checklist 的只读兼容视图，旧需求层、运行记录和执行证据不会进入普通 Plan 上下文，也不会被 V3 写入器覆盖。
+
+`plan_migration_preview` 接受你重新整理的当前需求与任务，生成预览；它不写文件，没有自动 apply，不继承旧执行证据。需要采用新文件时，明确审阅新内容并另行创建，保留原文件。不要自动转换旧管理计划，也不要仅把版本字段改成 V3。
+
+仍依赖旧流程的宿主可以显式加载 `legacy-index.ts`；程序集成也可 `await taskPlanExtension(pi, { legacy: true })`。旧 `phase` 或旧 `creationOptions` 走各自兼容入口，明确指定 `creationOptions: { format: "v3" }` 则选 V3。旧技术说明保留在 [legacy workflow](legacy-workflow.md)，不属于新手的默认使用步骤。
