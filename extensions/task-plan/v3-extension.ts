@@ -6,7 +6,7 @@ import { readPlanSource, readLegacyPlanView, legacyViewText, previewReadableMigr
 import { currentReadableTask, renderReadablePlan, type ReadableTask, type ReadableSubtask } from "./v3-format.ts";
 import { ReadablePlanService, readableChanges, type ReadableSessionState, type ReadableSnapshot } from "./v3-service.ts";
 import { modelSwitchEntryData, switchTaskPlanModel, type TaskPlanModelSwitchConfig, type TaskPlanModelSwitchState } from "./model-switch.ts";
-import { newReadablePlanPrompt, READABLE_PLAN_SYSTEM, reviseReadablePlanPrompt } from "./v3-prompts.ts";
+import { newReadablePlanPrompt, PLAN_CONTINUE_HINT, READABLE_PLAN_SYSTEM, reviseReadablePlanPrompt } from "./v3-prompts.ts";
 
 export interface ReadableHostState extends ReadableSessionState { modelSwitch: TaskPlanModelSwitchState }
 export interface ReadableExtensionOptions { modelConfig: Required<TaskPlanModelSwitchConfig>; governed?: V3GovernedFactory }
@@ -82,7 +82,7 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     parameters: Type.Object({ title: Type.String(), brief: Type.String(), tasks }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, signal, _update, ctx) {
       if (signal?.aborted) throw new Error("plan_start aborted");
-      try { const snapshot = await service(ctx.cwd).start(params.brief, params.title, params.tasks && normalizeTasks(params.tasks)); remember(); return view(snapshot); } catch (error) { return failure(error); }
+      try { const snapshot = await service(ctx.cwd).start(params.brief, params.title, params.tasks && normalizeTasks(params.tasks)); remember(); const result = view(snapshot); if (currentReadableTask(snapshot.plan)) result.content.push({ type: "text", text: PLAN_CONTINUE_HINT }); return result; } catch (error) { return failure(error); }
     } });
   pi.registerTool({ name: "plan_get", label: "读取 Plan", description: "Read the selected Plan without changing files. Markdown completion is accepted without runtime state.", parameters: Type.Object({ path: pathField }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, _signal, _update, ctx) { try { const old = await legacy(ctx.cwd, params.path, true); if (old) { remember(); return response(legacyViewText(old)); } const snapshot = await service(ctx.cwd).get(params.path); remember(); return view(snapshot); } catch (error) { return failure(error); } } });
