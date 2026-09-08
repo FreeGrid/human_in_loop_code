@@ -40,6 +40,8 @@ export type PlanSetTaskStatusParams = Static<typeof PlanSetTaskStatusParameters>
 export const PlanExecuteParameters = Type.Object({ expected_document_hash: ExpectedHash, planPath: PlanPath, task_id: Type.Optional(Type.String({ pattern: "^T\\d{3}$" })), target_root: Type.Optional(Type.String()), governance_root: Type.Optional(Type.String()) });
 export const PlanStartAndBindParameters = PlanExecuteParameters;
 export const PlanReportTaskResultsParameters = Type.Object({
+  expected_document_hash:ExpectedHash,
+  idempotency_key:Type.String({pattern:"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}),
   task_id: Type.String({ pattern: "^T\\d{3}$" }),
   reports: Type.Array(Type.Object({
     work_item_id: Type.Optional(Type.String({ pattern: "^T\\d{3}\\.W\\d{3}$" })),

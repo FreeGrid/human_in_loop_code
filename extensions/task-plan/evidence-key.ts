@@ -2,7 +2,7 @@ import { constants } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import { createReceiptSigner, type ReceiptSigner } from "./evidence.ts";
+import { createReceiptSigner, protectReceiptSignerPath, type ReceiptSigner } from "./evidence.ts";
 
 /** Explicit Controller-only keystore. The host must deny Agent access to this directory. */
 async function keyPath(path: string): Promise<string> {
@@ -23,7 +23,7 @@ export async function loadReceiptSigner(path: string): Promise<ReceiptSigner> {
     const bytes = await handle.readFile();
     const current = await lstat(file);
     if (current.ino !== info.ino || current.dev !== info.dev || bytes.length !== 32) throw new Error("receipt_key_changed");
-    try { return createReceiptSigner(bytes); } finally { bytes.fill(0); }
+    try { const signer=createReceiptSigner(bytes);protectReceiptSignerPath(signer,file);return signer; } finally { bytes.fill(0); }
   } finally { await handle.close(); }
 }
 /** Explicit provisioning only; exclusive creation prevents accidental signer rotation. */

@@ -244,6 +244,42 @@
               "maxLength": 65536
             }
           }
+        },
+        "requestedRole": {
+          "const": "implementer",
+          "description": "This phase component executes Implementer work only; independent Review identity is separately enforced. Absent in existing documents means the same fixed role."
+        },
+        "humanGates": {
+          "type": "array",
+          "uniqueItems": true,
+          "minItems": 3,
+          "maxItems": 4,
+          "items": {
+            "enum": [
+              "approve_contract",
+              "authorize_execution",
+              "finalize",
+              "manual_acceptance"
+            ]
+          },
+          "allOf": [
+            {
+              "contains": {
+                "const": "approve_contract"
+              }
+            },
+            {
+              "contains": {
+                "const": "authorize_execution"
+              }
+            },
+            {
+              "contains": {
+                "const": "finalize"
+              }
+            }
+          ],
+          "description": "Core Human gates cannot be removed. Additional manual_acceptance requires a declared manual criterion and actual Human receipt. Missing field retains immutable core gates without changing old hashes."
         }
       },
       "description": "One canonical domain node. legacyDefinition is a V1-adapter-only exact definition projection; it is forbidden in NativePlanDomain. Executable nodes require a non-null round; outline nodes cannot own phase or execution notes. Runtime enforces duplicate/self/unknown dependency denial and a DAG across all nodes. Definition edits cannot confer completion or change reserved execution evidence. Finalized nodes require explicit Human reopen.",
@@ -665,6 +701,18 @@
               }
             }
           }
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "report_batches": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "$ref": "#/$defs/ReportBatchReceipt"
+          }
         }
       },
       "description": "Existing version-1 PhaseRecord payload. Native parser additionally enforces exact canonical JSON, record placement at the end of Depends On, owner and round equality, note ownership, finalize consistency and bounded encoded size. Schema validity never authenticates receipt seals, grants Human authority or permits baseline replacement."
@@ -743,6 +791,53 @@
           "pattern": "^[a-f0-9]{64}$"
         }
       }
+    },
+    "ReportBatchReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "idempotency_key",
+        "request_hash",
+        "operation_id",
+        "generation",
+        "report_ids",
+        "content_version"
+      ],
+      "properties": {
+        "idempotency_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "request_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "operation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "generation": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "report_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^T[0-9]{3}\\.W[0-9]{3}$"
+          }
+        },
+        "content_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "description": "Atomic candidate-report operation receipt, not Acceptance. Keys are unique across all generations; Human reopen increments generation without deleting spent keys. Replay requires same request hash, generation and current note projection. Journal recovery precedes retry."
     }
   }
 }

@@ -12,7 +12,10 @@ export const NATIVE_FORMAT = "pi-plan/v2";
 export interface NodeVerificationPolicy { risk: "low" | "medium" | "high" | "unknown"; verification: Record<string, { command_or_method: string; inputs: string[]; expected: string }> }
 export interface NodeScopes { read: string[]; write: string[]; commands: string[] }
 export interface NodeReviewPolicy { independent: boolean; required_evidence: string[] }
+export const CORE_HUMAN_GATES = ["approve_contract","authorize_execution","finalize"] as const;
+export type NodeHumanGate = typeof CORE_HUMAN_GATES[number] | "manual_acceptance";
 export interface DomainNode {
+  requestedRole?:"implementer"; humanGates?:NodeHumanGate[];
   id: string; title: string; round: number | null; outcome: string;
   outline: Record<string, string>; work: string; acceptance: string; dependsOn: string[];
   verification: NodeVerificationPolicy | null; scopes: NodeScopes | null;
@@ -24,7 +27,7 @@ export interface DomainNode {
 }
 export interface PlanDomain { originalRequest: string; title: string; whatWhy: string; strategy: string; nodes: DomainNode[]; review: string }
 const outlineFields = ["Work Areas", "Ordering", "Exit Condition", "Promotion Condition", "Dependencies on T001", "Candidate Work", "Conditional Direction", "Dependencies / Assumptions", "Replan Triggers"];
-const nodeFields = ["Round", "Outcome", ...outlineFields, "Work", "Acceptance", "Verification", "Scopes", "Forbidden", "Non-Goals", "Review Policy", "Progress", "Depends On"];
+const nodeFields = ["Round", "Outcome", ...outlineFields, "Work", "Acceptance", "Verification", "Scopes", "Forbidden", "Non-Goals", "Review Policy", "Requested Role", "Human Gates", "Progress", "Depends On"];
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const exact = (v: Record<string, unknown>, fields: string[]) => Object.keys(v).sort().join() === [...fields].sort().join();
 function fail(message: string): never { throw new Error(message); }
@@ -44,6 +47,8 @@ function fields(markdown: string, allowed?: readonly string[], strict = true): R
   return result;
 }
 export function validateNodePolicy(node: DomainNode): void {
+  if(node.requestedRole!==undefined && node.requestedRole!=="implementer")fail("unsupported_execution_role");
+  if(node.humanGates!==undefined && (!strings(node.humanGates)||node.humanGates.some(g=>![...CORE_HUMAN_GATES,"manual_acceptance"].includes(g))||CORE_HUMAN_GATES.some(g=>!node.humanGates!.includes(g))))fail("required_human_gate_missing");
   const v = node.verification;
   if (v !== null) {
     if (!object(v) || !exact(v, ["risk", "verification"]) || !["low", "medium", "high", "unknown"].includes(v.risk) || !object(v.verification) || Object.keys(v.verification).length > 128) fail("invalid_verification_policy");
@@ -98,7 +103,7 @@ export function validateDomain(domain: PlanDomain): void {
 function field(name: string, value: string): string { return `#### ${name}\n\n${value.trim()}\n`; }
 /** Compatibility projection, never persisted as a second V2 node. */
 export function projectTaskDefinition(node: DomainNode): string {
-  const policy = [node.verification && field("Verification", JSON.stringify(node.verification)), node.scopes && field("Scopes", JSON.stringify(node.scopes)), node.forbidden.length && field("Forbidden", JSON.stringify(node.forbidden)), node.nonGoals.length && field("Non-Goals", JSON.stringify(node.nonGoals)), node.reviewPolicy && field("Review Policy", JSON.stringify(node.reviewPolicy))].filter(Boolean);
+  const policy = [node.verification && field("Verification", JSON.stringify(node.verification)), node.scopes && field("Scopes", JSON.stringify(node.scopes)), node.forbidden.length && field("Forbidden", JSON.stringify(node.forbidden)), node.nonGoals.length && field("Non-Goals", JSON.stringify(node.nonGoals)), node.reviewPolicy && field("Review Policy", JSON.stringify(node.reviewPolicy)), node.requestedRole && field("Requested Role",node.requestedRole), node.humanGates && field("Human Gates",JSON.stringify(node.humanGates))].filter(Boolean);
   let text = [`### ${node.id} — ${node.title} [${node.progress === "completed" ? "x" : " "}]`, `<!-- pi-plan:round:R${String(node.round ?? 0).padStart(3, "0")} -->`, field("Tasks", node.work), field("Acceptance", node.acceptance), ...policy, field("Depends On", node.dependsOn.join(", ") || "None.")].join("\n\n").trimEnd();
   for (const [id, note] of Object.entries(node.notes)) text = upsertExecutionNote(text, id, note);
   if (node.phase) text = upsertPhaseRecord(text, node.id, node.phase);
@@ -127,7 +132,7 @@ export function parseNativeNodes(markdown: string): DomainNode[] {
     if (Object.keys(f).at(-1) !== "Depends On") fail("native_dependencies_must_be_last");
     const round = f.Round === "future" ? null : /^R\d{3,}$/.test(f.Round!) ? Number(f.Round!.slice(1)) : fail("invalid_native_round");
     const dependsOn = /^(?:None\.?|\[\])$/.test(f["Depends On"]!) ? [] : f["Depends On"]!.split(/,\s*/);
-    return { id: h[1]!, title: h[2]!, round, outcome: f.Outcome!, outline: Object.fromEntries(outlineFields.filter(k => Object.hasOwn(f, k)).map(k => [k, f[k]!])), work: f.Work ?? "", acceptance: f.Acceptance ?? "", dependsOn, verification: parseJsonField(f.Verification ?? "") as NodeVerificationPolicy | null, scopes: parseJsonField(f.Scopes ?? "") as NodeScopes | null, forbidden: (parseJsonField(f.Forbidden ?? "") ?? []) as string[], nonGoals: (parseJsonField(f["Non-Goals"] ?? "") ?? []) as string[], reviewPolicy: parseJsonField(f["Review Policy"] ?? "") as NodeReviewPolicy | null, progress: f.Progress as DomainNode["progress"], ...(phases.records[h[1]!] ? {phase: phases.records[h[1]!]} : {}), notes: notes.notes };
+    return { ...(f["Requested Role"]!==undefined?{requestedRole:f["Requested Role"] as "implementer"}:{}), ...(f["Human Gates"]!==undefined?{humanGates:parseJsonField(f["Human Gates"]!) as NodeHumanGate[]}:{}), id: h[1]!, title: h[2]!, round, outcome: f.Outcome!, outline: Object.fromEntries(outlineFields.filter(k => Object.hasOwn(f, k)).map(k => [k, f[k]!])), work: f.Work ?? "", acceptance: f.Acceptance ?? "", dependsOn, verification: parseJsonField(f.Verification ?? "") as NodeVerificationPolicy | null, scopes: parseJsonField(f.Scopes ?? "") as NodeScopes | null, forbidden: (parseJsonField(f.Forbidden ?? "") ?? []) as string[], nonGoals: (parseJsonField(f["Non-Goals"] ?? "") ?? []) as string[], reviewPolicy: parseJsonField(f["Review Policy"] ?? "") as NodeReviewPolicy | null, progress: f.Progress as DomainNode["progress"], ...(phases.records[h[1]!] ? {phase: phases.records[h[1]!]} : {}), notes: notes.notes };
   });
 }
 export function renderNativeNode(node: DomainNode): string {
@@ -136,7 +141,7 @@ export function renderNativeNode(node: DomainNode): string {
     const projected = projectTaskDefinition({...node, phase: undefined});
     work = taskField(projected, "Tasks").trim();
   }
-  const values: Record<string, string> = { Round: node.round === null ? "future" : `R${String(node.round).padStart(3, "0")}`, Outcome: node.outcome, ...node.outline, Work: work, Acceptance: node.acceptance, ...(node.verification ? {Verification: JSON.stringify(node.verification)} : {}), ...(node.scopes ? {Scopes: JSON.stringify(node.scopes)} : {}), ...(node.forbidden.length ? {Forbidden: JSON.stringify(node.forbidden)} : {}), ...(node.nonGoals.length ? {"Non-Goals": JSON.stringify(node.nonGoals)} : {}), ...(node.reviewPolicy ? {"Review Policy": JSON.stringify(node.reviewPolicy)} : {}), Progress: node.progress, "Depends On": node.dependsOn.join(", ") || "None." };
+  const values: Record<string, string> = { Round: node.round === null ? "future" : `R${String(node.round).padStart(3, "0")}`, Outcome: node.outcome, ...node.outline, Work: work, Acceptance: node.acceptance, ...(node.verification ? {Verification: JSON.stringify(node.verification)} : {}), ...(node.scopes ? {Scopes: JSON.stringify(node.scopes)} : {}), ...(node.forbidden.length ? {Forbidden: JSON.stringify(node.forbidden)} : {}), ...(node.nonGoals.length ? {"Non-Goals": JSON.stringify(node.nonGoals)} : {}), ...(node.reviewPolicy ? {"Review Policy": JSON.stringify(node.reviewPolicy)} : {}), ...(node.requestedRole?{"Requested Role":node.requestedRole}:{}), ...(node.humanGates?{"Human Gates":JSON.stringify(node.humanGates)}:{}), Progress: node.progress, "Depends On": node.dependsOn.join(", ") || "None." };
   let text = [`### ${node.id} — ${node.title}`, ...nodeFields.filter(k => Object.hasOwn(values,k)).map(k => field(k,values[k]!))].join("\n\n").trimEnd();
   if (node.phase) {
     const projected = projectTaskDefinition(node);
@@ -175,7 +180,7 @@ function taskDomain(base: DomainNode, task: TaskBlock, legacy = false): DomainNo
   if (phases.errors.length || notes.errors.length) fail("invalid_projected_execution_state");
   const raw = (name: string) => taskField(notes.definition,name).trim();
   const policy = (name: string): unknown => { try { return parseJsonField(raw(name)); } catch(error) { if(!legacy)throw error;return raw(name); } };
-  return {...base,title:task.title,round:task.round,progress:task.completed?"completed":"open",work:raw("Tasks"),acceptance:raw("Acceptance"),dependsOn:task.dependsOn,verification:policy("Verification") as NodeVerificationPolicy|null,scopes:policy("Scopes") as NodeScopes|null,forbidden:(policy("Forbidden")??[]) as string[],nonGoals:(policy("Non-Goals")??[]) as string[],reviewPolicy:policy("Review Policy") as NodeReviewPolicy|null,phase:phases.records[task.id],notes:notes.notes};
+  return {...base,...(raw("Requested Role")?{requestedRole:raw("Requested Role") as "implementer"}:{}),...(raw("Human Gates")?{humanGates:policy("Human Gates") as NodeHumanGate[]}:{}),title:task.title,round:task.round,progress:task.completed?"completed":"open",work:raw("Tasks"),acceptance:raw("Acceptance"),dependsOn:task.dependsOn,verification:policy("Verification") as NodeVerificationPolicy|null,scopes:policy("Scopes") as NodeScopes|null,forbidden:(policy("Forbidden")??[]) as string[],nonGoals:(policy("Non-Goals")??[]) as string[],reviewPolicy:policy("Review Policy") as NodeReviewPolicy|null,phase:phases.records[task.id],notes:notes.notes};
 }
 export function domainFor(document: PlanDocument): PlanDomain { return document.domain ?? adaptV1Domain(document.metadata,document.body ?? "",document.sections); }
 export function renderNativeDocument(metadata: PlanMetadata, domain: PlanDomain): string {

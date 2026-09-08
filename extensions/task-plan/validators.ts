@@ -88,7 +88,7 @@ export function validateTasks(markdown: string, currentRound: number, options: {
     for (const heading of task.definition.matchAll(/^(#{1,4}) (.+)$/gm)) {
       if (heading[0] === task.completionLine) continue;
       const field = heading[2]!.trim();
-      if (heading[1] !== "####" || ![...taskRequiredFields(), "Round", "Verification", "Scopes", "Forbidden", "Non-Goals", "Review Policy"].includes(field)) issues.push(error("unsupported_task_heading", `${task.id} contains unsupported heading: ${heading[0]}`));
+      if (heading[1] !== "####" || ![...taskRequiredFields(), "Round", "Verification", "Scopes", "Forbidden", "Non-Goals", "Review Policy", "Requested Role", "Human Gates"].includes(field)) issues.push(error("unsupported_task_heading", `${task.id} contains unsupported heading: ${heading[0]}`));
     }
     try { nodeEvidencePolicy(task); } catch(error) { issues.push({severity:"error",code:"invalid_verification_policy",message:String((error as Error).message)}); }
     validateSubtaskMarkers(task.definition, task.id).forEach((issue) => issues.push(issue));
@@ -96,7 +96,7 @@ export function validateTasks(markdown: string, currentRound: number, options: {
     for (const line of taskField(task.definition, "Acceptance").split(/\r?\n/).map((line) => line.trim())) {
       if (line.startsWith("- ") && !/^- \[(?: |x|X)\] .+$/.test(line)) issues.push(error("invalid_acceptance_marker", `${task.id} Acceptance items must use leading checkboxes`));
     }
-    for (const field of [...taskRequiredFields(), "Verification", "Scopes", "Forbidden", "Non-Goals", "Review Policy"]) {
+    for (const field of [...taskRequiredFields(), "Verification", "Scopes", "Forbidden", "Non-Goals", "Review Policy", "Requested Role", "Human Gates"]) {
       if ([...task.definition.matchAll(new RegExp(`^#### ${escapeRegExp(field)}[ \\t]*$`, "gm"))].length > 1) issues.push(error("duplicate_task_field", `${task.id} has duplicate ${field} fields`));
     }
     if (task.round < 0) issues.push(error("invalid_task_round", `${task.id} has invalid Round`));

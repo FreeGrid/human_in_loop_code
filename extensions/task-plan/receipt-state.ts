@@ -1,3 +1,4 @@
+import { domainFor } from "./plan-domain.ts";
 import { parseStrictJson } from "./plan-text.ts";
 import { nodeDeclaredContractHash } from "./plan-identity.ts";
 import { canonicalHash } from "./authority.ts";
@@ -80,7 +81,9 @@ export function requireNodeReview(document: PlanDocument, nodeId: string, runtim
   if (!runtime) fail("capability_unavailable: trusted evidence runtime is required");
   const task = parseTasks(document.sections.tasks).find(t => t.id === nodeId) ?? fail("unknown_contract_node");
   const record = inspectPhaseRecords(document.sections.tasks).records[nodeId];
-  return assertReviewEvidence(readReviewEvidence(document)[nodeId],runtime.signer,{node_id:nodeId,contract_hash:nodeContractHash(document,nodeId,runtime,dependencies),risk:effectiveNodeRisk(task,runtime),implementer_session_id:record?.implementer_session_id ?? runtime.implementer_session_id});
+  const receipt=assertReviewEvidence(readReviewEvidence(document)[nodeId],runtime.signer,{node_id:nodeId,contract_hash:nodeContractHash(document,nodeId,runtime,dependencies),risk:effectiveNodeRisk(task,runtime),implementer_session_id:record?.implementer_session_id ?? runtime.implementer_session_id});
+  assertNodeReviewPolicy(document,nodeId,receipt);
+  return receipt;
 }
 /** Walk all transitive edges, not just the current round's checkbox projection. */
 export function dependencyFinalizations(document: PlanDocument, nodeId: string, runtime: EvidenceRuntime | undefined): FinalizeDependencyRef[] {
@@ -141,4 +144,11 @@ export function authenticateFinalizedNode(document: PlanDocument, nodeId: string
   });
   if (canonicalHash([...refs].sort()) !== canonicalHash([...finalized.verification_refs].sort())) fail("finalize_verification_invalidated");
   return finalized;
+}
+
+export function assertNodeReviewPolicy(document:PlanDocument,nodeId:string,receipt:ReviewEvidence):void {
+  const policy=domainFor(document).nodes.find(n=>n.id===nodeId)?.reviewPolicy;
+  if(!policy || receipt.result!=="passed")return;
+  if(policy.independent && (receipt.review_type!=="independent"||!receipt.fresh||receipt.reviewer_session_id===receipt.implementer_session_id))fail("independent_review_policy_required");
+  if(policy.required_evidence.some(ref=>!receipt.evidence_refs.includes(ref)))fail("review_policy_evidence_missing");
 }

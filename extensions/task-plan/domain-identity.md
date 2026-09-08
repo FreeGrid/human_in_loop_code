@@ -17,7 +17,7 @@ records, policies and fields; they confer no authority.
 enforces marker ownership, unique ordered node IDs, dependency existence/cycles,
 checklist grammar, record ownership and the frontmatter lifecycle schema before
 any write. Native nodes use Round, Outcome, Work, Acceptance, optional declared
-Verification/Scopes/Forbidden/Non-Goals/Review Policy, Progress and Depends On
+Verification/Scopes/Forbidden/Non-Goals/Review Policy/Requested Role/Human Gates, Progress and Depends On
 (last). Future outline nodes cannot own execution records.
 
 The three node-v1 identities are:
@@ -56,3 +56,19 @@ Reads only diagnose invalidations. Explicit reconcile persists a proposed
 invalidation; it cannot invent a new baseline or approve the changed contract.
 If an execution's own contract changed, restore its original contract or use a
 future explicit recovery contract. Never delete its record to force recapture.
+
+Node-v1 review/start requires explicit Scopes and a Verification method for every
+Acceptance. Scopes contain `read`, `write` and `commands` arrays; filesystem rules
+are exact relative paths or `directory/**`. Forbidden paths override allowed writes.
+Commands name trusted allowlisted executables; they do not supply an executable or
+arguments to a model tool. Automated methods require at least one allowed command.
+Manual-only contracts may have an empty commands array.
+
+Requested Role, when present, is `implementer`; other execution roles are rejected
+until their authority is defined. Human Gates, when present, must include
+`approve_contract`, `authorize_execution` and `finalize`; optional
+`manual_acceptance` additionally requires a manual criterion and its signed Human
+receipt at finalize. Omitted fields retain their previous node-v1 hash. Adding or
+changing either field changes the contract identity. They cannot remove mandatory
+Human decisions. A Review Policy requesting independence cannot use a deterministic
+low-risk fallback; each required evidence reference must occur in the sealed review.
