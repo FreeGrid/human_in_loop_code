@@ -1,3 +1,5 @@
+import { PhaseExecutionService } from "./phase-execution.ts";
+import { configureManualVerificationAuthority, manualAcceptanceContext } from "./evidence.ts";
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionCommandContext } from "@mariozechner/pi-coding-agent";
 import { modelSwitchEntryData, switchTaskPlanModel, type TaskPlanModelSwitchConfig } from "./model-switch.ts";
@@ -20,6 +22,8 @@ export function registerTaskPlanCommands(pi: ExtensionAPI, state: TaskPlanSessio
   pi.registerCommand("plan:review", { description: "Review the current Harness Plan stage", handler: (args, ctx) => review(args, ctx, state) });
   pi.registerCommand("plan:task", { description: "Bind or mark a current-round Task: <id> <start|done|open>", handler: (args, ctx) => task(args, ctx, state) });
   pi.registerCommand("plan:execute", { description: "Start/resume only the approved current phase: [plan-path]", handler: (args, ctx) => executePhase(pi, args, ctx, state) });
+  pi.registerCommand("plan:verify", {description:"Run the approved verifier for one Acceptance ID: TNNN.ANNN",handler:(args,ctx)=>verifyCriterion(args,ctx,state)});
+  pi.registerCommand("plan:accept", {description:"Explicit Human acceptance of a contract-declared manual gate: TNNN.ANNN",handler:(args,ctx)=>manualCriterion(args,ctx,state)});
   pi.registerCommand("plan:finalize", { description: "Verify and finalize the entire current phase: [TNNN]", handler: (args, ctx) => finalizePhase(args, ctx, state) });
   pi.registerCommand("docsync", { description: "Human-only document check switch: on|off (does not skip Task acceptance)", handler: (args, ctx) => docsync(args, ctx, state) });
   pi.registerCommand("plan:abandon", { description: "Abandon the current Harness Plan, optionally recording a reason", handler: (args, ctx) => abandon(pi, args, ctx, state, modelConfig) });
@@ -231,4 +235,32 @@ async function confirmAuthority(ctx: ExtensionCommandContext, state: TaskPlanSes
   if (!await ctx.ui.confirm(`Authorize ${action}?`, `${path}\n${node}\nDocument: ${hash}\nContract: ${context.contract_hash}\nTarget: ${context.target_root}\nGovernance: ${context.governance_root}`)) return false;
   state.humanCapability = issueHumanCapability(action, context, { source: "slash", input_id: randomUUID(), text: `Human confirmed ${action} for ${path} ${node}` });
   return true;
+}
+
+async function verifyCriterion(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+  const acceptance_id = args.trim();
+  if (!/^T\d{3}\.A\d{3}$/.test(acceptance_id)) return ctx.ui.notify("Usage: /plan:verify TNNN.ANNN","error");
+  const service = new TaskPlanService(ctx.cwd,state), current = await service.get();
+  if (!current.document_hash) return notify(ctx,current);
+  notify(ctx,await service.verifyAcceptance({expected_document_hash:current.document_hash,task_id:acceptance_id.split(".")[0]!,acceptance_id}));
+}
+async function manualCriterion(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
+  const acceptance_id = args.trim(), runtime = state.phaseDependencies?.evidence;
+  if (!/^T\d{3}\.A\d{3}$/.test(acceptance_id) || !runtime || !ctx.hasUI) return ctx.ui.notify("Manual acceptance requires a configured trusted signer, UI and a contract-declared TNNN.ANNN manual gate.","error");
+  const current = await new TaskPlanService(ctx.cwd,state).get();
+  if (!current.document_hash || !current.path) return notify(ctx,current);
+  try {
+    const document = await readPlanDocument(current.path), task_id = acceptance_id.split(".")[0]!;
+    if (document.document_hash !== current.document_hash) throw new Error("stale_document_hash");
+    const phase = new PhaseExecutionService(state.phaseDependencies);
+    const approved_input = await phase.prepareManualAcceptance(document,task_id,acceptance_id);
+    const baseContext = await documentAuthorityContext(document,task_id);
+    const actual = await ctx.ui.input(`Observed result for ${acceptance_id} (expected: ${approved_input.expected})`);
+    if (!actual?.trim()) return;
+    const context = manualAcceptanceContext(baseContext,{approved_input,actual,artifact_refs:[]});
+    if (!await ctx.ui.confirm(`Accept manual criterion ${acceptance_id}?`, `Expected: ${approved_input.expected}\nObserved: ${actual}\nContract: ${context.contract_hash}\nContent: ${approved_input.content_version}`)) return;
+    const authority = configureManualVerificationAuthority({signer:runtime.signer,session_id:runtime.implementer_session_id,approved_input,context,actual,artifact_refs:[]});
+    const token = issueHumanCapability("manual_accept",context,{source:"slash",input_id:randomUUID(),text:`Human manual acceptance ${acceptance_id}: ${actual}`});
+    notify(ctx,await phase.acceptManual(document,task_id,authority,token));
+  } catch(error) { ctx.ui.notify(String((error as Error).message),"error"); }
 }

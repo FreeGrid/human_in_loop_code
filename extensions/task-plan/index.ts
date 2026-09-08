@@ -28,6 +28,8 @@ export * from "./review-receipt.ts";
 // Migration apply is deliberately absent from the public extension surface.
 export * from "./authority.ts";
 export * from "./authority-context.ts";
+export * from "./evidence.ts";
+export * from "./receipt-state.ts";
 export * from "./operation-result.ts";
 export * from "./operations.ts";
 export * from "./plan-file.ts";
@@ -166,3 +168,4 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
 function shouldUsePlanningModel(stage: string): boolean {
   return ["what_why", "plan", "tasks", "awaiting_execution_approval", "awaiting_round_decision"].includes(stage);
 }
+export * from "./evidence-key.ts";

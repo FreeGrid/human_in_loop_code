@@ -1,5 +1,8 @@
-import { appendAuthorization, consumeDocumentAuthority } from "./authority-context.ts";
-import type { AuthorizationReceipt, HumanCapability } from "./authority.ts";
+import { validatePlanNodeMapping } from "./nodes.ts";
+import { assertVerificationEvidence, authenticateVerificationEvidence, manualAcceptanceContext, runManualAcceptance, runVerification, sealFinalizeEvidence, verifyArtifactContents, type ManualVerificationAuthority, type VerificationInput } from "./evidence.ts";
+import { authenticateFinalizedNode, dependencyFinalizations, nodeContractHash, requireNodeReview, verificationInputFor } from "./receipt-state.ts";
+import { appendAuthorization, consumeDocumentAuthority, documentAuthorityContext } from "./authority-context.ts";
+import { canonicalJson, type AuthorizationReceipt, type HumanCapability } from "./authority.ts";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
@@ -17,7 +20,6 @@ import { validateFrontmatter, validateTasks } from "./validators.ts";
 
 const exec = promisify(execFile);
 const fail = (message: string): never => { throw new Error(message); };
-const normalize = (s: string) => s.trim().replace(/\s+/g, " ");
 const SWITCH_HELP = "DocSync: /docsync off · /docsync on. Human may also explicitly say ‘turn off DocSync’ or ‘turn on DocSync’.";
 type Report = { task_id: string; work_item_id?: string; result: "in_progress" | "blocked" | "completed"; summary: string; files?: string[]; change_types?: ExecutionNote["change_types"]; acceptance_results?: Array<{ item: string; satisfied: boolean }> };
 
@@ -45,7 +47,7 @@ export class PhaseExecutionService {
       await this.roots(context);
       const provider = this.dependencies.baseline ?? fail("capability_unavailable: BaselineProvider is not configured");
       const baseline = await provider.capture({ ...context });
-      record = { version: 1, context, definition_hash: this.contract(d, task.id), baseline, authorization, docsync: { enabled: true }, acceptance: [] };
+      record = { version: 1, implementer_session_id: this.dependencies.evidence!.implementer_session_id, verification: [], context, definition_hash: this.contract(d, task.id), baseline, authorization, docsync: { enabled: true }, acceptance: [] };
       if (!validatePhaseRecord(record)) fail("baseline_invalid: provider returned an invalid baseline reference");
       await this.verify(d, task, record);
       return this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `Started ${task.id}, execute ${context.execute_id}; DocSync on. ${SWITCH_HELP}`, record, receipt);
@@ -57,23 +59,12 @@ export class PhaseExecutionService {
       const d = await this.current(document);
       const { task, records } = this.select(d, params.task_id);
       const record = records[task.id] ?? fail("execution_missing: start the phase before reporting");
-      const contentVersion = await this.verify(d, task, record);
+      await this.verify(d, task, record);
       const itemId = params.work_item_id ?? (task.workItems.length === 1 ? task.workItems[0]!.id : fail("work_item_required: select a stable work_item_id"));
       if (!task.workItems.some(w => w.id === itemId)) fail("unknown_work_item");
       const note: ExecutionNote = { version: 1, status: params.result === "completed" ? "pending_finalize" : params.result, summary: params.summary, files: params.files ?? [], change_types: params.change_types ?? [] };
       if (!validateExecutionNote(note)) fail("invalid_execution_note");
-      if (params.acceptance_results !== undefined && (!Array.isArray(params.acceptance_results) || params.acceptance_results.length > 128)) fail("invalid_acceptance_results");
-      const seen = new Set<string>();
-      for (const evidence of params.acceptance_results ?? []) {
-        if (!evidence || typeof evidence.item !== "string" || typeof evidence.satisfied !== "boolean" || Object.keys(evidence).some(k => !["item", "satisfied"].includes(k))) fail("invalid_acceptance_results");
-        const matches = task.acceptance.filter(a => a.id === evidence.item || normalize(a.text) === normalize(evidence.item));
-        if (matches.length !== 1) fail("unknown_or_ambiguous_acceptance");
-        const id = matches[0]!.id;
-        if (seen.has(id)) fail("duplicate_acceptance");
-        seen.add(id);
-        record.acceptance = record.acceptance.filter(a => a.id !== id);
-        record.acceptance.push({ id, satisfied: evidence.satisfied, summary: params.summary, content_version: contentVersion });
-      }
+      if (params.acceptance_results !== undefined) fail("candidate_evidence_only: model Acceptance booleans cannot issue verification evidence");
       delete record.last_finalize;
       // The note helper sees only task definitions and notes, never phase-record JSON.
       const phases = inspectPhaseRecords(d.sections.tasks);
@@ -81,6 +72,66 @@ export class PhaseExecutionService {
       phases.records[task.id] = record;
       for (const [id, r] of Object.entries(phases.records)) markdown = upsertPhaseRecord(markdown, id, r);
       return this.save(d, markdown, `${itemId}: ${note.status}; completion markers unchanged`, record);
+    });
+  }
+
+  /** Model-facing callers supply IDs only; the trusted runtime resolves the approved command. */
+  async verifyAcceptance(document: PlanDocument, task_id: string, acceptance_id: string): Promise<PlanOperationResult> {
+    return this.operation(document, async () => {
+      const d = await this.current(document);
+      const { task, records } = this.select(d, task_id);
+      const record = records[task.id] ?? fail("execution_missing");
+      const version = await this.verify(d, task, record);
+      if (!task.acceptance.some(item => item.id === acceptance_id)) fail("unknown_acceptance");
+      const runtime = this.dependencies.evidence ?? fail("capability_unavailable: trusted evidence runtime is required");
+      const producer = runtime.verificationAuthority ?? fail("capability_unavailable: trusted verification authority is not configured");
+      const request = verificationInputFor(d, task.id, acceptance_id, version);
+      if (request.command_or_method === "manual") fail("manual_gate_requires_human: use the explicit Human acceptance adapter");
+      const handle = await producer(Object.freeze(structuredClone(request)), Object.freeze(structuredClone(record.context)));
+      const evidence = await runVerification(handle, request);
+      const receipt = authenticateVerificationEvidence(evidence, runtime.signer, request);
+      await verifyArtifactContents(receipt);
+      await this.current(d);
+      if (await this.verify(d, task, record) !== version) fail("acceptance_stale: repository changed during verification");
+      record.verification = [...(record.verification ?? []).filter(entry => entry.receipt.acceptance_id !== acceptance_id), evidence];
+      delete record.last_finalize;
+      const saved = await this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `${acceptance_id}: verification ${receipt.result}; completion markers unchanged`, record);
+      return receipt.result === "passed" || saved.status !== "applied" ? saved : { ...saved, status: "validation_error", message: `${acceptance_id}: verification_not_passed; failed evidence saved` };
+    });
+  }
+
+  /** Read-only preparation for a concrete Human manual-acceptance prompt. */
+  async prepareManualAcceptance(document: PlanDocument, task_id: string, acceptance_id: string): Promise<VerificationInput> {
+    const d = await this.current(document);
+    const { task, records } = this.select(d, task_id);
+    const record = records[task.id] ?? fail("execution_missing");
+    const version = await this.verify(d, task, record);
+    const request = verificationInputFor(d, task.id, acceptance_id, version);
+    if (request.command_or_method !== "manual") fail("manual_gate_not_in_contract");
+    return request;
+  }
+
+  /** Trusted Human adapter only: the opaque handle fixes the displayed item before confirmation. */
+  async acceptManual(document: PlanDocument, task_id: string, authority: ManualVerificationAuthority, capability: HumanCapability): Promise<PlanOperationResult> {
+    return this.operation(document, async () => {
+      const d = await this.current(document);
+      const { task, records } = this.select(d, task_id);
+      const record = records[task.id] ?? fail("execution_missing");
+      const version = await this.verify(d, task, record);
+      const runtime = this.dependencies.evidence ?? fail("capability_unavailable: trusted evidence runtime is required");
+      const { evidence, authorization } = runManualAcceptance(authority, capability);
+      const expected = verificationInputFor(d, task.id, evidence.receipt.acceptance_id, version);
+      if (expected.command_or_method !== "manual") fail("manual_gate_not_in_contract");
+      const expectedContext = manualAcceptanceContext(await documentAuthorityContext(d, task.id), { approved_input: expected, actual: evidence.receipt.actual, artifact_refs: evidence.receipt.artifact_refs });
+      if (canonicalJson(authorization.context) !== canonicalJson(expectedContext)) fail("manual_authorization_context_mismatch");
+      const receipt = assertVerificationEvidence(evidence, runtime.signer, expected);
+      if (receipt.authorization_ref !== authorization.receipt_hash) fail("manual_authorization_reference_mismatch");
+      await verifyArtifactContents(receipt);
+      await this.current(d);
+      if (await this.verify(d, task, record) !== version) fail("acceptance_stale: repository changed during manual verification");
+      record.verification = [...(record.verification ?? []).filter(entry => entry.receipt.acceptance_id !== receipt.acceptance_id), evidence];
+      delete record.last_finalize;
+      return this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `${receipt.acceptance_id}: Human manual verification passed; completion markers unchanged`, record, authorization);
     });
   }
 
@@ -118,8 +169,17 @@ export class PhaseExecutionService {
       attempt = { document: d, record: structuredClone(record) };
       const version = await this.verify(d, task, record);
       if (task.workItems.some(w => w.note?.status !== "pending_finalize")) fail("work_pending: every work item must be pending_finalize");
-      if (task.acceptance.some(a => !record.acceptance.find(e => e.id === a.id)?.satisfied)) fail("acceptance_incomplete: all Acceptance evidence must be satisfied");
-      if (record.acceptance.some(evidence => evidence.content_version !== version)) fail("acceptance_stale: repository changed after Acceptance verification; reverify every criterion");
+      const runtime = this.dependencies.evidence ?? fail("capability_unavailable: trusted evidence runtime is required");
+      const review = requireNodeReview(d, task.id, runtime);
+      const dependencies = dependencyFinalizations(d, task.id, runtime);
+      const verification = [];
+      for (const item of task.acceptance) {
+        const evidence = record.verification?.find(entry => entry.receipt.acceptance_id === item.id) ?? fail("acceptance_incomplete: every Acceptance requires a trusted verification receipt");
+        const receipt = assertVerificationEvidence(evidence, runtime.signer, verificationInputFor(d, task.id, item.id, version));
+        await verifyArtifactContents(receipt);
+        verification.push(receipt);
+      }
+      if (await this.verify(d, task, record) !== version) fail("acceptance_stale: repository changed while checking verification artifacts");
       let finalized: NonNullable<PhaseRecord["finalized"]>;
       if (!record.docsync.enabled) {
         finalized = { check: "skipped", summary: "Documentation check explicitly disabled by Human; Task Acceptance verified.", content_version: version, debt_refs: [], human_exceptions: [] };
@@ -135,9 +195,13 @@ export class PhaseExecutionService {
       record.finalized = finalized;
       delete record.last_finalize;
       if (!validatePhaseRecord(record)) fail("invalid_docsync_result: malformed result or missing durable debt/exception references");
-      // Gate may legitimately edit documentation. Verify its final content identity, not the pre-gate identity.
+      // Documentation edits invalidate pre-gate Acceptance; they must be actually reverified.
       const after = await this.verify(d, task, { ...record, finalized: undefined });
+      if (after !== version) fail("acceptance_stale_after_docsync: documentation changed verified content; rerun every Acceptance");
       if (after !== finalized.content_version) fail("content_changed: repository changed after documentation verification");
+      for (const receipt of verification) await verifyArtifactContents(receipt);
+      finalized.evidence = sealFinalizeEvidence(runtime.signer, { plan_id: d.metadata.plan_id, node_id: task.id, contract_hash: nodeContractHash(d, task.id), content_version: after, verification_refs: verification.map(receipt => receipt.receipt_hash), review_ref: review.receipt_hash, dependency_refs: dependencies, authorization_ref: authorization.receipt_hash, docsync_check: finalized.check });
+      if (!validatePhaseRecord(record)) fail("invalid_finalize_evidence");
       await this.current(d); // Recheck Plan contract and document version after asynchronous gate work.
       let markdown = inspectPhaseRecords(d.sections.tasks).definition;
       const start = markdown.indexOf(task.completionLine);
@@ -195,12 +259,19 @@ export class PhaseExecutionService {
     const available = tasks.filter(t => t.round === d.metadata.round && !t.completed);
     const task = id ? available.find(t => t.id === id) : available.length === 1 ? available[0] : undefined;
     if (!task) fail("phase_selection_required: select one open current-round task_id");
+    const mapping = validatePlanNodeMapping(d.sections.plan, d.sections.tasks, { currentNodeId: task!.id }).filter(issue => issue.severity === "error");
+    if (mapping.length) fail(`plan_node_mapping_invalid: ${mapping.map(issue => issue.code).join(", ")}`);
     if (Object.values(records).some(record => !record.finalized && record.context.phase_id !== task!.id)) fail("another_phase_active: finish the original phase before starting another");
-    for (const t of tasks.filter(t => t.round === d.metadata.round)) {
-      if (t.completed && !records[t.id]?.finalized) fail("completion_receipt_missing: handwritten completion is not trusted");
+    const runtime = this.dependencies.evidence ?? fail("capability_unavailable: trusted evidence runtime is required");
+    for (const t of tasks) {
+      if (t.completed) {
+        if (!records[t.id]?.finalized?.evidence) fail("completion_receipt_missing: handwritten completion and legacy unsealed receipts are not trusted");
+        authenticateFinalizedNode(d, t.id, runtime, dependencyFinalizations(d, t.id, runtime));
+      }
       if (!t.completed && (t.workItems.some(w => w.completed) || t.acceptance.some(a => a.completed) || records[t.id]?.finalized)) fail("completion_marker_conflict: only finalize may mark phase items complete");
     }
-    if (task!.dependsOn.some(id => !tasks.find(t => t.id === id)?.completed)) fail("dependencies_incomplete");
+    dependencyFinalizations(d, task!.id, runtime);
+    requireNodeReview(d, task!.id, runtime);
     return { task: task!, records };
   }
 
@@ -220,9 +291,11 @@ private contract(d: PlanDocument, nodeId: string): string {
 
   private async verify(d: PlanDocument, task: TaskBlock, record: PhaseRecord): Promise<string> {
     if (!validatePhaseRecord(record)) fail("invalid_phase_record");
+    if (!record.implementer_session_id) fail("implementer_identity_missing: legacy records cannot assume the current runtime identity");
+    requireNodeReview(d, task.id, this.dependencies.evidence);
     if (record.finalized) fail("already_finalized");
     if (record.definition_hash !== this.contract(d, task.id) || record.context.phase_id !== task.id || record.context.round !== d.metadata.round || record.context.plan_path !== await realpath(d.path)) fail("stale_execution_contract: original phase binding changed");
-    if (record.acceptance.some(a => !task.acceptance.some(item => item.id === a.id))) fail("unknown_acceptance_record");
+    if (record.acceptance.some(a => !task.acceptance.some(item => item.id === a.id)) || record.verification?.some(e => !task.acceptance.some(item => item.id === e.receipt.acceptance_id))) fail("unknown_acceptance_record");
     await this.roots(record.context);
     const provider = this.dependencies.baseline ?? fail("capability_unavailable: BaselineProvider is not configured");
     const version = await provider.verify(structuredClone(record.context), structuredClone(record.baseline));

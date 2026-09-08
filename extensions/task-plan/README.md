@@ -40,9 +40,9 @@ private control repository, test fixture or acceptance script.
 4. Work items have IDs such as `T001.W001`; Acceptance IDs are `T001.A001`.
    They are stable within the frozen definition, not across replanning. Bound
    reports specify `work_item_id`, a concise summary, affected `files`, optional
-   `change_types`, and Acceptance evidence by stable ID or unambiguous text.
+   `change_types`. Reports describe candidates; caller-supplied Acceptance booleans are rejected.
 5. A report with `result: completed` records **pending_finalize**, not `[x]`.
-   Acceptance evidence binds to the provider's content version: repository changes
+   Run `/plan:verify T001.A001` for each approved verification method. Only the configured Controller verifier can issue signed Acceptance receipts. Evidence binds to the provider's content version: repository changes
    before finalize require re-verification, not reuse of old passing assertions.
    When every work item and Acceptance is ready, use `/plan:finalize T001` or
    `plan_finalize`. One version-checked write completes the phase heading,
@@ -107,7 +107,7 @@ gate, so a losing concurrent finalizer cannot continue mutating docs after a win
 receipt. Plan writes acquire an exclusive lock on the canonical file path, recheck the
 expected document version and atomically rename a fully prepared replacement.
 Symlink aliases share that lock. Stale versions or an existing lock return conflicts;
-no partial batch is published. A lock left after a crashed process is not guessed
+each individual write is atomic. Report batches currently stop after the first failure and retain earlier successful entries. A lock left after a crashed process is not guessed
 stale or automatically stolen: establish that the owner is gone before an explicit
 operator recovery removes it. Do not remove another active writer's lock.
 
@@ -152,3 +152,51 @@ The trusted input adapter issues opaque, short-lived, one-shot capabilities boun
 Reopen, abandon, plan completion, phase finalize, closure edits and DocSync changes require their own capabilities. Slash commands request an actual UI confirmation because other extensions can inject commands. Without UI, only exact trusted interactive/RPC input with an unambiguous existing context can grant authority; first execution requires confirmed roots. A serialized token, boolean or model statement is insufficient. Successful transitions save an authorization receipt in the same CAS write as the state change; failed attempts consume authority and require a new decision where consumption occurred.
 
 V1→V2 apply migration is disabled, including direct calls to the legacy migration module. Read-only migration proposals remain available. Native V2 execution and the full evidence/Controller boundary are not yet a released capability. The Pi write hook is a coordination guard, not a sandbox.
+
+
+## Trusted verification and review
+
+The Controller supplies `PhaseDependencies.evidence`: an opaque receipt signer,
+Implementer session identity, a configured independent reviewer, and a verification
+factory. These are host configuration, never model tool parameters. With no trusted
+runtime the extension fails closed. `configureProcessVerificationAuthority` freezes
+an absolute executable, arguments, working directory and approved verification input;
+it records actual output, exit status and artifact hashes. It does not create a sandbox.
+The host must isolate verifier/reviewer launchers, signing keys and control configuration.
+
+Each executable Task can declare an optional `#### Verification` JSON field before
+`#### Depends On`. Actual verification requires an approved method for every Acceptance:
+
+```json
+{"risk":"unknown","verification":{"T001.A001":{"command_or_method":"check output","inputs":[],"expected":"exit status 0"}}}
+```
+
+The configured risk floor defaults to `unknown`, requiring fresh independent Review.
+Only a trusted Controller may lower that floor; a model changing the contract cannot
+reduce it. Review `failed`, `disputed` and `invalidated` receipts remain blocking even
+when candidate commentary says passed. Review identities must match the contract's
+Implementer and come from the configured trusted launcher. Model summaries are not
+Review results.
+
+`plan_verify_acceptance` accepts only Plan hash, Task ID and Acceptance ID. The method,
+expected output, actor and result come from the approved contract and trusted adapters.
+For an explicit manual method, `/plan:accept T001.A001` displays the actual observation
+and requires Human confirmation. Its one-shot capability binds the exact Acceptance,
+content version, method, expected/actual values and artifacts as well as Plan, node,
+contract, document and roots.
+
+Verification, Review and finalize receipts use strict canonical schemas and
+purpose-separated HMAC seals. Provision a key explicitly with `initializeReceiptSigner`
+and restore it with `loadReceiptSigner` from a protected canonical runtime path.
+Loading never replaces a missing key. Keep that key outside Agent-accessible scopes;
+filesystem mode checks alone do not isolate processes running as the same user.
+A lost key blocks authentication and needs an explicit operator recovery decision.
+
+Finalization requires current passing signed Verification and Review, valid artifacts,
+Human authority and a successful/explicitly skipped DocSync outcome. DocSync mutations
+require verification again against the new content version; the original baseline
+remains. Dependencies across every round and plan completion authenticate the finalized
+contract and the exact current signed evidence referenced by its receipt. Legacy
+checkboxes or unsealed records remain readable but do not authorize execution.
+Reopening a prerequisite with started dependents, or another node while a phase is
+active, is refused before mutation until a coherent dependency recovery transaction exists.

@@ -1,3 +1,4 @@
+import { nodeContractHash } from "./receipt-state.ts";
 import { canonicalSectionHash, canonicalTasksDefinitionHash, phaseExecutionDefinitionHash, replaceFrontmatter } from "./plan-file.ts";
 import { parseTasks } from "./tasks.ts";
 import { inspectPhaseRecords } from "./phase-record.ts";
@@ -50,9 +51,9 @@ export function reconcileState(document: PlanDocument): ReconcileResult {
   if (["executing", "awaiting_round_decision"].includes(next.stage)) {
     const records = inspectPhaseRecords(document.sections.tasks);
     if (records.errors.length) return { changed: false, metadata: current, text: document.text, conflict: "invalid_phase_record" };
-    for (const task of currentRoundTasks) {
+    for (const task of parseTasks(document.sections.tasks)) {
       const record = records.records[task.id];
-      if (task.completed && (!record?.finalized || record.definition_hash !== phaseExecutionDefinitionHash(document) || record.context.round !== next.round || task.workItems.some((item) => !item.completed) || task.acceptance.some((item) => !item.completed))) {
+      if (task.completed && (!record?.finalized?.evidence || record.finalized.evidence.receipt.contract_hash !== nodeContractHash(document,task.id) || record.context.round !== task.round || task.workItems.some((item) => !item.completed) || task.acceptance.some((item) => !item.completed))) {
         return { changed: false, metadata: current, text: document.text, conflict: "completion_evidence_missing" };
       }
       if (!task.completed && (record?.finalized || task.workItems.some((item) => item.completed) || task.acceptance.some((item) => item.completed))) return { changed: false, metadata: current, text: document.text, conflict: "completion_record_conflict" };

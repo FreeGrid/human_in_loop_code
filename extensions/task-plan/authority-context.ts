@@ -1,3 +1,4 @@
+import { nodeContractHash } from "./receipt-state.ts";
 import { realpath } from "node:fs/promises";
 import { dirname } from "node:path";
 import { assertTransitionAllowed, consumeHumanCapability, type AuthorityAction, type AuthorityContext, type AuthorizationReceipt, type HumanCapability } from "./authority.ts";
@@ -11,7 +12,7 @@ export async function documentAuthorityContext(document: PlanDocument, node_id =
   const governance_root = await realpath(roots.governance_root ?? existing?.governance_root ?? dirname(dirname(document.path)));
   const target_root = await realpath(roots.target_root ?? existing?.target_root ?? governance_root);
   return { plan_id: document.metadata.plan_id, node_id, document_hash: document.document_hash,
-    contract_hash: node_id === "$plan" ? phaseExecutionDefinitionHash(document) : executionDefinitionHash(document, node_id), target_root, governance_root };
+    contract_hash: node_id === "$plan" ? phaseExecutionDefinitionHash(document) : nodeContractHash(document, node_id), target_root, governance_root };
 }
 
 export async function consumeDocumentAuthority(document: PlanDocument, token: HumanCapability | undefined, action: AuthorityAction, node_id = "$plan", roots: { target_root?: string; governance_root?: string } = {}): Promise<AuthorizationReceipt> {
