@@ -78,7 +78,7 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     return response(`${lines.length ? `已更新：\n${lines.map(line => `- ${line}`).join("\n")}` : "内容没有变化。"}\n${current ? `当前任务：${current.id} ${current.text}` : "所有任务已勾选完成。"}`);
   };
 
-  pi.registerTool({ name: "plan_start", label: "创建 Plan", description: "Save current deduplicated requirements and a rolling checklist. One task is valid; only the current task may be expanded. This does not start implementation.",
+  pi.registerTool({ name: "plan_start", label: "创建 Plan", description: "Save current deduplicated requirements and a rolling checklist. One task is valid; add new detail only to the current task. This does not start implementation.",
     parameters: Type.Object({ title: Type.String(), brief: Type.String(), tasks }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, signal, _update, ctx) {
       if (signal?.aborted) throw new Error("plan_start aborted");
@@ -103,13 +103,13 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
         return changed(before, await svc.revise({ path: params.path, title: params.title, brief: params.brief, tasks: nextTasks, affected_task_ids: params.affected_task_ids }));
       } catch (error) { return failure(error); }
     } });
-  pi.registerTool({ name: "plan_refine", label: "展开当前任务", description: "Replace only the current task's small work in place. Future tasks remain one sentence.",
+  pi.registerTool({ name: "plan_refine", label: "展开当前任务", description: "Replace only the current task's small work in place. Recorded work on other tasks is retained.",
     parameters: Type.Object({ path: pathField, task_id: Type.Optional(Type.String()), subtasks: Type.Array(Type.String()) }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_refine aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd), before = await svc.previewEdit(params.path); return changed(before, await svc.refine(normalizeSubtasks(params.subtasks.map(text => ({ text })), currentReadableTask(before.plan)?.subtasks), params.task_id, params.path)); } catch (error) { return failure(error); } } });
-  pi.registerTool({ name: "plan_set_task_status", label: "勾选任务", description: "Set ordinary completion or reopen a task. Human/manual completion is valid without certification. Completing a root collapses its small work; no result text is appended.",
+  pi.registerTool({ name: "plan_set_task_status", label: "勾选任务", description: "Set ordinary completion or reopen a task. Human/manual completion is valid without certification. Completing a root preserves its subtasks and their individual checkboxes; no result text is appended.",
     parameters: Type.Object({ path: pathField, task_id: Type.String(), completed: Type.Boolean(), subtask: Type.Optional(Type.Integer({ minimum: 1, description: "Optional one-based small-work position." })) }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_set_task_status aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd), before = await svc.previewEdit(params.path); return changed(before, await svc.setStatus(params.task_id, params.completed, params.subtask === undefined ? undefined : params.subtask - 1, params.path)); } catch (error) { return failure(error); } } });
-  pi.registerTool({ name: "plan_select", label: "选择当前任务", description: "Move an open task to the current position, retaining IDs and collapsing future detail.", parameters: Type.Object({ path: pathField, task_id: Type.String() }, { additionalProperties: false }), executionMode: "sequential",
+  pi.registerTool({ name: "plan_select", label: "选择当前任务", description: "Move an open task to the current position, retaining IDs and all recorded subtasks.", parameters: Type.Object({ path: pathField, task_id: Type.String() }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_select aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd), before = await svc.previewEdit(params.path); return changed(before, await svc.select(params.task_id, params.path)); } catch (error) { return failure(error); } } });
   pi.registerTool({ name: "plan_status", label: "当前进度", description: "Show the short checklist and next task without execution records.", parameters: Type.Object({ path: pathField }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, _signal, _update, ctx) { try { const old = await legacy(ctx.cwd, params.path); if (old) return response(legacyViewText(old)); const snapshot = await service(ctx.cwd).peek(params.path); return response(checklist(snapshot)); } catch (error) { return failure(error); } } });

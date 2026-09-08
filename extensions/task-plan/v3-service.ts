@@ -22,9 +22,15 @@ export interface ReadableRevision {
 const meaning = (text: string) => text.trim().replace(/\s+/gu, " ");
 const childMeaning = (task: ReadableTask) => JSON.stringify(task.subtasks.map(item => meaning(item.text)).sort());
 const clone = <T>(value: T): T => structuredClone(value);
-function settleTree(plan: ReadablePlan): void {
+function assertCurrentRefinement(plan: ReadablePlan, previous: ReadableTask[] = [], supplied: ReadableTask[] = plan.tasks): void {
   const current = plan.tasks.find(task => !task.completed);
-  for (const task of plan.tasks) if (task.completed || task !== current) task.subtasks = [];
+  for (const task of plan.tasks) {
+    const proposed = supplied.find(item => item.id === task.id);
+    const old = previous.find(item => item.id === task.id);
+    if (task !== current && proposed?.subtasks.length && JSON.stringify(proposed.subtasks.map(item => item.text)) !== JSON.stringify((old?.subtasks ?? []).map(item => item.text))) {
+      throw new Error("v3_refine_current_task_only: only the first open task may receive new subtasks");
+    }
+  }
 }
 
 /** Ordinary planning has no dependency on execution, policy, receipts or a runtime store. */
@@ -37,6 +43,8 @@ export class ReadablePlanService {
     const heading = title?.trim() || normalized.split(/\r?\n/u)[0]!.slice(0, 80);
     const plan: ReadablePlan = { format: "pi-plan/v3", plan_id: "P001", title: heading, brief: normalized,
       tasks: tasks ?? [{ id: "T001", text: "完成当前需求", completed: false, subtasks: [] }] };
+    renderReadablePlan(plan);
+    assertCurrentRefinement(plan);
     return this.remember(await createReadablePlan(this.root, plan));
   }
 
@@ -90,6 +98,9 @@ export class ReadablePlanService {
     if (revision.tasks !== undefined) next.tasks = clone(revision.tasks);
     // Reject newly supplied future detail rather than silently discarding proposed work.
     renderReadablePlan(next);
+    // Completed candidates may reopen below; validate their final selection after
+    // applying definition changes. An added completed node never bypasses that check.
+    assertCurrentRefinement(next, before.plan.tasks, (revision.tasks ?? []).filter(task => !task.completed));
     if (revision.affected_task_ids !== undefined && (new Set(revision.affected_task_ids).size !== revision.affected_task_ids.length || revision.affected_task_ids.some(id => !next.tasks.some(task => task.id === id)))) throw new Error("v3_unknown_affected_task");
     const briefChanged = meaning(next.brief) !== meaning(before.plan.brief);
     for (const task of next.tasks) {
@@ -105,16 +116,8 @@ export class ReadablePlanService {
         for (const item of task.subtasks) if (!previous.subtasks.some(old => meaning(old.text) === meaning(item.text))) item.completed = false;
       }
     }
-    const current = next.tasks.find(task => !task.completed);
-    for (const task of next.tasks) {
-      const supplied = revision.tasks?.find(item => item.id === task.id);
-      const previous = before.plan.tasks.find(item => item.id === task.id);
-      if (!task.completed && task !== current && supplied?.subtasks.length && JSON.stringify(supplied.subtasks) !== JSON.stringify(previous?.subtasks ?? [])) {
-        throw new Error("v3_refine_current_task_only: proposed work would belong to a future task after reopening");
-      }
-    }
-    // Reopening an earlier task makes it current; future details leave the readable file.
-    settleTree(next);
+    // Reopening an earlier task changes selection without removing recorded work.
+    assertCurrentRefinement(next, before.plan.tasks, revision.tasks ?? []);
     return this.save(before, next);
   }
 
@@ -134,7 +137,6 @@ export class ReadablePlanService {
       if (!Number.isSafeInteger(subtaskIndex) || subtaskIndex < 0 || !task.subtasks[subtaskIndex]) throw new Error("v3_unknown_subtask");
       task.subtasks[subtaskIndex]!.completed = completed;
     }
-    settleTree(next);
     return this.save(before, next);
   }
 
@@ -146,7 +148,6 @@ export class ReadablePlanService {
       const target = next.tasks.splice(index, 1)[0]!;
       const at = next.tasks.findIndex(task => !task.completed);
       next.tasks.splice(at < 0 ? next.tasks.length : at, 0, target);
-      settleTree(next);
     }
     return this.save(before, next);
   }
@@ -197,7 +198,7 @@ export function readableChanges(before: ReadablePlan, after: ReadablePlan): stri
     else if (old.text !== task.text) lines.push(`${task.id} ${task.text}`);
     if (JSON.stringify(old.subtasks) !== JSON.stringify(task.subtasks)) {
       if (task.subtasks.length) lines.push(`${task.id} 小工作：\n${task.subtasks.map(item => `- [${item.completed ? "x" : " "}] ${item.text}`).join("\n")}`);
-      else if (!task.completed) lines.push(`${task.id} 已收起小工作。`);
+      else lines.push(`${task.id} 已移除小工作。`);
     }
   }
   for (const task of before.tasks) if (!after.tasks.some(item => item.id === task.id)) lines.push(`移除 ${task.id} ${task.text}`);

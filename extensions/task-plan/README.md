@@ -2,7 +2,7 @@
 
 A Plan keeps the current requirements and a rolling checklist in one readable file. It replaces superseded wording instead of accumulating analysis, strategy, review or execution records.
 
-Use `/plan` with a natural-language request. The Planner asks at most one currently blocking question, states nonblocking defaults and creates a few tasks. One task is enough for simple work. Only the current task expands; completed tasks retain their checked line.
+Use `/plan` with a natural-language request. The Planner asks at most one currently blocking question, states nonblocking defaults and creates a few tasks. One task is enough for simple work. Only the current task receives new detail; completed tasks retain their subtasks and individual checkboxes.
 
 ```markdown
 ---

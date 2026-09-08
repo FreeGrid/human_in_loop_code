@@ -55,8 +55,8 @@ configurable specialist roles.
 
 Use `/plan` with a natural-language request to create a readable V3 file. The
 Planner consolidates the current requirements, asks at most one blocking question
-and expands only the current task. Simple requests may have one task. Changes
-replace old wording in place; completed work keeps its checked line without
+and adds new detail only to the current task. Simple requests may have one task. Changes
+replace old wording in place; completed work keeps its subtasks and individual checkboxes without
 results, summaries or execution records.
 
 Humans may check tasks directly. `/plan:task T001 done` records ordinary completion,
