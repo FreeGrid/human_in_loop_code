@@ -27,7 +27,7 @@ function assertCurrentRefinement(plan: ReadablePlan, previous: ReadableTask[] = 
   for (const task of plan.tasks) {
     const proposed = supplied.find(item => item.id === task.id);
     const old = previous.find(item => item.id === task.id);
-    if (!task.completed && task !== current && proposed?.subtasks.length && JSON.stringify(proposed.subtasks) !== JSON.stringify(old?.subtasks ?? [])) {
+    if (task !== current && proposed?.subtasks.length && JSON.stringify(proposed.subtasks.map(item => item.text)) !== JSON.stringify((old?.subtasks ?? []).map(item => item.text))) {
       throw new Error("v3_refine_current_task_only: only the first open task may receive new subtasks");
     }
   }
@@ -98,7 +98,9 @@ export class ReadablePlanService {
     if (revision.tasks !== undefined) next.tasks = clone(revision.tasks);
     // Reject newly supplied future detail rather than silently discarding proposed work.
     renderReadablePlan(next);
-    assertCurrentRefinement(next, before.plan.tasks, revision.tasks ?? []);
+    // Completed candidates may reopen below; validate their final selection after
+    // applying definition changes. An added completed node never bypasses that check.
+    assertCurrentRefinement(next, before.plan.tasks, (revision.tasks ?? []).filter(task => !task.completed));
     if (revision.affected_task_ids !== undefined && (new Set(revision.affected_task_ids).size !== revision.affected_task_ids.length || revision.affected_task_ids.some(id => !next.tasks.some(task => task.id === id)))) throw new Error("v3_unknown_affected_task");
     const briefChanged = meaning(next.brief) !== meaning(before.plan.brief);
     for (const task of next.tasks) {
