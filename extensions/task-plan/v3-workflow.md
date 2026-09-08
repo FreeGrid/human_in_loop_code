@@ -26,18 +26,18 @@ Model preferences for planning, normal execution and review are configured globa
 | Execution | `PI_TASK_PLAN_NORMAL_MODEL_PROVIDER` | `PI_TASK_PLAN_NORMAL_MODEL_ID` | `PI_TASK_PLAN_NORMAL_THINKING` |
 | Review | `PI_TASK_PLAN_REVIEW_MODEL_PROVIDER` | `PI_TASK_PLAN_REVIEW_MODEL_ID` | `PI_TASK_PLAN_REVIEW_THINKING` |
 
-For example, these values reproduce the built-in presets; replace the IDs/providers with models configured in your Pi installation:
+All three built-in presets use the locally registered Qwen 3.8 model `custom-qwen/qwen38-27b-fp8`, whose registration disables reasoning, so thinking is `off`. These values reproduce the presets; replace the IDs/providers with models configured in your Pi installation:
 
 ```sh
-export PI_TASK_PLAN_PLANNING_MODEL_PROVIDER=openai-codex
-export PI_TASK_PLAN_PLANNING_MODEL_ID=gpt-6-astra
-export PI_TASK_PLAN_PLANNING_THINKING=xhigh
-export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=openai-codex
-export PI_TASK_PLAN_NORMAL_MODEL_ID=gpt-6-astra
-export PI_TASK_PLAN_NORMAL_THINKING=medium
-export PI_TASK_PLAN_REVIEW_MODEL_PROVIDER=openai-codex
-export PI_TASK_PLAN_REVIEW_MODEL_ID=gpt-6-astra
-export PI_TASK_PLAN_REVIEW_THINKING=xhigh
+export PI_TASK_PLAN_PLANNING_MODEL_PROVIDER=custom-qwen
+export PI_TASK_PLAN_PLANNING_MODEL_ID=qwen38-27b-fp8
+export PI_TASK_PLAN_PLANNING_THINKING=off
+export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=custom-qwen
+export PI_TASK_PLAN_NORMAL_MODEL_ID=qwen38-27b-fp8
+export PI_TASK_PLAN_NORMAL_THINKING=off
+export PI_TASK_PLAN_REVIEW_MODEL_PROVIDER=custom-qwen
+export PI_TASK_PLAN_REVIEW_MODEL_ID=qwen38-27b-fp8
+export PI_TASK_PLAN_REVIEW_THINKING=off
 ```
 
 Existing `PI_TASK_PLAN_MODEL_PROVIDER` and `PI_TASK_PLAN_MODEL_ID` remain common fallbacks; explicit stage variables override them. Existing `PI_TASK_PLAN_THINKING` remains a planning alias. Thinking values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh` (existing aliases remain accepted). Explicit host configuration overrides environment values per preset field. `PI_TASK_PLAN_MODEL_SWITCH=0` disables automatic model switching. The default `PI_TASK_PLAN_RESTORE_MODE=configured` selects the configured execution model; `previous` instead restores the model and thinking level saved before entering planning or review.
