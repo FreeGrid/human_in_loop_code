@@ -53,7 +53,12 @@ configurable specialist roles.
 
 ### 3. Task Plan: keep current requirements and a rolling checklist
 
-Use `/plan` with a natural-language request to create a readable V3 file. The
+Use `/plan` with a natural-language request to update the selected readable Plan;
+create a V3 file only when no Plan exists. Added requirements, changed goals and
+scope adjustments stay in the same Markdown, even after all tasks are complete.
+Only an explicit request for a new Plan (or `/plan:new`) creates another file.
+A missing/unreadable selected file or ambiguous selection prompts recovery or
+selection, never an implicit replacement. The
 Planner consolidates the current requirements, asks at most one blocking question
 and adds detail in place only when useful: current work is actionable, nearby work
 may have known subtasks, and distant work stays coarse. Simple requests may have
