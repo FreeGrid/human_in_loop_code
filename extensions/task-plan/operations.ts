@@ -8,6 +8,11 @@ import type { TaskPlanModelSwitchState } from "./model-switch.ts";
 import type { PlanDocument, PlanMetadata, PlanStage, SectionName, TaskBlock, ValidationIssue } from "./types.ts";
 import { validateFrontmatter, validatePlan, validateProgress, validateSections, validateTasks, validateWhatWhy } from "./validators.ts";
 import type { PlanOperationResult } from "./operation-result.ts";
+import { PhaseExecutionService } from "./phase-execution.ts";
+import { inspectPhaseRecords, upsertPhaseRecord } from "./phase-record.ts";
+import { inspectExecutionNotes, upsertExecutionNote, type ExecutionNote } from "./execution-notes.ts";
+import type { PhaseDependencies, HumanDecisionToken } from "./phase-contracts.ts";
+import { phaseSwitchHelp } from "./phase-input.ts";
 
 export interface TaskBinding {
   task_id: string;
@@ -22,6 +27,9 @@ export interface TaskPlanSessionState {
   binding?: TaskBinding;
   reportedThisTurn?: boolean;
   modelSwitch?: TaskPlanModelSwitchState;
+  phaseDependencies?: PhaseDependencies;
+  humanDecision?: HumanDecisionToken;
+  phaseTaskId?: string;
 }
 
 export class TaskPlanService {
@@ -42,6 +50,7 @@ export class TaskPlanService {
     const loaded = await this.load(planPath);
     if ("status" in loaded) return loaded;
     const reconciled = reconcileState(loaded);
+    if (reconciled.conflict) return conflict(reconciled.conflict);
     if (reconciled.changed) {
       const write = await writeIfDocumentHash(loaded.path, loaded.document_hash, reconciled.text);
       if (!write.ok) return conflict(write.conflict);
@@ -61,6 +70,7 @@ export class TaskPlanService {
     if (reconciled.changed) return this.persistStateChange(loaded, reconciled.text, reconciled.reason);
     const section = sectionForStage(loaded.metadata.stage);
     if (!section) return validation(`Cannot submit section while stage is ${loaded.metadata.stage}`, []);
+    if (section === "tasks" && !preservesExecutionState(loaded.sections.tasks, params.content)) return conflict("reserved_execution_state_changed: Tasks editing cannot add, modify or delete execution records/notes");
     const candidateIssues = validateCandidate(section, params.content, loaded.metadata).issues;
     if (candidateIssues.some((i) => i.severity === "error")) return validation("Section validation failed", candidateIssues);
     let text = replaceSection(loaded.text, section, params.content);
@@ -122,6 +132,7 @@ export class TaskPlanService {
     }
     if (loaded.metadata.stage !== "tasks") return this.get(loaded.path);
     const nextTasks = params.candidate_tasks ?? loaded.sections.tasks;
+    if (!preservesExecutionState(loaded.sections.tasks, nextTasks)) return conflict("reserved_execution_state_changed: Review cannot add, modify or delete execution records/notes");
     const v = validateTasks(nextTasks, loaded.metadata.round, { requireCurrentOpen: true, historicalCompleted: true });
     if (!v.ok) return validation("Tasks review failed", v.issues);
     let text = replaceSection(loaded.text, "tasks", nextTasks);
@@ -145,29 +156,97 @@ export class TaskPlanService {
     return { ...ok("ok", `Bound ${task.id}`, loaded), snapshot: { binding } };
   }
 
-  async reportTaskResult(params: { task_id: string; result: "in_progress" | "blocked" | "completed"; summary: string; acceptance_results?: Array<{ item: string; satisfied: boolean }> }): Promise<PlanOperationResult> {
+  async executePhase(params: { expected_document_hash: string; task_id?: string; target_root?: string; governance_root?: string; planPath?: string }): Promise<PlanOperationResult> {
+    const decision = this.sessionState.humanDecision;
+    delete this.sessionState.humanDecision;
+    const loaded = await this.load(params.planPath);
+    if ("status" in loaded) return loaded;
+    if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
+    const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("Phase readiness validation failed", ready.issues);
+    const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).start(loaded, { ...params, decision });
+    if (result.status === "applied" || result.status === "ok") {
+      const next = await readPlanDocument(loaded.path);
+      const active = Object.values(inspectPhaseRecords(next.sections.tasks).records).find((r) => !r.finalized && r.context.round === next.metadata.round && (!params.task_id || r.context.phase_id === params.task_id));
+      if (active) {
+        this.sessionState.phaseTaskId = active.context.phase_id;
+        await this.bindTask({ expected_document_hash: next.document_hash, task_id: active.context.phase_id, planPath: next.path });
+        return { ...result, message: `${result.message}\n${phaseSwitchHelp(active.docsync.enabled)}`, snapshot: snapshot(next, this.sessionState.binding) };
+      }
+    }
+    return { ...result, message: `${result.message}\n${phaseSwitchHelp()}` };
+  }
+
+  async setPhaseDocSync(params: { expected_document_hash: string; task_id: string; enabled: boolean; planPath?: string }): Promise<PlanOperationResult> {
+    const decision = this.sessionState.humanDecision;
+    delete this.sessionState.humanDecision;
+    const loaded = await this.load(params.planPath);
+    if ("status" in loaded) return loaded;
+    if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
+    const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("DocSync readiness validation failed", ready.issues);
+    const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).setDocSync(loaded, params.task_id, params.enabled, decision);
+    if (result.status === "applied" || result.status === "ok") return { ...result, snapshot: snapshot(await readPlanDocument(loaded.path), this.sessionState.binding) };
+    return result;
+  }
+
+  async finalizePhase(params: { expected_document_hash: string; task_id: string; planPath?: string }): Promise<PlanOperationResult> {
+    const loaded = await this.load(params.planPath);
+    if ("status" in loaded) return loaded;
+    if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
+    const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("Finalize readiness validation failed", ready.issues);
+    const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).finalize(loaded, params.task_id);
+    if (result.status === "applied") {
+      const next = await readPlanDocument(loaded.path);
+      const record = inspectPhaseRecords(next.sections.tasks).records[params.task_id];
+      if (record?.finalized) { delete this.sessionState.binding; delete this.sessionState.phaseTaskId; }
+      return { ...result, snapshot: snapshot(next, this.sessionState.binding) };
+    }
+    return result;
+  }
+
+  async reportTaskResult(params: { task_id: string; work_item_id?: string; result: "in_progress" | "blocked" | "completed"; summary: string; files?: string[]; change_types?: ExecutionNote["change_types"]; acceptance_results?: Array<{ item: string; satisfied: boolean }> }): Promise<PlanOperationResult> {
     const binding = this.sessionState.binding;
     if (!binding || binding.task_id !== params.task_id) return validation("Report must match the current task binding", []);
     const loaded = await readPlanDocument(binding.plan_path);
+    const ready = validateExecutionReadiness(loaded); if (!ready.ok) return validation("Report readiness validation failed", ready.issues);
+    if (loaded.metadata.stage !== "executing" || loaded.metadata.round !== binding.round) return conflict("task_binding_stale");
     const task = currentRoundTasks(loaded.sections.tasks, binding.round).find((candidate) => candidate.id === binding.task_id);
     if (!task || canonicalTasksDefinitionHash(task.definition) !== binding.task_definition_hash) return conflict("task_binding_stale");
-    this.sessionState.reportedThisTurn = true;
-    if (params.result === "in_progress") return ok("ok", `Task ${params.task_id} remains in progress`, loaded);
-    if (params.result === "blocked") { delete this.sessionState.binding; return ok("ok", `Task ${params.task_id} blocked; binding cleared`, loaded); }
-    const accepted = new Map((params.acceptance_results ?? []).map((entry) => [entry.item, entry.satisfied]));
-    if (!task.acceptanceItems.every((item) => accepted.get(item) === true)) return validation("Completed report must satisfy every Acceptance item", []);
-    return this.setTaskCompletion(loaded, task, true, `Task ${task.id} completed by bound Agent report`, true);
+    const result = await new PhaseExecutionService(this.sessionState.phaseDependencies).report(loaded, params);
+    if (result.status === "applied" || result.status === "ok") {
+      this.sessionState.reportedThisTurn = true;
+      const next = await readPlanDocument(loaded.path);
+      const fresh = currentRoundTasks(next.sections.tasks, binding.round).find((item) => item.id === binding.task_id);
+      if (fresh) binding.contract = fresh;
+      return { ...result, snapshot: snapshot(next, binding) };
+    }
+    return result;
   }
 
   async setTaskStatus(params: { expected_document_hash: string; task_id: string; status: "open" | "completed"; planPath?: string }): Promise<PlanOperationResult> {
-    const loaded = await this.load(params.planPath);
+    const loaded = await this.load(params.planPath, params.status === "open");
     if ("status" in loaded) return loaded;
     if (loaded.document_hash !== params.expected_document_hash) return conflict("stale_document_hash");
     const task = currentRoundTasks(loaded.sections.tasks, loaded.metadata.round).find((candidate) => candidate.id === params.task_id);
     if (!task) return validation(`Task ${params.task_id} is not in current round`, []);
     if (params.status === "completed" && loaded.metadata.stage !== "executing") return validation("Human completion requires executing stage", []);
     if (params.status === "open" && !["executing", "awaiting_round_decision"].includes(loaded.metadata.stage)) return validation("Human reopen requires executing or awaiting_round_decision stage", []);
-    return this.setTaskCompletion(loaded, task, params.status === "completed", `Task ${task.id} marked ${params.status} by Human`, false);
+    if (params.status === "completed") return this.finalizePhase(params);
+    // Reopening invalidates all previous evidence, but preserves execution identity/baseline.
+    let definition = task.definition.replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/m, "$1 [ ]")
+      .replace(/^([ \t]*- )\[(?: |x|X)\]/gm, "$1[ ]")
+      .replace(/^([ \t]*- .+?) \[(?: |x|X)\]([ \t]*)$/gm, "$1 [ ]$2");
+    const record = inspectPhaseRecords(definition).records[task.id];
+    if (record) {
+      delete record.finalized;
+      delete record.last_finalize;
+      record.acceptance = [];
+      definition = upsertPhaseRecord(definition, task.id, record);
+      for (const work of task.workItems) definition = upsertExecutionNote(definition, work.id, { version: 1, status: "in_progress", summary: "Reopened by Human; previous evidence invalidated", files: [], change_types: [] });
+    }
+    const tasks = loaded.sections.tasks.replace(task.definition, definition);
+    const text = replaceFrontmatter(replaceSection(loaded.text, "tasks", tasks), { ...loaded.metadata, stage: "executing", stage_status: "in_progress" });
+    delete this.sessionState.binding;
+    return this.write(loaded, text, `Task ${task.id} reopened; previous acceptance invalidated`);
   }
 
   async abandon(params: { expected_document_hash: string; reason?: string; planPath?: string }): Promise<PlanOperationResult> {
@@ -189,23 +268,16 @@ export class TaskPlanService {
     return this.write(loaded, replaceFrontmatter(loaded.text, { ...loaded.metadata, closure_reason: reason }), "Updated closure reason");
   }
 
-  private async setTaskCompletion(loaded: PlanDocument, task: TaskBlock, complete: boolean, message: string, clearBinding: boolean): Promise<PlanOperationResult> {
-    const nextDefinition = task.definition.replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/m, `$1 [${complete ? "x" : " "}]`);
-    let text = loaded.text.replace(task.definition, nextDefinition);
-    const nextTasksText = loaded.sections.tasks.replace(task.definition, nextDefinition);
-    const current = parseTasks(nextTasksText).filter((candidate) => candidate.round === loaded.metadata.round);
-    let metadata = { ...loaded.metadata };
-    if (complete && current.length > 0 && current.every((candidate) => candidate.completed)) metadata = { ...metadata, stage: "awaiting_round_decision", stage_status: "awaiting_human" };
-    if (!complete && loaded.metadata.stage === "awaiting_round_decision") metadata = { ...metadata, stage: "executing", stage_status: "in_progress" };
-    text = replaceFrontmatter(text, metadata);
-    if (clearBinding) delete this.sessionState.binding;
-    return this.write(loaded, text, message);
-  }
-
-  private async load(planPath?: string): Promise<PlanDocument | PlanOperationResult> {
+  private async load(planPath?: string, allowCompletionConflict = false): Promise<PlanDocument | PlanOperationResult> {
     const path = planPath ? resolvePath(this.cwd, planPath) : await this.defaultPlanPath();
     if (!path) return conflict("No unfinished Harness Plan found");
-    try { const doc = await readPlanDocument(path); this.sessionState.currentPlanPath = doc.path; return doc; }
+    try {
+      const doc = await readPlanDocument(path);
+      this.sessionState.currentPlanPath = doc.path;
+      const reconciled = reconcileState(doc);
+      if (reconciled.conflict && !allowCompletionConflict) return conflict(reconciled.conflict);
+      return doc;
+    }
     catch (error) { return conflict(String((error as Error).message ?? error)); }
   }
 
@@ -233,6 +305,17 @@ export async function isCurrentHarnessPlanPath(cwd: string, targetPath: string, 
   return candidates.has(path);
 }
 
+function preservesExecutionState(before: string, after: string): boolean {
+  const saved = (markdown: string) => {
+    const phases = inspectPhaseRecords(markdown);
+    const notes = inspectExecutionNotes(phases.definition);
+    if (phases.errors.length || notes.errors.length) return undefined;
+    return JSON.stringify([Object.entries(phases.records).sort(([a], [b]) => a.localeCompare(b)), Object.entries(notes.notes).sort(([a], [b]) => a.localeCompare(b))]);
+  };
+  const original = saved(before), candidate = saved(after);
+  return original !== undefined && candidate !== undefined && original === candidate;
+}
+
 function sectionForStage(stage: PlanStage): SectionName | undefined {
   if (stage === "what_why") return "what_why";
   if (stage === "plan") return "plan";
@@ -250,6 +333,7 @@ function validateCandidate(section: SectionName, content: string, metadata: Plan
 function validateExecutionReadiness(document: PlanDocument) {
   const issues = [
     ...validateFrontmatter(document).issues,
+    ...validateProgress(document).issues,
     ...validateSections(document.text).issues,
     ...validateTasks(document.sections.tasks, document.metadata.round, { historicalCompleted: true }).issues,
   ];

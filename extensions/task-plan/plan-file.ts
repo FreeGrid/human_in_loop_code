@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, open, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { extractAllSections } from "./sections.ts";
+import { canonicalTaskDefinition } from "./tasks.ts";
 import { HARNESS, type PlanDocument, type PlanMetadata } from "./types.ts";
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
@@ -15,11 +16,11 @@ export function canonicalSectionHash(content: string): string {
 }
 
 export function canonicalTasksDefinitionHash(content: string): string {
-  return sha256(content
-    .replace(/\r\n/g, "\n")
-    .replace(/^(### T\d{3} — .+?) \[(?: |x|X)\]$/gm, "$1 [#]")
-    .replace(/- \[(?: |x|X)\]/g, "- [#]")
-    .replace(/^(\s*- .+?) \[(?: |x|X)\]$/gm, "$1 [#]"));
+  return sha256(canonicalTaskDefinition(content));
+}
+
+export function phaseExecutionDefinitionHash(document: PlanDocument): string {
+  return sha256(JSON.stringify([document.metadata.plan_id, document.metadata.round, canonicalSectionHash(document.sections.what_why), canonicalSectionHash(document.sections.plan), canonicalTasksDefinitionHash(document.sections.tasks)]));
 }
 
 export function parseFrontmatter(text: string): { metadata: PlanMetadata; body: string } {
@@ -63,16 +64,55 @@ export async function readPlanDocument(path: string): Promise<PlanDocument> {
 export async function atomicWriteFile(path: string, content: string): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
-  await writeFile(tmp, content, "utf8");
-  await rename(tmp, path);
+  try {
+    await writeFile(tmp, content, "utf8");
+    await rename(tmp, path);
+  } finally { await rm(tmp, { force: true }); }
 }
 
 export async function writeIfDocumentHash(path: string, expectedHash: string, content: string): Promise<{ ok: true; document_hash: string } | { ok: false; conflict: string }> {
-  const current = await readFile(path).catch(() => undefined);
-  if (!current) return { ok: false, conflict: "missing_file" };
-  if (sha256(current) !== expectedHash) return { ok: false, conflict: "stale_document_hash" };
-  await atomicWriteFile(path, content);
-  return { ok: true, document_hash: sha256(Buffer.from(content, "utf8")) };
+  let canonical: string;
+  try { canonical = await realpath(path); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ok: false, conflict: "missing_file" };
+    throw error;
+  }
+  const lockPath = join(dirname(canonical), `.${basename(canonical)}.pi-plan.lock`);
+  let lock;
+  try { lock = await open(lockPath, "wx", 0o600); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") return { ok: false, conflict: "plan_write_locked" };
+    throw error;
+  }
+  const tmp = join(dirname(canonical), `.${basename(canonical)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    const current = await readFile(canonical);
+    if (sha256(current) !== expectedHash) return { ok: false, conflict: "stale_document_hash" };
+    const mode = (await stat(canonical)).mode & 0o777;
+    const file = await open(tmp, "wx", mode);
+    try { await file.writeFile(content, "utf8"); await file.sync(); } finally { await file.close(); }
+    // The exclusive lock covers all Harness writers; recheck late to detect external edits too.
+    if (sha256(await readFile(canonical)) !== expectedHash) return { ok: false, conflict: "stale_document_hash" };
+    await rename(tmp, canonical);
+    return { ok: true, document_hash: sha256(Buffer.from(content, "utf8")) };
+  } finally {
+    try { await rm(tmp, { force: true }); }
+    finally { try { await lock.close(); } finally { await rm(lockPath); } }
+  }
+}
+
+/** Serialize an entire finalize attempt, including its potentially mutating documentation gate. */
+export async function acquirePhaseFinalizeLock(path: string, taskId: string): Promise<() => Promise<void>> {
+  if (!/^T\d{3}$/.test(taskId)) throw new Error("invalid_phase_id");
+  const canonical = await realpath(path);
+  const lockPath = join(dirname(canonical), `.${basename(canonical)}.${taskId}.finalize.lock`);
+  let handle;
+  try { handle = await open(lockPath, "wx", 0o600); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") throw new Error("phase_finalize_locked: another finalize attempt is active or needs explicit crash recovery");
+    throw error;
+  }
+  return async () => { try { await handle.close(); } finally { await rm(lockPath); } };
 }
 
 export async function detectLegacyWorkspaceConflict(root: string): Promise<string[]> {

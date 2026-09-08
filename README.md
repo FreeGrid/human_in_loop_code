@@ -8,16 +8,17 @@ problem: an agent can produce changes quickly while repository boundaries,
 human approval points, and execution history remain implicit. This toolkit makes
 those decisions visible, reviewable, and recoverable.
 
-## The two layers
+## From ownership to approved execution
 
 ```text
-repository boundaries       coordinated execution
-    control-init       ->       collaborating-agents
+repository boundaries     durable Human gates      coordinated execution
+    control-init       ->       task-plan        ->  collaborating-agents
 ```
 
-The arrow shows the recommended sequence, not a runtime dependency. Installing
-the package enables both extensions, and each extension remains useful on its
-own.
+The arrows show the recommended sequence, not runtime dependencies. The three
+extensions can be used independently: workspace governance establishes ownership,
+Task Plan records approval and progress, and collaborating Agents carry out
+scoped work. A subagent result is evidence to review, not automatic acceptance.
 
 ### 1. Control Init: make ownership and boundaries durable
 
@@ -50,7 +51,26 @@ configurable specialist roles.
 
 [Read the Collaborating Agents guide](extensions/collaborating-agents/README.md)
 
-### 3. Task Plan: use a planning model, then return to coding
+### 3. Task Plan: preserve decisions across planning and execution
+
+A long planning conversation should not be the only place that knows what was
+approved or what remains unfinished. Task Plan keeps requirements, the staged
+approach, executable work and acceptance criteria in one Markdown file. Planning
+approval and execution authorization are separate Human gates.
+
+`/plan:execute [plan-path]` starts or resumes one approved phase. Work reports
+leave bounded notes in that Plan; “implemented” does not prematurely mean “done”.
+`/plan:finalize T001` checks the entire phase before writing its completion markers
+together. Resume retains the original execution identity, repository binding and
+DocSync decision rather than silently starting a fresh comparison baseline.
+
+**Current delivery boundary:** the phase services and provider interfaces are
+present, but the production Git baseline engine, DocSync gate and Maintainer
+writer are not yet supplied. Missing providers fail closed; this is not a complete
+document-synchronization product. Planning remains available. Disabling DocSync
+cannot bypass a missing baseline or Task acceptance.
+
+[Read the Task Plan execution guide](extensions/task-plan/README.md)
 
 `/plan` switches the current main session to a dedicated planning preset before
 it queues plan drafting. By default the planning preset is
@@ -83,12 +103,14 @@ export PI_TASK_PLAN_RESTORE_MODE=previous
 ```
 
 Package consumers that import the extension directly can also pass a
-`TaskPlanModelSwitchConfig` object to the default task-plan extension factory.
+`TaskPlanExtensionConfig` object to the default task-plan extension factory. It
+extends the model-switch configuration with an optional `phase` provider adapter
+set; the default has no test doubles or automatically passing adapters.
 
 ## Installation
 
 Choose one source below. A version of this package that contains the current
-toolkit enables both extensions and the bundled `collaborating-agents-system`
+toolkit enables all three extensions and the bundled `collaborating-agents-system`
 skill with one installation.
 
 ### Option 1: npm
@@ -134,6 +156,7 @@ Confirm that the following are enabled:
 
 - `collaborating-agents`
 - `control-init`
+- `task-plan`
 - `collaborating-agents-system`
 
 If one of the extensions is absent, the selected source predates that
@@ -146,9 +169,12 @@ installing or updating the package so the extensions and skill are reloaded.
 
 1. Run `/control:init` or ask Pi in natural language to initialize the named
    repositories. Review the complete preview before approving any write.
-2. Explicitly assign approved work. Use `/subagent` or let an orchestrator use
+2. Use `/plan` when the work needs structured planning. Review the requirements,
+   Plan and Tasks, then separately authorize execution. Phase execution additionally
+   requires the provider capabilities described in the Task Plan guide.
+3. Explicitly assign approved work. Use `/subagent` or let an orchestrator use
    the `subagent` tool when delegation or context isolation is worthwhile.
-3. Use `/agents` to inspect active Agents, messages, and file reservations;
+4. Use `/agents` to inspect active Agents, messages, and file reservations;
    verify the result before accepting delivery.
 
 Control Init does not automatically spawn Agents or run product work. Those
