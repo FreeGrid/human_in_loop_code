@@ -14,7 +14,7 @@ After opening a V3 Plan, an explicitly configured host provides:
 | `plan_governed_run` | Run an allowed child process after explicit selection and authorization |
 | `/plan:governed verify` | Execute the configured verification methods |
 | `/plan:governed review` | Obtain independent review bound to current evidence |
-| `/plan:governed finalize` | Check readiness, request final confirmation, then project only the checkbox |
+| `/plan:governed finalize` | Check readiness, request final confirmation, then check the retained current subtasks and parent |
 | `/plan:governed status` | Inspect this optional flow |
 | `/plan:governed recover` | Confirm recovery of an interrupted operation without replacing later manual edits |
 
@@ -22,7 +22,7 @@ Human decisions require a confirmation UI. Confirmation shows the current brief/
 
 The trusted policy must test the user's current requirements rather than add deliverables. Exact quotations and complete subtask coverage provide structural checks; a reviewed policy and Human decision remain necessary to assess method meaning. Permission to write a path does not turn it into a requested deliverable. A new requirement belongs in the brief before a new contract is prepared.
 
-Verification failure, stale inputs, out-of-scope writes, invalid authority and missing review prevent governed completion. Finalize repeats readiness checks after confirmation, durably records acceptance and pending projection, then changes the parent checkbox while preserving all recorded subtasks and their individual checkboxes. No result summary is appended. Ordinary `[x]` never synthesizes verified evidence. An observed material definition change retires old evidence even if the text is later restored.
+Verification failure, stale inputs, out-of-scope writes, invalid authority and missing review prevent governed completion. Finalize repeats readiness checks after confirmation, durably records acceptance and pending projection, then checks all retained subtasks of the accepted task and finally its parent. Other tasks and their recorded children remain unchanged. No result summary is appended. Ordinary `[x]` never synthesizes verified evidence. An observed material definition change retires old evidence even if the text is later restored.
 
 The sandbox currently supports Darwin launched child processes, with allowed executables and protected runtime/Plan/key paths. It does not isolate the whole host. Cancellation terminates the child; partial permitted writes still require verification. Unsupported platforms/files/aliases and missing providers reject the governed action while ordinary work remains available. The raw scope inventory is deliberately conservative, including ignored files. Full authenticated-store rollback requires an external detection anchor; edits never observed by the kernel cannot be detected retrospectively.
 

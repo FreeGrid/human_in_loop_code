@@ -21,7 +21,20 @@ export interface ReadableRevision {
 
 const meaning = (text: string) => text.trim().replace(/\s+/gu, " ");
 const childMeaning = (task: ReadableTask) => JSON.stringify(task.subtasks.map(item => meaning(item.text)).sort());
+function childChecks(task: ReadableTask): string {
+  // Match the authoring adapter's text-plus-occurrence identity. Distinct labels
+  // may move without changing their status, but duplicate occurrences must not merge.
+  const checks = new Map<string, boolean[]>();
+  for (const item of task.subtasks) {
+    const text = meaning(item.text), occurrences = checks.get(text) ?? [];
+    occurrences.push(item.completed); checks.set(text, occurrences);
+  }
+  return JSON.stringify([...checks.keys()].sort().map(text => [text, checks.get(text)]));
+}
 const clone = <T>(value: T): T => structuredClone(value);
+function rollUpCompletion(task: ReadableTask): void {
+  if (task.subtasks.length) task.completed = task.subtasks.every(item => item.completed);
+}
 function assertCurrentRefinement(plan: ReadablePlan, previous: ReadableTask[] = [], supplied: ReadableTask[] = plan.tasks): void {
   const current = plan.tasks.find(task => !task.completed);
   for (const task of plan.tasks) {
@@ -114,6 +127,8 @@ export class ReadablePlanService {
       } else if (childrenChanged) {
         task.completed = false;
         for (const item of task.subtasks) if (!previous.subtasks.some(old => meaning(old.text) === meaning(item.text))) item.completed = false;
+      } else if (previous && childChecks(task) !== childChecks(previous)) {
+        rollUpCompletion(task);
       }
     }
     // Reopening an earlier task changes selection without removing recorded work.
@@ -124,7 +139,9 @@ export class ReadablePlanService {
   async refine(subtasks: ReadableSubtask[], taskId?: string, path?: string): Promise<ReadableSnapshot> {
     const before = await this.forEdit(path), next = clone(before.plan), current = currentReadableTask(next);
     if (!current || taskId !== undefined && current.id !== taskId) throw new Error("v3_refine_current_task_only");
+    const previous = clone(current);
     current.subtasks = clone(subtasks);
+    if (childMeaning(current) === childMeaning(previous) && childChecks(current) !== childChecks(previous)) rollUpCompletion(current);
     return this.save(before, next);
   }
 
@@ -136,6 +153,7 @@ export class ReadablePlanService {
     else {
       if (!Number.isSafeInteger(subtaskIndex) || subtaskIndex < 0 || !task.subtasks[subtaskIndex]) throw new Error("v3_unknown_subtask");
       task.subtasks[subtaskIndex]!.completed = completed;
+      rollUpCompletion(task);
     }
     return this.save(before, next);
   }

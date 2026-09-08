@@ -56,8 +56,8 @@ export interface V3RuntimeConfiguration {
 interface Envelope { version: 1; generation: number; previous_hash: string | null; state: V3RuntimeState; seal: string }
 export interface V3RuntimeSnapshot { generation: number; hash: string | null; state: V3RuntimeState | null }
 export const v3BytesHash = (text: string | Buffer): string => createHash("sha256").update(text).digest("hex");
-/** Recognize recorded historical pruning without using it for a new projection. */
-export function v3ProjectionKind(projection: V3Projection, contract: ReadableContract): "retained" | "legacy_pruned" {
+/** Preserve the exact meaning of historical projections while validating new completion. */
+export function v3ProjectionKind(projection: V3Projection, contract: ReadableContract): "completed" | "retained" | "legacy_pruned" {
   const source = parseReadablePlan(projection.source_text), candidate = parseReadablePlan(projection.candidate_text);
   const task = source.tasks.find(item => item.id === contract.node_id);
   if (!task || task.completed || source.plan_id !== contract.plan_id) v3Fail("invalid_projection_source");
@@ -66,7 +66,11 @@ export function v3ProjectionKind(projection: V3Projection, contract: ReadableCon
   const styled = (text: string): string => projection.source_text.includes("\r\n") && !/(?<!\r)\n/.test(projection.source_text) ? text.replace(/\n/g, "\r\n") : text;
   if (styled(renderReadablePlan(candidate)) !== projection.candidate_text) v3Fail("invalid_projection_candidate");
   task.completed = true;
-  if (styled(renderReadablePlan(source)) === projection.candidate_text) return "retained";
+  const retained = styled(renderReadablePlan(source));
+  for (const child of task.subtasks) child.completed = true;
+  if (styled(renderReadablePlan(source)) === projection.candidate_text) return "completed";
+  // Earlier retained projections checked only the parent; replay their recorded checks.
+  if (retained === projection.candidate_text) return "retained";
   // The old parser and renderer discarded children of every completed root.
   for (const completed of source.tasks.filter(item => item.completed)) completed.subtasks = [];
   if (!legacySource || styled(renderReadablePlan(source)) !== projection.candidate_text) v3Fail("invalid_projection_candidate");
