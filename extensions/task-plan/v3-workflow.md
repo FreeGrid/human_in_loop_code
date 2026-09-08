@@ -17,6 +17,8 @@ The ordinary tools are `plan_start`, `plan_get`, `plan_update`, `plan_refine`, `
 
 Preferred planning/execution model settings are optional. If that model is unavailable, the current model can still plan and work. The file never stores model settings.
 
-The host now defaults to V3. Existing integrations that explicitly configure legacy `creationOptions` or legacy `phase` dependencies continue on the V1/V2 path; `{ creationOptions: { format: "v3" } }` explicitly selects V3. The strict legacy lifecycle is not applied to ordinary readable completion. Optional governed execution is a separate integration and never inferred from a checkbox.
+The host defaults to V3. `plan_get` and `/plan:open` can also display the title and checklist of existing V1/V2 files without importing their old planning layers into ordinary context. These old files are read-only through the V3 tools; their bytes and execution records stay intact. Unsupported historical sketches are rejected without rewriting them. An explicit migration-preview request can supply a new current brief and checklist to `plan_migration_preview`. The preview writes no file, transfers no execution evidence and has no apply action.
+
+To keep using the original V1/V2 lifecycle, load `extensions/task-plan/legacy-index.ts` instead of the default entry. Existing named legacy APIs are exported there. Programmatic hosts may alternatively `await taskPlanExtension(pi, { legacy: true })`; explicitly configured legacy `creationOptions` or `phase` dependencies take the same awaitable path. `{ creationOptions: { format: "v3" } }` selects V3 even if legacy settings are present. Ordinary host work remains available; the strict legacy lifecycle is not applied to readable completion. Optional governed execution is separate and never inferred from a checkbox.
 
 See [the format specification](v3-format.md) for the complete file shape. The remaining historical task-plan documentation describes the legacy lifecycle.
