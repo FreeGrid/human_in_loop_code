@@ -237,8 +237,11 @@ Codex by this block. Start Codex in control, not the sibling code repository:
 the initializer does not install a second AGENTS file in product repositories.
 
 Existing workspaces are not silently rewritten on package update. In Pi, use
-`/control:update` and request regeneration of the managed AGENTS block, review
-the preview, then apply it. Existing human-owned content outside the markers
+`/control:update`, describe the request to regenerate the managed AGENTS block,
+choose **Advanced or combined structured update**, and keep the prefilled
+`name` value unchanged. Review the regenerated preview, then apply it. This
+refreshes the template without changing the workspace name or bindings.
+Existing human-owned content outside the markers
 is preserved; manually edited managed content still requires the existing
 explicit drift decision. Doctor may report a template difference until that
 update is applied. This does not prevent ordinary Codex file editing.
