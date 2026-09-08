@@ -118,7 +118,7 @@ export function renderAgentsManagedContent(index: ControlIndex): string {
     ? `### Paper isolation\n\nThis workspace binds ${latexCount} independent paper ${latexCount === 1 ? "repository" : "repositories"}. Each represents one paper and may refer to the code repository; code must not depend on a paper repository, and paper repositories must remain independent from one another.`
     : "";
 
-  return [baseline, "## Repository role rules", roles, paperNote, "## Operating rules", focus]
+  return [baseline, "## Repository role rules", roles, paperNote, "## Operating rules", loadAgentResource("readable-plan.md"), focus]
     .filter((section) => section.length > 0)
     .join("\n\n")
     .trim();

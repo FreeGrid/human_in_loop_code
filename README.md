@@ -209,6 +209,13 @@ installing or updating the package so the extensions and skill are reloaded.
 Control Init does not automatically spawn Agents or run product work. Those
 boundaries are intentional human gates.
 
+You can also open Codex in the initialized control repository. The generated
+`AGENTS.md` explains how to create, revise and continue the same readable Plan
+with ordinary Markdown editing, retain completed subtasks and update their
+checkboxes. No additional Skill or Plan tool is required. These are Agent
+instructions, not program-enforced guarantees; see the
+[Codex usage and existing-workspace update guide](extensions/control-init/README.md#use-the-same-plan-in-codex).
+
 ## Updating and removing
 
 Re-run `pi install` with the same source to update an installation. To remove
