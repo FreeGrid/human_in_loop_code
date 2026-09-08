@@ -238,7 +238,9 @@ export class V3Governed {
       if (await this.content(revision) !== content) v3Fail("finalize_inputs_changed"); await this.unchanged(source);
       revision.finalized = sealFinalizeEvidence(this.#config.signer, { plan_id: source.plan.plan_id, node_id: revision.contract.node_id, contract_hash: revision.contract.contract_hash, content_version: content, verification_refs: refs, review_ref, dependency_refs: dependencies, authorization_ref: authorization.receipt_hash, docsync_check: "skipped" });
       revision.finalize_authorization = authorization; revision.stage = "finalized";
-      const candidate = structuredClone(source.plan), task = candidate.tasks.find(item => item.id === revision.contract.node_id)!; task.completed = true;
+      const candidate = structuredClone(source.plan), task = candidate.tasks.find(item => item.id === revision.contract.node_id)!;
+      for (const child of task.subtasks) child.completed = true;
+      task.completed = true;
       const rendered = renderReadablePlan(candidate), candidate_text = source.text.includes("\r\n") && !/(?<!\r)\n/.test(source.text) ? rendered.replace(/\n/g, "\r\n") : rendered;
       state.projection = { revision_id: revision.revision_id, source_text: source.text, source_hash: source.document_hash, candidate_text, candidate_hash: v3BytesHash(candidate_text), status: "pending" };
       // Acceptance and exact projection intent are durable before a single readable byte changes.
