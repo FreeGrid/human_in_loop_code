@@ -79,7 +79,16 @@ original lifecycle remains available through `legacy-index.ts`.
 
 [Read the ordinary Task Plan guide](extensions/task-plan/README.md) ·
 [Optional governed execution](extensions/task-plan/v3-governed.md) ·
+[Lightweight documentation checks](extensions/task-plan/docsync/delivery.md) ·
 [Legacy execution and DocSync](extensions/task-plan/legacy-workflow.md)
+
+Documentation follows the same lightweight approach: update related explanations
+when user-visible behavior stabilizes and check once before delivery. Optional
+`docsync_check` locates explicit PR/commit and related local changes through small
+mappings and bounded references; a selected task watch shows advisory context
+before parent completion. It does not certify documents or require a Harness
+for ordinary editing. The portable JSON entry also works from Codex file/shell
+tools without changing Plan format.
 
 Planning, ordinary execution and review have separate global model presets. All
 three currently default to the locally registered Qwen model
