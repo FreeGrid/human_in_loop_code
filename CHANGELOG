@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retain recorded V3 subtasks and their checkboxes after completion, reopening and task selection; ordinary completion changes only the parent checkbox.
+
 - Default Task Plan to readable `pi-plan/v3`: current requirements, current-only rolling detail, concise edits and ordinary manual completion without runtime state.
 - Preserve V1/V2 through explicit `legacy-index.ts` selection and read-only views; migration remains preview-only. Named legacy APIs moved to that entry, and legacy configuration through the default entry is awaitable.
 - Add an optional governed host with bound Human confirmation, real scoped execution, verification/review/finalize, cancellation and inspected recovery behind the readable Plan.
