@@ -211,6 +211,38 @@ operations, merge, and release still require an explicit human decision.
 Multi-repository changes use separate commits and cross-reference the product
 and control SHAs plus honest verification results.
 
+## Use the same Plan in Codex
+
+Initialization includes a **Readable Plan and continuation (Pi / Codex)** section
+in the managed `AGENTS.md` block for every topology, including custom profiles.
+Open Codex in the initialized control repository so it can read those rules and
+the existing Plan. For example: “Read AGENTS.md and continue plans/001-km.md.”
+Thereafter “继续” can request the next pending work. `/control:init` and
+`/plan:next` remain Pi commands; Codex uses ordinary file editing and does not
+need an additional Skill, CLI, MCP server or Harness.
+
+The rules keep current requirements and a rolling checkbox tree in the same
+Markdown file. Added requirements update that file by default, even after all
+tasks are checked. Nearby tasks can gain detail while distant work stays
+coarse. Completed children remain visible; the Agent updates child checkboxes
+and then the parent when its work is complete. Human checkboxes remain valid,
+and ordinary completion does not claim verified or independently reviewed work.
+Delivery slices and execution evidence stay in separate control management
+documents; existing management and legacy Plans are not automatically converted.
+
+These are model-followed instructions, not deterministic state enforcement.
+The generated example documents `pi-plan/v3`; Codex does not need native
+recognition of that format. Pi's stage model settings are not transferred to
+Codex by this block. Start Codex in control, not the sibling code repository:
+the initializer does not install a second AGENTS file in product repositories.
+
+Existing workspaces are not silently rewritten on package update. In Pi, use
+`/control:update` and request regeneration of the managed AGENTS block, review
+the preview, then apply it. Existing human-owned content outside the markers
+is preserved; manually edited managed content still requires the existing
+explicit drift decision. Doctor may report a template difference until that
+update is applied. This does not prevent ordinary Codex file editing.
+
 ## Compatibility and removal
 
 Control-init was verified against
