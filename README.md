@@ -55,7 +55,9 @@ configurable specialist roles.
 
 Use `/plan` with a natural-language request to create a readable V3 file. The
 Planner consolidates the current requirements, asks at most one blocking question
-and adds new detail only to the current task. Simple requests may have one task. Changes
+and adds detail in place only when useful: current work is actionable, nearby work
+may have known subtasks, and distant work stays coarse. Simple requests may have
+one task without subtasks. Changes
 replace old wording in place; completed work keeps its subtasks, and child progress automatically completes the parent without
 results, summaries or execution records.
 

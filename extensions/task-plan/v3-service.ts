@@ -35,17 +35,6 @@ const clone = <T>(value: T): T => structuredClone(value);
 function rollUpCompletion(task: ReadableTask): void {
   if (task.subtasks.length) task.completed = task.subtasks.every(item => item.completed);
 }
-function assertCurrentRefinement(plan: ReadablePlan, previous: ReadableTask[] = [], supplied: ReadableTask[] = plan.tasks): void {
-  const current = plan.tasks.find(task => !task.completed);
-  for (const task of plan.tasks) {
-    const proposed = supplied.find(item => item.id === task.id);
-    const old = previous.find(item => item.id === task.id);
-    if (task !== current && proposed?.subtasks.length && JSON.stringify(proposed.subtasks.map(item => item.text)) !== JSON.stringify((old?.subtasks ?? []).map(item => item.text))) {
-      throw new Error("v3_refine_current_task_only: only the first open task may receive new subtasks");
-    }
-  }
-}
-
 /** Ordinary planning has no dependency on execution, policy, receipts or a runtime store. */
 export class ReadablePlanService {
   constructor(private readonly root: string, private readonly state: ReadableSessionState = {}) {}
@@ -57,7 +46,6 @@ export class ReadablePlanService {
     const plan: ReadablePlan = { format: "pi-plan/v3", plan_id: "P001", title: heading, brief: normalized,
       tasks: tasks ?? [{ id: "T001", text: "完成当前需求", completed: false, subtasks: [] }] };
     renderReadablePlan(plan);
-    assertCurrentRefinement(plan);
     return this.remember(await createReadablePlan(this.root, plan));
   }
 
@@ -109,11 +97,7 @@ export class ReadablePlanService {
     if (revision.title !== undefined) next.title = revision.title.trim();
     if (revision.brief !== undefined) next.brief = revision.brief.trim();
     if (revision.tasks !== undefined) next.tasks = clone(revision.tasks);
-    // Reject newly supplied future detail rather than silently discarding proposed work.
     renderReadablePlan(next);
-    // Completed candidates may reopen below; validate their final selection after
-    // applying definition changes. An added completed node never bypasses that check.
-    assertCurrentRefinement(next, before.plan.tasks, (revision.tasks ?? []).filter(task => !task.completed));
     if (revision.affected_task_ids !== undefined && (new Set(revision.affected_task_ids).size !== revision.affected_task_ids.length || revision.affected_task_ids.some(id => !next.tasks.some(task => task.id === id)))) throw new Error("v3_unknown_affected_task");
     const briefChanged = meaning(next.brief) !== meaning(before.plan.brief);
     for (const task of next.tasks) {
@@ -131,17 +115,19 @@ export class ReadablePlanService {
         rollUpCompletion(task);
       }
     }
-    // Reopening an earlier task changes selection without removing recorded work.
-    assertCurrentRefinement(next, before.plan.tasks, revision.tasks ?? []);
     return this.save(before, next);
   }
 
   async refine(subtasks: ReadableSubtask[], taskId?: string, path?: string): Promise<ReadableSnapshot> {
-    const before = await this.forEdit(path), next = clone(before.plan), current = currentReadableTask(next);
-    if (!current || taskId !== undefined && current.id !== taskId) throw new Error("v3_refine_current_task_only");
-    const previous = clone(current);
-    current.subtasks = clone(subtasks);
-    if (childMeaning(current) === childMeaning(previous) && childChecks(current) !== childChecks(previous)) rollUpCompletion(current);
+    const before = await this.forEdit(path), next = clone(before.plan);
+    const target = taskId === undefined ? currentReadableTask(next) : next.tasks.find(task => task.id === taskId);
+    if (!target) throw new Error(taskId === undefined ? "v3_no_current_task" : "v3_unknown_task");
+    if (target.completed) throw new Error("v3_refine_completed_task: reopen the task or revise its definition first");
+    const previous = clone(target);
+    target.subtasks = clone(subtasks);
+    if (childMeaning(target) !== childMeaning(previous)) {
+      for (const child of target.subtasks) if (!previous.subtasks.some(old => meaning(old.text) === meaning(child.text))) child.completed = false;
+    } else if (childChecks(target) !== childChecks(previous)) rollUpCompletion(target);
     return this.save(before, next);
   }
 
