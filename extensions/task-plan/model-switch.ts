@@ -8,15 +8,18 @@ export interface TaskPlanModelPreset {
   thinkingLevel?: TaskPlanThinkingLevel;
 }
 
+export type TaskPlanModelMode = "planning" | "normal" | "review";
+
 export interface TaskPlanModelSwitchConfig {
   enabled?: boolean;
   planning?: TaskPlanModelPreset;
   normal?: TaskPlanModelPreset;
+  review?: TaskPlanModelPreset;
   restoreMode?: "configured" | "previous";
 }
 
 export interface TaskPlanModelSwitchState {
-  activeMode?: "planning" | "normal";
+  activeMode?: TaskPlanModelMode;
   modelBeforePlan?: { provider: string; id: string; thinkingLevel?: TaskPlanThinkingLevel };
 }
 
@@ -24,6 +27,7 @@ export const DEFAULT_TASK_PLAN_MODEL_CONFIG: Required<TaskPlanModelSwitchConfig>
   enabled: true,
   planning: { provider: "openai-codex", model: "gpt-6-astra", thinkingLevel: "xhigh" },
   normal: { provider: "openai-codex", model: "gpt-6-astra", thinkingLevel: "medium" },
+  review: { provider: "openai-codex", model: "gpt-6-astra", thinkingLevel: "xhigh" },
   restoreMode: "configured",
 };
 
@@ -33,14 +37,19 @@ export function taskPlanModelConfigFromEnv(env: NodeJS.ProcessEnv = process.env)
   return normalizeTaskPlanModelConfig({
     enabled: env.PI_TASK_PLAN_MODEL_SWITCH === "0" || env.PI_TASK_PLAN_MODEL_SWITCH === "false" ? false : undefined,
     planning: {
-      provider: env.PI_TASK_PLAN_MODEL_PROVIDER ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.planning.provider,
-      model: env.PI_TASK_PLAN_MODEL_ID ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.planning.model,
-      thinkingLevel: parseThinking(env.PI_TASK_PLAN_THINKING) ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.planning.thinkingLevel,
+      provider: env.PI_TASK_PLAN_PLANNING_MODEL_PROVIDER ?? env.PI_TASK_PLAN_MODEL_PROVIDER ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.planning.provider,
+      model: env.PI_TASK_PLAN_PLANNING_MODEL_ID ?? env.PI_TASK_PLAN_MODEL_ID ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.planning.model,
+      thinkingLevel: parseThinking(env.PI_TASK_PLAN_PLANNING_THINKING) ?? parseThinking(env.PI_TASK_PLAN_THINKING) ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.planning.thinkingLevel,
     },
     normal: {
       provider: env.PI_TASK_PLAN_NORMAL_MODEL_PROVIDER ?? env.PI_TASK_PLAN_MODEL_PROVIDER ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.normal.provider,
       model: env.PI_TASK_PLAN_NORMAL_MODEL_ID ?? env.PI_TASK_PLAN_MODEL_ID ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.normal.model,
       thinkingLevel: parseThinking(env.PI_TASK_PLAN_NORMAL_THINKING) ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.normal.thinkingLevel,
+    },
+    review: {
+      provider: env.PI_TASK_PLAN_REVIEW_MODEL_PROVIDER ?? env.PI_TASK_PLAN_MODEL_PROVIDER ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.review.provider,
+      model: env.PI_TASK_PLAN_REVIEW_MODEL_ID ?? env.PI_TASK_PLAN_MODEL_ID ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.review.model,
+      thinkingLevel: parseThinking(env.PI_TASK_PLAN_REVIEW_THINKING) ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.review.thinkingLevel,
     },
     restoreMode: env.PI_TASK_PLAN_RESTORE_MODE === "previous" ? "previous" : DEFAULT_TASK_PLAN_MODEL_CONFIG.restoreMode,
   });
@@ -51,16 +60,17 @@ export function normalizeTaskPlanModelConfig(config: TaskPlanModelSwitchConfig =
     enabled: config.enabled ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.enabled,
     planning: { ...DEFAULT_TASK_PLAN_MODEL_CONFIG.planning, ...config.planning },
     normal: { ...DEFAULT_TASK_PLAN_MODEL_CONFIG.normal, ...config.normal },
+    review: { ...DEFAULT_TASK_PLAN_MODEL_CONFIG.review, ...config.review },
     restoreMode: config.restoreMode ?? DEFAULT_TASK_PLAN_MODEL_CONFIG.restoreMode,
   };
 }
 
-export async function switchTaskPlanModel(pi: ExtensionAPI, ctx: ModelSwitchContext, state: TaskPlanModelSwitchState, config: Required<TaskPlanModelSwitchConfig>, mode: "planning" | "normal"): Promise<boolean> {
+export async function switchTaskPlanModel(pi: ExtensionAPI, ctx: ModelSwitchContext, state: TaskPlanModelSwitchState, config: Required<TaskPlanModelSwitchConfig>, mode: TaskPlanModelMode): Promise<boolean> {
   if (!config.enabled) return true;
-  if (mode === "planning") {
+  if (mode !== "normal") {
     if (!state.modelBeforePlan && ctx.model) state.modelBeforePlan = { provider: ctx.model.provider, id: ctx.model.id, thinkingLevel: pi.getThinkingLevel() as TaskPlanThinkingLevel };
-    const ok = await applyPreset(pi, ctx, config.planning, "planning");
-    if (ok) state.activeMode = "planning";
+    const ok = await applyPreset(pi, ctx, config[mode], mode);
+    if (ok) state.activeMode = mode;
     return ok;
   }
   const target = config.restoreMode === "previous" && state.modelBeforePlan

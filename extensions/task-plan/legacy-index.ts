@@ -53,6 +53,7 @@ export default function taskPlanExtension(pi: ExtensionAPI, config: TaskPlanExte
     ...config,
     planning: { ...envConfig.planning, ...config.planning },
     normal: { ...envConfig.normal, ...config.normal },
+    review: { ...envConfig.review, ...config.review },
   });
   const state: TaskPlanSessionState = { modelSwitch: {}, creationOptions:config.creationOptions, phaseDependencies: { baseline: new GitBaselineProvider({planIdentityResolver:async(context,text)=>({policy:"node-v1",identity:nodeContractHash(parsePlanCandidate(context.plan_path,text),context.phase_id,config.phase?.evidence)})}), ...config.phase } };
   registerTaskPlanTools(pi, state);
