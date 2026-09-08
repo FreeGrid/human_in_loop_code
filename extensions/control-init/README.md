@@ -68,6 +68,10 @@ authorization; any similar-directory choices are listed explicitly.
 
 After interactive initialization succeeds, Pi continues the current history in
 a session whose real working directory is the initialized control repository.
+This also works when `/control:init` is the first command in a fresh Pi session,
+before Pi has written its session file. The continuation preserves the selected
+conversation branch, including entries still buffered in memory, and leaves the
+original session untouched. `/control:enter` uses the same continuation path.
 This reloads Pi's general file and shell tools, project instructions, system
 prompt, and footer against the correct repository instead of merely redirecting
 control-init commands. If session persistence is disabled, the wizard cannot
@@ -82,6 +86,19 @@ An explicit path always takes precedence. In a later Pi session, start Pi inside
 the control repository or pass its exact path; when no index exists at the
 resolved location, status asks for that path instead of incorrectly asking you
 to initialize again.
+
+After restarting Pi or when initialization succeeded but Pi stayed in the old
+directory, enter the already initialized workspace with:
+
+```text
+/control:enter /exact/path/to/name_control
+```
+
+Replace the example with your control repository's full path. Do not rerun
+`/control:init` just to enter it. In the same session that initialized the
+workspace, `/control:enter` alone uses the remembered path; after restarting,
+provide the full path. With `--no-session`, start Pi from the control directory
+using the displayed `cd ... && pi` command instead.
 
 Before asking about exceptions, the wizard displays the selected profile's
 default ownership, privacy, dependency, approval, delivery, and delegation
