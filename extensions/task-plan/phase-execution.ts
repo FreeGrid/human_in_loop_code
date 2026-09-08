@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { inspectExecutionNotes, upsertExecutionNote, validateExecutionNote, type ExecutionNote } from "./execution-notes.ts";
 import { readHumanDecision, type HumanDecisionToken, type PhaseDependencies, type PhaseRecord } from "./phase-contracts.ts";
 import { inspectPhaseRecords, upsertPhaseRecord, validatePhaseRecord } from "./phase-record.ts";
-import { acquirePhaseFinalizeLock, canonicalSectionHash, canonicalTasksDefinitionHash, readPlanDocument, replaceFrontmatter, phaseExecutionDefinitionHash, writeIfDocumentHash } from "./plan-file.ts";
+import { acquirePhaseFinalizeLock, canonicalSectionHash, canonicalTasksDefinitionHash, executionDefinitionHash, readPlanDocument, replaceFrontmatter, writeIfDocumentHash } from "./plan-file.ts";
 import { replaceSection } from "./sections.ts";
 import { parseTasks } from "./tasks.ts";
 import type { PlanDocument, TaskBlock } from "./types.ts";
@@ -42,7 +42,7 @@ export class PhaseExecutionService {
       await this.roots(context);
       const provider = this.dependencies.baseline ?? fail("capability_unavailable: BaselineProvider is not configured");
       const baseline = await provider.capture({ ...context });
-      record = { version: 1, context, definition_hash: this.contract(d), baseline, authorization, docsync: { enabled: true }, acceptance: [] };
+      record = { version: 1, context, definition_hash: this.contract(d, task.id), baseline, authorization, docsync: { enabled: true }, acceptance: [] };
       if (!validatePhaseRecord(record)) fail("baseline_invalid: provider returned an invalid baseline reference");
       await this.verify(d, task, record);
       return this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `Started ${task.id}, execute ${context.execute_id}; DocSync on. ${SWITCH_HELP}`, record);
@@ -197,8 +197,8 @@ export class PhaseExecutionService {
     return { task: task!, records };
   }
 
-  private contract(d: PlanDocument): string {
-    return phaseExecutionDefinitionHash(d);
+private contract(d: PlanDocument, nodeId: string): string {
+    return executionDefinitionHash(d, nodeId);
   }
 
   private async roots(c: PhaseRecord["context"]): Promise<void> {
@@ -214,7 +214,7 @@ export class PhaseExecutionService {
   private async verify(d: PlanDocument, task: TaskBlock, record: PhaseRecord): Promise<string> {
     if (!validatePhaseRecord(record)) fail("invalid_phase_record");
     if (record.finalized) fail("already_finalized");
-    if (record.definition_hash !== this.contract(d) || record.context.phase_id !== task.id || record.context.round !== d.metadata.round || record.context.plan_path !== await realpath(d.path)) fail("stale_execution_contract: original phase binding changed");
+    if (record.definition_hash !== this.contract(d, task.id) || record.context.phase_id !== task.id || record.context.round !== d.metadata.round || record.context.plan_path !== await realpath(d.path)) fail("stale_execution_contract: original phase binding changed");
     if (record.acceptance.some(a => !task.acceptance.some(item => item.id === a.id))) fail("unknown_acceptance_record");
     await this.roots(record.context);
     const provider = this.dependencies.baseline ?? fail("capability_unavailable: BaselineProvider is not configured");

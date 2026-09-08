@@ -13,6 +13,7 @@ import { inspectPhaseRecords, upsertPhaseRecord } from "./phase-record.ts";
 import { inspectExecutionNotes, upsertExecutionNote, type ExecutionNote } from "./execution-notes.ts";
 import type { PhaseDependencies, HumanDecisionToken } from "./phase-contracts.ts";
 import { phaseSwitchHelp } from "./phase-input.ts";
+import { readPlanNodes, validatePlanNodeMapping } from "./nodes.ts";
 
 export interface TaskBinding {
   task_id: string;
@@ -156,6 +157,11 @@ export class TaskPlanService {
     return { ...ok("ok", `Bound ${task.id}`, loaded), snapshot: { binding } };
   }
 
+  /** Start a phase and bind its first/current task as one operation. */
+  async startAndBind(params: { expected_document_hash: string; task_id?: string; target_root?: string; governance_root?: string; planPath?: string }): Promise<PlanOperationResult> {
+    return this.executePhase(params);
+  }
+
   async executePhase(params: { expected_document_hash: string; task_id?: string; target_root?: string; governance_root?: string; planPath?: string }): Promise<PlanOperationResult> {
     const decision = this.sessionState.humanDecision;
     delete this.sessionState.humanDecision;
@@ -220,6 +226,17 @@ export class TaskPlanService {
       return { ...result, snapshot: snapshot(next, binding) };
     }
     return result;
+  }
+
+  async reportTaskResults(params: { task_id: string; reports: Array<Omit<Parameters<TaskPlanService["reportTaskResult"]>[0], "task_id">> }): Promise<PlanOperationResult> {
+    const results: PlanOperationResult[] = [];
+    for (const report of params.reports) {
+      const result = await this.reportTaskResult({ ...report, task_id: params.task_id });
+      results.push(result);
+      if (result.status !== "applied" && result.status !== "ok") return { ...result, message: `Batch report stopped after ${results.length} item(s)` };
+    }
+    const last = results[results.length - 1];
+    return last ? { ...last, message: `Batch reported ${results.length} item(s)` } : validation("At least one report is required", []);
   }
 
   async setTaskStatus(params: { expected_document_hash: string; task_id: string; status: "open" | "completed"; planPath?: string }): Promise<PlanOperationResult> {
@@ -352,7 +369,23 @@ function upsertReview(existing: string, round: number, summary: string): string 
 
 function hasFutureHorizon(plan: string): boolean { return /^### T(?:00[2-9]|0[1-9]\d|[1-9]\d{2}) — /m.test(plan); }
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
-function snapshot(document: PlanDocument, binding?: TaskBinding) { return { path: document.path, document_hash: document.document_hash, metadata: document.metadata, sections: document.sections, binding }; }
+function snapshot(document: PlanDocument, binding?: TaskBinding) {
+  return {
+    path: document.path,
+    document_hash: document.document_hash,
+    metadata: document.metadata,
+    sections: document.sections,
+    nodes: readPlanNodes(document.sections.plan, document.sections.tasks),
+    node_mapping_issues: validatePlanNodeMapping(document.sections.plan, document.sections.tasks, { currentNodeId: currentNodeId(document) }),
+    binding,
+  };
+}
+function currentNodeId(document: PlanDocument): string | undefined {
+  if (["executing", "awaiting_round_decision", "awaiting_execution_approval"].includes(document.metadata.stage)) {
+    return currentRoundTasks(document.sections.tasks, document.metadata.round)[0]?.id;
+  }
+  return document.sections.plan.match(/^### (T\\d{3}) — /m)?.[1];
+}
 function ok(status: PlanOperationResult["status"], message: string, document: PlanDocument): PlanOperationResult { return { status, message, path: document.path, document_hash: document.document_hash }; }
 function conflict(message: string): PlanOperationResult { return { status: "conflict", message, conflicts: [{ message }] }; }
 function validation(message: string, issues: ValidationIssue[]): PlanOperationResult { return { status: "validation_error", message, issues }; }

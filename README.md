@@ -64,11 +64,22 @@ leave bounded notes in that Plan; “implemented” does not prematurely mean �
 together. Resume retains the original execution identity, repository binding and
 DocSync decision rather than silently starting a fresh comparison baseline.
 
-**Current delivery boundary:** the phase services and provider interfaces are
-present, but the production Git baseline engine, DocSync gate and Maintainer
-writer are not yet supplied. Missing providers fail closed; this is not a complete
-document-synchronization product. Planning remains available. Disabling DocSync
-cannot bypass a missing baseline or Task acceptance.
+Documentation impact now starts from **what actually changed**, not just an Agent's
+summary. The default Git provider preserves the phase's original dirty/untracked
+state across stage, commit and Session changes. A standalone dependency map turns
+final content changes into document obligations; uncovered code and user-visible
+changes also prompt a distinct README narrative question, even when README was
+already edited. This connects execution evidence back to the explanation users need.
+
+**Current delivery boundary:** real Git baselines and deterministic candidates are
+available; the DocSync decision/debt gate and Maintainer writer are not yet supplied.
+Candidates remain pending, never proof of synchronization. DocSync on therefore
+still blocks finalization without a gate; an explicit Human off records skipped
+while retaining baseline and Task acceptance checks. Missing or malformed dependency
+policy does not prevent a trusted baseline or Human off, but candidate construction
+reports the policy error rather than returning an empty success.
+
+[Configure dependencies and inspect candidate facts](extensions/task-plan/docsync/README.md)
 
 [Read the Task Plan execution guide](extensions/task-plan/README.md)
 
