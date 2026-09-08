@@ -113,8 +113,8 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     async execute(_id, params, signal, _update, ctx) { if (signal?.aborted) throw new Error("plan_select aborted"); try { await editable(ctx.cwd, params.path); const svc = service(ctx.cwd), before = await svc.previewEdit(params.path); return changed(before, await svc.select(params.task_id, params.path)); } catch (error) { return failure(error); } } });
   pi.registerTool({ name: "plan_status", label: "当前进度", description: "Show the short checklist and next task without execution records.", parameters: Type.Object({ path: pathField }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, _signal, _update, ctx) { try { const old = await legacy(ctx.cwd, params.path); if (old) return response(legacyViewText(old)); const snapshot = await service(ctx.cwd).peek(params.path); return response(checklist(snapshot)); } catch (error) { return failure(error); } } });
-  pi.registerTool({ name: "plan_continue", label: "继续普通工作", description: "Select ordinary work on the current task. Requires no hidden runtime and grants no additional host permissions. Use normal work tools for an implementation request.", parameters: Type.Object({ path: pathField }, { additionalProperties: false }), executionMode: "sequential",
-    async execute(_id, params, _signal, _update, ctx) { try { const old = await legacy(ctx.cwd, params.path); if (old) return response(legacyViewText(old)); const snapshot = await service(ctx.cwd).peek(params.path); state.currentPlanPath = snapshot.path; await switchModel(ctx, "normal"); remember(); const current = currentReadableTask(snapshot.plan); return response(current ? `当前任务：${current.id} ${current.text}\n按用户已经授权的范围使用普通工作工具。任务完成后更新 checklist。` : "所有任务已勾选完成。"); } catch (error) { return failure(error); } } });
+  pi.registerTool({ name: "plan_continue", label: "继续普通工作", description: "When the user requests execution of a ready Plan (including contextual 继续), read its requirements and current work, then use ordinary work tools in the same turn. Not for continuing clarification or planning. No additional permissions or hidden runtime are granted.", parameters: Type.Object({ path: pathField }, { additionalProperties: false }), executionMode: "sequential",
+    async execute(_id, params, _signal, _update, ctx) { try { const old = await legacy(ctx.cwd, params.path); if (old) return response(legacyViewText(old)); const snapshot = await service(ctx.cwd).get(params.path); if (currentReadableTask(snapshot.plan)) await switchModel(ctx, "normal"); remember(); return response(continuationContext(snapshot)); } catch (error) { return failure(error); } } });
 
   pi.registerTool({ name: "plan_migration_preview", label: "预览旧 Plan 整理", description: "Only after an explicit migration-preview request: show a supplied current V3 proposal. Does not infer requirements from old layers, write a file or transfer execution evidence. There is no migration apply.",
     parameters: Type.Object({ path: Type.String(), plan_id: Type.String({ pattern: "^P[0-9]{3,}$" }), title: Type.String(), brief: Type.String(), tasks: Type.Array(task, { minItems: 1 }) }, { additionalProperties: false }), executionMode: "sequential",
@@ -150,7 +150,7 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
   pi.registerCommand("plan:open", { description: "打开已有 Plan 文件", async handler(args, ctx) { try { const old = await legacy(ctx.cwd, args.trim() || undefined, true); if (old) { remember(); return ctx.ui.notify(legacyViewText(old), "info"); } const snapshot = await service(ctx.cwd).get(args.trim() || undefined); remember(); ctx.ui.notify(renderReadablePlan(snapshot.plan), "info"); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
   pi.registerCommand("plan:status", { description: "查看短 checklist", async handler(args, ctx) { try { const old = await legacy(ctx.cwd, args.trim() || undefined); ctx.ui.notify(old ? legacyViewText(old) : checklist(await service(ctx.cwd).peek(args.trim() || undefined)), "info"); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
   pi.registerCommand("plan:task", { description: "勾选或重新打开任务：T001 done|open", async handler(args, ctx) { const match = args.trim().match(/^(T\d{3,})\s+(done|open|完成|重开)$/iu); if (!match) return ctx.ui.notify("用 /plan:task T001 done 或 /plan:task T001 open。", "info"); try { await editable(ctx.cwd); const snapshot = await service(ctx.cwd).setStatus(match[1]!.toUpperCase(), /^(done|完成)$/iu.test(match[2]!)); remember(); ctx.ui.notify(checklist(snapshot), "info"); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
-  pi.registerCommand("plan:next", { description: "继续当前任务的普通工作", async handler(args, ctx) { try { const old = await legacy(ctx.cwd, args.trim() || undefined); if (old) return ctx.ui.notify(legacyViewText(old), "info"); const snapshot = await service(ctx.cwd).peek(args.trim() || undefined); state.currentPlanPath = snapshot.path; const current = currentReadableTask(snapshot.plan); if (!current) return ctx.ui.notify("所有任务已勾选完成。", "info"); await switchModel(ctx, "normal"); remember(); queue(`继续当前 Plan 的普通工作：${current.id} ${current.text}。需要时先原位细分当前任务；使用普通工作工具，完成后更新 checklist。`); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
+  pi.registerCommand("plan:next", { description: "继续当前任务的普通工作", async handler(args, ctx) { try { const old = await legacy(ctx.cwd, args.trim() || undefined); if (old) return ctx.ui.notify(legacyViewText(old), "info"); const snapshot = await service(ctx.cwd).get(args.trim() || undefined); remember(); if (!currentReadableTask(snapshot.plan)) return ctx.ui.notify("所有任务已勾选完成。", "info"); await switchModel(ctx, "normal"); remember(); queue(continuationContext(snapshot)); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
 
   pi.on("session_start", async (_event, ctx) => {
     governedGeneration++; governedHost?.clear();
@@ -163,11 +163,24 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     const systemPrompt = `${event.systemPrompt}\n\n${READABLE_PLAN_SYSTEM}`;
     if (!state.currentPlanPath) return { systemPrompt };
     try { const old = await legacy(ctx.cwd); if (old) return { systemPrompt, message: { customType: "pi-plan-legacy-view", display: false, content: legacyViewText(old) + "\n此视图没有选择旧文档中互相冲突的需求；当前需求需明确整理，不能自动迁移或改写原文件。" } }; const snapshot = await service(ctx.cwd).get(); return { systemPrompt, message: { customType: "pi-plan-readable-context", display: false, content: renderReadablePlan(snapshot.plan) } }; }
-    catch { return { systemPrompt }; } // Missing optional selection is not a host-wide blocker.
+    catch (error) { return { systemPrompt, message: { customType: "pi-plan-readable-context-error", display: false, content: `当前选中的 Plan 未能读取：${state.currentPlanPath}\n${error instanceof Error ? error.message : String(error)}\n若用户要求继续此 Plan，先恢复读取或确认文件路径，不要猜测当前任务。其他普通工作仍可继续。` } }; }
   });
   return state;
 }
 
 function checklist(snapshot: ReadableSnapshot): string {
   return snapshot.plan.tasks.map(task => `- [${task.completed ? "x" : " "}] ${task.id} ${task.text}`).join("\n");
+}
+
+/** Full readable source plus a deterministic cursor; no hidden execution state. */
+function continuationContext(snapshot: ReadableSnapshot): string {
+  const current = currentReadableTask(snapshot.plan);
+  if (!current) return "所有任务已勾选完成。";
+  const childIndex = current.subtasks.findIndex(child => !child.completed);
+  const next = childIndex >= 0
+    ? `从当前任务的第 ${childIndex + 1} 个子任务开始（首个未完成项）（subtask=${childIndex + 1}，位置从 1 起算）。`
+    : current.subtasks.length
+      ? "当前大任务尚未勾选，已有子任务均已勾选；先核对实际工作与当前需求，再决定补充工作或更新大任务，勿自动宣称完成。"
+      : "当前任务尚未展开；需要时先原位细分，也可以直接完成简单任务。";
+  return `文件：${snapshot.path}\n\n${renderReadablePlan(snapshot.plan)}\n当前任务：${current.id}\n${next}\n现在按用户已授权的范围检查仓库并使用普通工作工具开始工作，不要停在确认或进度说明。每完成一个子任务立即更新其状态；失败或未完成的工作保持未勾选。此入口不增加权限，也不代替已选择的受控验证流程。`;
 }
