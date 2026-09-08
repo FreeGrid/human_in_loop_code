@@ -68,6 +68,10 @@ authorization; any similar-directory choices are listed explicitly.
 
 After interactive initialization succeeds, Pi continues the current history in
 a session whose real working directory is the initialized control repository.
+This also works when `/control:init` is the first command in a fresh Pi session,
+before Pi has written its session file. The continuation preserves the selected
+conversation branch, including entries still buffered in memory, and leaves the
+original session untouched. `/control:enter` uses the same continuation path.
 This reloads Pi's general file and shell tools, project instructions, system
 prompt, and footer against the correct repository instead of merely redirecting
 control-init commands. If session persistence is disabled, the wizard cannot
