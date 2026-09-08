@@ -79,4 +79,31 @@ matching/                     ← 只是容纳项目的普通目录
 
 三个扩展可以独立使用。你可以先从仓库分离和普通 Plan 开始，等出现真实的协调或验证需求，再加入相应机制。
 
+下面是工具包本身的文档位置，与前面示例中的研究工作空间不同。新手先读首页和入门教程，其余按需要查阅，不必一次读完。
+
+```text
+human_in_loop_code/
+├── README.md                         中文故事首页
+├── docs/
+│   ├── README.md                     文档导航
+│   ├── getting-started.md            新手入门
+│   ├── models.md                     模型与 vLLM 配置
+│   ├── harness.md                    Harness 的意义与保证范围
+│   └── troubleshooting.md            常见问题
+└── extensions/
+    ├── control-init/
+    │   └── README.md                 仓库分离与多论文管理
+    ├── collaborating-agents/
+    │   └── README.md                 多 Agent 协作
+    └── task-plan/
+        ├── README.md                 Plan 故事与 KM 示例
+        ├── v3-workflow.md             命令和日常流程
+        ├── v3-format.md               Plan 文件格式
+        ├── v3-governed.md             受治理执行
+        ├── v3-kernel.md               内核集成参考
+        └── docsync/
+            ├── delivery.md           文档检索与交付检查
+            └── README.md             旧机制参考与入口说明
+```
+
 本项目沿用了上游 `pi-collaborating-agents` 的包名和协作能力；获取本文所述的完整工具包，请安装 [FreeGrid/human_in_loop_code](https://github.com/FreeGrid/human_in_loop_code) 的 Git 来源或本地检出。npm 和原始上游的发布进度可能不同。版本变化见 [CHANGELOG](CHANGELOG)，许可证为 [MIT](LICENSE)。
