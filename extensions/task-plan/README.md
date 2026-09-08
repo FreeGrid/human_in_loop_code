@@ -2,7 +2,7 @@
 
 A Plan keeps the current requirements and a rolling checklist in one readable file. It replaces superseded wording instead of accumulating analysis, strategy, review or execution records.
 
-Use `/plan` with a natural-language request. The Planner asks at most one currently blocking question, states nonblocking defaults and creates a few tasks. One task is enough for simple work. Only the current task receives new detail; completed tasks retain their subtasks and checkboxes. During ordinary execution, the Agent records each finished subtask and the parent is checked automatically after the last one.
+Use `/plan` with a natural-language request. The Planner asks at most one currently blocking question, states nonblocking defaults and creates a few tasks. One task is enough for simple work. Current work should be actionable; nearby unfinished tasks may receive known detail when useful, while distant work stays coarse. A clear task can remain one line, even when current. There is no required number of expanded tasks or subtasks; completed tasks retain their subtasks and checkboxes. During ordinary execution, the Agent records each finished subtask and the parent is checked automatically after the last one.
 
 ```markdown
 ---
