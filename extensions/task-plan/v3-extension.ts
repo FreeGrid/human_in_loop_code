@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
+import { registerDeliveryChecks } from "./docsync/delivery-host.ts";
 import type { V3GovernedFactory, V3GovernedHost } from "./v3-governed-host.ts";
 import { resolve } from "node:path";
 import { readPlanSource, readLegacyPlanView, legacyViewText, previewReadableMigration } from "./v3-compat.ts";
@@ -35,6 +36,7 @@ function normalizeTasks(items: Array<{ id: string; text: string; completed?: boo
 /** Separate registration means ordinary tools never invoke legacy state transitions. */
 export function registerReadablePlanExtension(pi: ExtensionAPI, options: ReadableExtensionOptions): ReadableHostState {
   const state: ReadableHostState = { modelSwitch: {} };
+  const deliveryChecks = registerDeliveryChecks(pi);
   let governedHost: V3GovernedHost | undefined;
   let governedGeneration = 0;
   const governedFactory = options.governed;
@@ -44,7 +46,13 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     if (generation !== governedGeneration) throw new Error("governed_session_changed");
     return governedHost;
   };
-  const service = (cwd: string) => new ReadablePlanService(cwd, state);
+  const service = (cwd: string) => new ReadablePlanService(cwd, state, async (before, next) => {
+    for (const task of next.tasks) {
+      if (!task.completed || before.plan.tasks.find(old => old.id === task.id)?.completed !== false) continue;
+      const content = await deliveryChecks.beforeCompletion(before.path, task.id);
+      if (content) pi.sendMessage({ customType: "pi-docsync-delivery", display: true, content });
+    }
+  });
   const switchModel = async (ctx: ExtensionContext, mode: TaskPlanModelMode) => {
     try { return await switchTaskPlanModel(pi, ctx, state.modelSwitch, options.modelConfig, mode); }
     catch {
@@ -186,6 +194,7 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
   pi.registerCommand("plan:next", { description: "继续当前任务的普通工作", async handler(args, ctx) { try { const old = await legacy(ctx.cwd, args.trim() || undefined); if (old) return ctx.ui.notify(legacyViewText(old), "info"); const snapshot = await service(ctx.cwd).peek(args.trim() || undefined); state.currentPlanPath = snapshot.path; remember(); if (!currentReadableTask(snapshot.plan)) return ctx.ui.notify("所有任务已勾选完成。", "info"); await switchModel(ctx, "normal"); remember(); queue(continuationContext(snapshot)); } catch (error) { ctx.ui.notify(String((error as Error).message), "error"); } } });
 
   pi.on("session_start", async (_event, ctx) => {
+    deliveryChecks.clear();
     governedGeneration++; governedHost?.clear();
     const entry = [...ctx.sessionManager.getEntries()].reverse().find((item: { type: string; customType?: string }) => item.type === "custom" && item.customType === "pi-plan-readable") as { data?: { currentPlanPath?: string; modelSwitch?: TaskPlanModelSwitchState } } | undefined;
     state.currentPlanPath = entry?.data?.currentPlanPath;

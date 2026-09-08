@@ -37,7 +37,8 @@ function rollUpCompletion(task: ReadableTask): void {
 }
 /** Ordinary planning has no dependency on execution, policy, receipts or a runtime store. */
 export class ReadablePlanService {
-  constructor(private readonly root: string, private readonly state: ReadableSessionState = {}) {}
+  constructor(private readonly root: string, private readonly state: ReadableSessionState = {},
+    private readonly beforeEdit?: (before: ReadableSnapshot, next: ReadablePlan) => Promise<void>) {}
 
   async start(brief: string, title?: string, tasks?: ReadableTask[]): Promise<ReadableSnapshot> {
     const normalized = brief.trim();
@@ -175,6 +176,8 @@ export class ReadablePlanService {
   private async save(before: ReadableSnapshot, next: ReadablePlan): Promise<ReadableSnapshot> {
     const text = renderReadablePlan(next);
     if (text === before.text) return this.remember(before);
+    // Host notifications inspect copies; they cannot change this candidate or bypass file CAS.
+    await this.beforeEdit?.(clone(before), clone(next));
     return this.remember(await writeReadablePlan(before.path, before.document_hash, next));
   }
 
