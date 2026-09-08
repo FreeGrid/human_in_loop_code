@@ -57,7 +57,7 @@ function exactObject(value: unknown, keys: string[], label: string): asserts val
   if (actual.length !== keys.length || actual.some(key => typeof key !== "string" || !keys.includes(key))) invalid(`${label} has missing or unknown keys`);
 }
 
-/** Validate and copy the visible domain. Completed roots intentionally discard their validated children. */
+/** Validate and copy the visible domain without discarding recorded work. */
 function normalizePlan(value: unknown): ReadablePlan {
   exactObject(value, ["format", "plan_id", "title", "brief", "tasks"], "plan");
   if (value.format !== "pi-plan/v3") throw new Error("v3_unsupported_format: expected pi-plan/v3");
@@ -68,7 +68,6 @@ function normalizePlan(value: unknown): ReadablePlan {
   brief.split("\n").forEach(line => { if (line.trim()) plainLine(line, "brief"); });
   if (!Array.isArray(value.tasks) || value.tasks.length === 0) invalid("at least one task is required");
   const ids = new Set<string>();
-  let seenOpen = false;
   const tasks = value.tasks.map((task, index): ReadableTask => {
     exactObject(task, ["id", "text", "completed", "subtasks"], `task ${index + 1}`);
     if (typeof task.id !== "string" || !/^T\d{3,}$/.test(task.id) || /^T0+$/.test(task.id)) invalid("task IDs must use T001-style positive IDs");
@@ -85,11 +84,9 @@ function normalizePlan(value: unknown): ReadablePlan {
       if (typeof child.completed !== "boolean") invalid(`${task.id} child completed must be boolean`);
       return { text, completed: child.completed };
     });
-    if (!task.completed) {
-      if (seenOpen && subtasks.length) invalid("only the first open task may have subtasks");
-      seenOpen = true;
-    }
-    return { id: task.id, text, completed: task.completed, subtasks: task.completed ? [] : subtasks };
+    // A file may retain detail from completed or previously selected tasks.
+    // Current-only authoring is enforced by mutations, not by deleting read data.
+    return { id: task.id, text, completed: task.completed, subtasks };
   });
   return { format: "pi-plan/v3", plan_id: value.plan_id, title, brief, tasks };
 }
@@ -145,7 +142,7 @@ export function parseReadablePlan(text: string): ReadablePlan {
   return normalizePlan({ ...meta, title: titleMatch[1], brief: brief.join("\n"), tasks });
 }
 
-/** Produce the single canonical visible representation, including collapsed completed roots. */
+/** Produce the single canonical visible representation with all recorded children. */
 export function renderReadablePlan(plan: ReadablePlan): string {
   const value = normalizePlan(plan);
   const tasks = value.tasks.flatMap(task => [
