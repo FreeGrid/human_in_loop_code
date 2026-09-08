@@ -1,262 +1,79 @@
-# Human-in-the-Loop Toolkit for Pi
+# Human-in-the-Loop：让人始终看得懂、接得住 AI 的工作
 
-This package adds Pi extensions for durable workspace governance and
-coordinated multi-agent execution.
+你可能只是想验证一个算法，后来却发现，项目目录里已经多了几份计划、十几个实验脚本、模型生成的测试、参考资料、运行日志和一篇还没写完的论文。代码仍然能运行，但很难回答一个简单的问题：如果今天把这个仓库开源，哪些东西应该交出去？
 
-The extensions can be used independently, but together they address a common
-problem: an agent can produce changes quickly while repository boundaries,
-human approval points, and execution history remain implicit. This toolkit makes
-those decisions visible, reviewable, and recoverable.
+另一种麻烦来得更快。你说“帮我实现这个功能”，AI 很快写完了几百行代码。等你开始阅读，才发现它理解的输入格式、适用范围，甚至要解决的问题，都和你想的有一点偏差。代码写得越快，偏差积累得也越快。再让它不断打补丁，会消耗更多时间和上下文；你既要读实现，还要从聊天记录里找回最初的想法。
 
-## From ownership to approved execution
+这个工具包围绕这些真实工作组织流程：先给不同材料找好归属，再把当前需求写成一份人能读完的计划，执行时逐步细化，交付时沿着相关变化核对文档。需要更强约束的项目，还可以接入验证、独立审阅和执行权限控制。人不必比模型更快地阅读每一行生成内容，但应该始终知道它正在做什么、为什么做、准备交付什么。
+
+## 先认识你将使用的工具
+
+**LLM** 就是能够理解和生成文字的大语言模型。它可以分析需求、写代码，却也可能误解你的意思。**Agent** 是能够调用工具的模型工作会话：它除了回答，还能读文件、修改文件和执行命令。**Pi** 是在终端里承载这些会话的程序；这个仓库是安装到 Pi 中的一组扩展。你使用它时不需要会 TypeScript，扩展的实现语言不会成为操作门槛。
+
+这里说的 **Harness**，指围绕模型工作的程序规则和执行机制。例如，程序可以检查某次修改是否过期、一个子任务完成后是否该勾选父任务；接入受治理执行后，还能检查权限、真实验证和独立审阅是否齐备。这些规则能减少对模型记忆和自觉的依赖，但不能替人判断一个研究问题是否值得做，也不能把错误的测试变成正确的标准。
+
+## 一个研究项目，为什么需要几个仓库
+
+假设你要研究二分图匹配算法，并基于同一份实现写两篇论文。如果所有东西都放进一个 Git 仓库，计划和证据会与产品代码一起增长，论文修改也会混进代码历史。每次准备分享或开源，都要重新检查哪些文件不该公开。简单地在交付前删除文件，还可能把重要过程丢掉，或者漏看已经进入 Git 历史的内容。
+
+本工具把工作分成独立仓库。`control` 保存计划、测试、实验核对、证据和管理记录；`code` 保存真正要交付的程序、运行资源和用户文档。论文另有归属：每篇文章一个 `latex` 仓库，保留自己的正文、参考文献表、图和投稿材料。研究阶段的资料整理留在 control，进入某篇论文的参考文献和最终图件随那篇论文维护。
 
 ```text
-repository boundaries     current requirements     coordinated execution
-    control-init       ->       task-plan        ->  collaborating-agents
+matching/                     ← 只是容纳项目的普通目录
+├── matching_control/         ← 计划、测试、验证和研究过程
+├── matching_code/            ← 可以独立交付的程序与用户文档
+├── matching_paper_a/         ← 第一篇论文及其参考文献、图和投稿材料
+└── matching_paper_b/         ← 第二篇论文，引用同一份代码
 ```
 
-The arrows show the recommended sequence, not runtime dependencies. The three
-extensions can be used independently: workspace governance establishes ownership,
-Task Plan keeps current requirements and progress, and collaborating Agents carry out
-scoped work. A subagent result is evidence to review, not automatic acceptance.
+这样提交代码时，就不用先把论文和实验日志从暂存区里逐项挑出去。两篇论文也可以各自修改、投稿和记录版本。control 可以读取并测试 code，论文可以引用代码成果，而程序运行不依赖 control 或论文仓库。开源时你能交出一个职责清楚的 code 仓库，同时保留研究过程。仓库分离并不会自动清理已有历史或替你设置 GitHub 可见性；它让材料从一开始就有明确的家。
 
-### 1. Control Init: make ownership and boundaries durable
+[了解如何创建、绑定已有仓库和增加论文](extensions/control-init/README.md)。
 
-**Why it matters.** Work that spans product code, private plans, tests,
-verification evidence, or manuscripts becomes risky when repository ownership
-exists only in conversation history. A later Agent can easily put an artifact
-in the wrong repository, trust a moved path, or cross a privacy boundary.
+## 在代码变多之前，把意思对齐
 
-**What it does.** Control Init creates a versioned `CONTROL_INDEX.json` and a
-marker-bounded managed section in `AGENTS.md`. It supports built-in
-code/control and code/control/LaTeX topologies, explicit custom topologies,
-status and doctor checks, safe updates, drift detection, and human-reviewed
-local Git bootstrap. It never commits, pushes, opens PRs, merges, releases, or
-runs product work by itself.
+计划最重要的作用，是让你在实现成本还低的时候发现理解偏差。模型生成代码往往比人逐行审阅更快；如果需求只存在于一长串聊天里，人很容易从“决定做什么”变成“不断接受已经做出来的东西”。本工具建议：**开始执行前，完整读完 Plan 中的需求和每一条任务；计划发生变化后，也完整读完受到影响的部分。** 不懂代码也可以判断“是否只支持方阵”“是否需要输出匹配结果”是不是你的意思。
 
-[Read the Control Init guide](extensions/control-init/README.md)
+但计划本身也可能成为负担。一次真实 KM 算法试用中，一个“100 行内 C++ 实现”的请求被展开成约 135 行计划，依次重复需求、目标、策略、验收和验证。同一个事实分散在多处，前面还在问的问题，后面已经被当作确定条件。对于采用这种累积模板的方案，增加章节并不一定增加清晰度；没有计划又会让重要约定留在聊天里。我们希望保留下来的，是一份当前有效、足够短、能够直接继续工作的理解。
 
-### 2. Collaborating Agents: coordinate execution without losing control
+因此，Plan 只包含当前需求和任务树。它采用 **rolling，逐步细化** 的方式：眼前的工作写到能开始，临近的工作补充已经确定的细节，较远的工作先保留方向。越接近执行，信息越充分，再在原处修改。简单请求可以只有一个任务，不需要为了格式制造几个阶段。完成的子任务保留下来并勾选，便于回看做过哪些工作；测试日志和结果总结不塞回计划。
 
-**Why it matters.** Parallel and specialized Agents are useful only when their
-identity, messages, write ownership, and results remain observable. Otherwise,
-parallelism creates conflicting edits, duplicated work, and hidden context.
+用户新增需求时，默认继续修改当前这份 Markdown 文件，只有明确要求新开计划才创建另一份。新同事或新的模型会话打开它，应当能快速说清现在的要求、已经完成的工作和下一步，而不必读完之前所有对话。
 
-**What it does.** Collaborating Agents can spawn single or parallel subagents,
-route direct and broadcast messages, reserve files before edits, inspect scoped
-subagent sessions, and automatically return child results to the parent. The
-`/agents` overlay exposes Agents, messages, reservations, and shared chat.
-Subagents can run as background processes or in visible cmux panes, with
-configurable specialist roles.
+[学习如何写、修改和继续 Plan](extensions/task-plan/README.md)。
 
-[Read the Collaborating Agents guide](extensions/collaborating-agents/README.md)
+## 交付时，沿着变化找文档
 
-### 3. Task Plan: keep current requirements and a rolling checklist
+项目越来越大以后，另一个成本开始显现：每次改一点功能，都让模型重新扫描大量文件。模型需要阅读的文字会占用上下文，也会消耗 token；token 可以粗略理解为模型处理文字的计量单位。把整份仓库反复塞进去，未必比先找到正确的几个位置更有效。
 
-Use `/plan` with a natural-language request to update the selected readable Plan;
-create a V3 file only when no Plan exists. Added requirements, changed goals and
-scope adjustments stay in the same Markdown, even after all tasks are complete.
-Only an explicit request for a new Plan (or `/plan:new`) creates another file.
-A missing/unreadable selected file or ambiguous selection prompts recovery or
-selection, never an implicit replacement. The
-Planner consolidates the current requirements, asks at most one blocking question
-and adds detail in place only when useful: current work is actionable, nearby work
-may have known subtasks, and distant work stays coarse. Simple requests may have
-one task without subtasks. Changes
-replace old wording in place; completed work keeps its subtasks, and child progress automatically completes the parent without
-results, summaries or execution records.
+这里采用的办法是先定位。PR 是准备合入主分支的一组修改，记录了这次交付从哪里开始、改到了哪个提交。我们先用相关 PR 或明确的 Git 提交范围得到文件清单，再结合“这个功能由哪些源文件实现、在哪里说明”的小映射，追到必要的调用者、配置读取处和文档段落。需要再看下一层时，再扩大范围。这是一套有针对性的检索和文档维护流程，不会替换你的文件系统，也不假定一次搜索就能理解整个工程。
 
-Humans may check tasks directly. `/plan:task T001 done` records ordinary completion,
-`/plan:status` shows the short checklist, and `/plan:next` continues ordinary work.
-A copied Plan needs no hidden runtime or certification. Planning alone does not
-request implementation.
+文档维护的时机也尽量自然：需求还在讨论时先改 Plan；用户能感受到的行为稳定后，就改对应说明、配置或例子；大任务或 PR 准备交付时，再检查相关变化是否有遗漏。默认依靠清楚的工作指令。可选的 DocSync 检查会给出候选位置和未解决的问题，帮助容易遗漏的模型补齐检查，但“找到了文档”并不等于“文档已经正确”。
 
-Configured hosts may explicitly choose an additional governed flow, retaining
-Human authority, scoped execution, actual verification and independent review
-behind the readable file. Its unavailable state does not block ordinary work.
-Existing V1/V2 files have a read-only view and explicit migration preview; their
-original lifecycle remains available through `legacy-index.ts`.
+[了解相关 PR、文档依赖和可选检查](extensions/task-plan/docsync/delivery.md)。
 
-[Read the ordinary Task Plan guide](extensions/task-plan/README.md) ·
-[Optional governed execution](extensions/task-plan/v3-governed.md) ·
-[Lightweight documentation checks](extensions/task-plan/docsync/delivery.md) ·
-[Legacy execution and DocSync](extensions/task-plan/legacy-workflow.md)
+## 模型可以换，人的判断不能省略
 
-Documentation follows the same lightweight approach: update related explanations
-when user-visible behavior stabilizes and check once before delivery. Optional
-`docsync_check` locates explicit PR/commit and related local changes through small
-mappings and bounded references; a selected task watch shows advisory context
-before parent completion. It does not certify documents or require a Harness
-for ordinary editing. The portable JSON entry also works from Codex file/shell
-tools without changing Plan format.
+你不必让同一个模型承担所有工作。Task Plan 可以分别指定规划、普通执行、审阅使用的模型和思考设置：先用善于理解约束的模型把需求说清，再按你的资源安排执行和审阅。三个阶段也可以都用同一个自部署模型。配置放在 Pi 和启动环境里，不会污染 Plan，也不要求修改扩展源码。
 
-Planning, ordinary execution and review have separate global model presets. All
-three currently default to the locally registered Qwen model
-`custom-qwen/qwen38-27b-fp8` (Qwen 3.8), with thinking `high` for planning/review
-and `medium` for execution. This provider/model must exist in your Pi model registry;
-otherwise a notice is shown and ordinary work continues with the current model.
+模型能力较弱时，短计划、局部更新、程序汇总子任务状态能减少流程走偏。更严格的工作可以由受信任的宿主接入可选 Harness，让真实验证、独立审阅和最终接受共同约束完成。默认安装并没有替你配好这些执行服务；普通勾选也只表示人或 Agent 当前认为完成。如何设置模型、哪些保证需要额外接入，分别见 [Plan 工作流](extensions/task-plan/v3-workflow.md) 和 [受治理执行](extensions/task-plan/v3-governed.md)。
 
-- `/plan` and `/plan:edit` select the planning model.
-- `/plan:next` and `plan_continue` select the execution model.
-- `/plan:review` selects the ordinary code-review model. Natural-language stage
-  changes use the Agent's `plan_set_mode` tool.
-- Optional Harness review passes the review preset to its independent reviewer
-  callback; the embedding host must launch that model. Switching the current
-  session alone is not independent review.
+当任务确实能独立拆开时，还可以使用 [多 Agent 协作](extensions/collaborating-agents/README.md)：让一个会话调查资料、另一个实现接口、另一个独立审阅。分工、消息和文件预留可以被查看，子 Agent 返回结果也不会自动替人作出接受决定。
 
-Set these environment variables before starting Pi (for example in `~/.zshrc`):
+## 从哪里开始
 
-```bash
-export PI_TASK_PLAN_MODEL_SWITCH=1
-export PI_TASK_PLAN_PLANNING_MODEL_PROVIDER=custom-qwen
-export PI_TASK_PLAN_PLANNING_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_PLANNING_THINKING=high
-export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=custom-qwen
-export PI_TASK_PLAN_NORMAL_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_NORMAL_THINKING=medium
-export PI_TASK_PLAN_REVIEW_MODEL_PROVIDER=custom-qwen
-export PI_TASK_PLAN_REVIEW_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_REVIEW_THINKING=high
-export PI_TASK_PLAN_RESTORE_MODE=configured
-```
+第一次使用，请从 [从零开始：安装并完成第一个项目](docs/getting-started.md) 读起。它会区分终端命令和 Pi 内命令，带你建立仓库、阅读计划、明确启动执行，并在重启后回到同一个工作空间。
 
-For a self-hosted Qwen/vLLM endpoint, the model entry in Pi's `models.json`
-must have `reasoning: true` and `compat.thinkingFormat: "qwen-chat-template"`.
-Keep `compat.supportsReasoningEffort: false` when the endpoint does not accept
-OpenAI-style effort values. Pi then sends `chat_template_kwargs.enable_thinking`
-(and preserves thinking history). In this format high/medium both enable thinking;
-they do not set different token budgets. These are client request settings, not
-proof of how the deployed server/model handles reasoning. See the
-[Qwen vLLM deployment guide](https://github.com/QwenLM/Qwen3/blob/main/docs/source/deployment/vllm.md).
+| 你现在想做什么 | 阅读位置 |
+| --- | --- |
+| 安装 Pi 和本工具，跑通第一次使用 | [入门教程](docs/getting-started.md) |
+| 分离代码和研究过程，给每篇论文建立仓库 | [Control Init](extensions/control-init/README.md) |
+| 掌握需求、rolling 和任务进度 | [Task Plan](extensions/task-plan/README.md) |
+| 查看分阶段模型和继续执行机制 | [Plan 工作流](extensions/task-plan/v3-workflow.md) |
+| 精确定位需要更新的文档 | [DocSync](extensions/task-plan/docsync/delivery.md) |
+| 判断是否需要更强的执行约束 | [受治理执行](extensions/task-plan/v3-governed.md) |
+| 让多个 Agent 分工与沟通 | [协作指南](extensions/collaborating-agents/README.md) |
 
-Each stage can be changed independently. Existing `PI_TASK_PLAN_MODEL_PROVIDER`
-and `PI_TASK_PLAN_MODEL_ID` remain common fallbacks; explicit stage variables win.
-`PI_TASK_PLAN_THINKING` remains a planning alias. Explicit host configuration wins
-over environment fields. Set `PI_TASK_PLAN_MODEL_SWITCH=0` to disable switching,
-or `PI_TASK_PLAN_RESTORE_MODE=previous` to restore the model active before planning
-or review instead of using the configured execution preset. Environment changes
-require a new Pi process with the updated environment. No model configuration is
-written to the readable Plan. See the [workflow guide](extensions/task-plan/v3-workflow.md)
-for accepted thinking levels and ordinary/independent review boundaries.
+三个扩展可以独立使用。你可以先从仓库分离和普通 Plan 开始，等出现真实的协调或验证需求，再加入相应机制。
 
-Package consumers that import the extension directly can also pass a
-`TaskPlanExtensionConfig` object to the default task-plan extension factory. It
-extends model preferences with an optional trusted `governed` factory. Explicit
-legacy configuration is awaitable; the default has no test doubles or automatically
-passing verification adapters.
-
-## Installation
-
-Choose one source below. A version of this package that contains the current
-toolkit enables all three extensions and the bundled `collaborating-agents-system`
-skill with one installation.
-
-### Option 1: npm
-
-```bash
-pi install npm:@baochunli/pi-collaborating-agents
-```
-
-### Option 2: this Git repository
-
-```bash
-pi install https://github.com/FreeGrid/human_in_loop_code
-```
-
-The npm package name is retained for compatibility with the original
-Collaborating Agents package. Use the Git source when you need the current
-state of this repository before it is published to npm; a published npm version
-may lag features listed as Unreleased in the [changelog](CHANGELOG).
-
-### Option 3: original upstream Git source
-
-```bash
-pi install https://github.com/baochunli/pi-collaborating-agents
-```
-
-This preserves the original Git installation route for the upstream
-Collaborating Agents release line. Use this repository's Git source above when
-you specifically need the complete toolkit documented here.
-
-### Option 4: a local checkout
-
-```bash
-pi install /absolute/path/to/human_in_loop_code
-```
-
-After installation, run:
-
-```bash
-pi config
-```
-
-Confirm that the following are enabled:
-
-- `collaborating-agents`
-- `control-init`
-- `task-plan`
-- `collaborating-agents-system`
-
-If one of the extensions is absent, the selected source predates that
-extension; install this repository's current Git source or local checkout.
-
-Press `Esc` to leave the configuration screen. Start a new Pi session after
-installing or updating the package so the extensions and skill are reloaded.
-
-## A minimal first workflow
-
-1. Run `/control:init` or ask Pi in natural language to initialize the named
-   repositories. Review the complete preview before approving any write.
-   After Agent-tool initialization, run `/control:enter` to enter control.
-   If you restart Pi or initialization succeeded but the directory did not
-   switch, use `/control:enter /exact/path/to/name_control`, replacing the
-   example with the initialized control repository's full path. You do not
-   need to initialize it again.
-2. Use `/plan` to keep current requirements and a rolling checklist. Refine the
-   current task when ready to work, and check completed tasks yourself. Request
-   implementation separately; the additional governed flow is optional.
-3. Explicitly assign approved work. Use `/subagent` or let an orchestrator use
-   the `subagent` tool when delegation or context isolation is worthwhile.
-4. Use `/agents` to inspect active Agents, messages, and file reservations;
-   verify the result before accepting delivery.
-
-Control Init does not automatically spawn Agents or run product work. Those
-boundaries are intentional human gates.
-
-You can also open Codex in the initialized control repository. The generated
-`AGENTS.md` explains how to create, revise and continue the same readable Plan
-with ordinary Markdown editing, retain completed subtasks and update their
-checkboxes. No additional Skill or Plan tool is required. These are Agent
-instructions, not program-enforced guarantees; see the
-[Codex usage and existing-workspace update guide](extensions/control-init/README.md#use-the-same-plan-in-codex).
-
-## Updating and removing
-
-Re-run `pi install` with the same source to update an installation. To remove
-the package, pass the exact source originally used:
-
-```bash
-pi remove npm:@baochunli/pi-collaborating-agents
-pi remove https://github.com/FreeGrid/human_in_loop_code
-pi remove https://github.com/baochunli/pi-collaborating-agents
-pi remove /absolute/path/to/human_in_loop_code
-```
-
-Use only the matching line. Removing the package disables its runtime extensions but does not delete
-`CONTROL_INDEX.json`, managed `AGENTS.md` content, repositories, commits, or
-other durable artifacts created while using it.
-
-## Safety and compatibility
-
-Pi extensions run with high local privileges. Review third-party source before
-installing it, keep repository paths explicit, inspect Human Gate previews, and
-review changes before committing or publishing them.
-
-Control Init was verified against `@mariozechner/pi-coding-agent@0.73.1` and
-requires Node.js `>=20.6.0`. See each extension guide for its precise safety
-boundary, compatibility notes, configuration, commands, and validation
-procedures.
-
-## License
-
-[MIT](LICENSE)
+本项目沿用了上游 `pi-collaborating-agents` 的包名和协作能力；获取本文所述的完整工具包，请安装 [FreeGrid/human_in_loop_code](https://github.com/FreeGrid/human_in_loop_code) 的 Git 来源或本地检出。npm 和原始上游的发布进度可能不同。版本变化见 [CHANGELOG](CHANGELOG)，许可证为 [MIT](LICENSE)。
