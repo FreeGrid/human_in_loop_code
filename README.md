@@ -56,7 +56,7 @@ matching/                     ← 只是容纳项目的普通目录
 
 你不必让同一个模型承担所有工作。Task Plan 可以分别指定规划、普通执行、审阅使用的模型和思考设置：先用善于理解约束的模型把需求说清，再按你的资源安排执行和审阅。三个阶段也可以都用同一个自部署模型。配置放在 Pi 和启动环境里，不会污染 Plan，也不要求修改扩展源码。
 
-模型能力较弱时，短计划、局部更新、程序汇总子任务状态能减少流程走偏。更严格的工作可以由受信任的宿主接入可选 Harness，让真实验证、独立审阅和最终接受共同约束完成。默认安装并没有替你配好这些执行服务；普通勾选也只表示人或 Agent 当前认为完成。如何设置模型、哪些保证需要额外接入，分别见 [模型配置](docs/models.md) 和 [受治理执行](extensions/task-plan/v3-governed.md)。
+模型能力较弱时，短计划、局部更新、程序汇总子任务状态能减少流程走偏。更严格的工作可以由受信任的宿主接入可选 Harness，让真实验证、独立审阅和最终接受共同约束完成。默认安装并没有替你配好这些执行服务；普通勾选也只表示人或 Agent 当前认为完成。如何设置模型、哪些保证需要额外接入，分别见 [模型配置](docs/models.md) 和 [Harness 的保证范围](docs/harness.md)。
 
 当任务确实能独立拆开时，还可以使用 [多 Agent 协作](extensions/collaborating-agents/README.md)：让一个会话调查资料、另一个实现接口、另一个独立审阅。分工、消息和文件预留可以被查看，子 Agent 返回结果也不会自动替人作出接受决定。
 
@@ -72,7 +72,7 @@ matching/                     ← 只是容纳项目的普通目录
 | 分别设置规划、执行、审阅模型，连接自部署 vLLM | [模型配置](docs/models.md) |
 | 查看命令和继续执行机制 | [Plan 工作流](extensions/task-plan/v3-workflow.md) |
 | 精确定位需要更新的文档 | [DocSync](extensions/task-plan/docsync/delivery.md) |
-| 判断是否需要更强的执行约束 | [受治理执行](extensions/task-plan/v3-governed.md) |
+| 判断是否需要更强的执行约束 | [Harness 的保证范围](docs/harness.md) |
 | 让多个 Agent 分工与沟通 | [协作指南](extensions/collaborating-agents/README.md) |
 
 三个扩展可以独立使用。你可以先从仓库分离和普通 Plan 开始，等出现真实的协调或验证需求，再加入相应机制。
