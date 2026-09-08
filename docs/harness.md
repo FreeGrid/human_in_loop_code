@@ -1,6 +1,6 @@
 # 什么时候需要 Harness，它能保证什么
 
-[返回首页](../README.md) · [普通 Plan](../extensions/task-plan/README.md) · [文档检查](../extensions/task-plan/docsync/delivery.md)
+[返回首页](../README.md) · [排障](troubleshooting.md) · [普通 Plan](../extensions/task-plan/README.md) · [文档检查](../extensions/task-plan/docsync/delivery.md)
 
 如果模型足够听话，一段清楚的指令就能让它先更新计划、每做完一项记录进度、交付前检查文档。问题在于，模型可能漏掉某一步，也可能把“我认为完成了”当作真实验证结果。Harness 是围绕模型执行的程序机制：把能够明确检查的规则交给程序，把需要人判断的决定保留下来。
 

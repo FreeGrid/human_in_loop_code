@@ -1,6 +1,6 @@
 # 从零开始：安装并完成第一个项目
 
-[返回首页](../README.md) · [仓库与论文指南](../extensions/control-init/README.md)
+[返回首页](../README.md) · [仓库与论文指南](../extensions/control-init/README.md) · [遇到问题](troubleshooting.md)
 
 这份教程从一个空目录开始。你将建立彼此独立的 control 和 code 仓库，把“百行内 KM 算法”写成可读计划，再明确要求 Agent 开始工作。暂时不需要配置多 Agent、文档映射或受治理执行。先走通这一小圈，就能知道每个工具在什么时候出现。
 
