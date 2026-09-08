@@ -15,7 +15,7 @@ export type PlanGetParams = Static<typeof PlanGetParameters>;
 export const PlanSubmitSectionParameters = Type.Object({ expected_document_hash: ExpectedHash, content: Type.String(), planPath: PlanPath });
 export type PlanSubmitSectionParams = Static<typeof PlanSubmitSectionParameters>;
 
-export const PlanAdvanceParameters = Type.Object({ expected_document_hash: ExpectedHash, action: Type.Optional(StringEnum(["next", "execute", "next_round", "complete"] as const)), reason: Type.Optional(Type.String()), planPath: PlanPath });
+export const PlanAdvanceParameters = Type.Object({ expected_document_hash: ExpectedHash, action: Type.Optional(StringEnum(["next", "approve_contract", "execute", "next_round", "complete"] as const)), reason: Type.Optional(Type.String()), planPath: PlanPath });
 export type PlanAdvanceParams = Static<typeof PlanAdvanceParameters>;
 
 export const PlanReviewParameters = Type.Object({ expected_document_hash: ExpectedHash, candidate_tasks: Type.Optional(Type.String()), summary: Type.Optional(Type.String()), planPath: PlanPath });

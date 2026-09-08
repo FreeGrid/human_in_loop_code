@@ -143,3 +143,12 @@ candidate for hard deadlines, not an implemented guarantee in this delivery.
 The toolkit's existing `@mariozechner/*@0.73.1` peers have not been replaced or
 aliased. The runner capability claim does not cover that older SDK. Missing or
 unverified runner capabilities must fail closed; no silent default-worker fallback.
+
+
+## Human transition authority
+
+The trusted input adapter issues opaque, short-lived, one-shot capabilities bound to the action, Plan/node, document and contract hashes, and canonical roots. Model tool parameters cannot create a capability. Approval of the detailed Tasks contract and authorization to execute are separate decisions: `/plan:approve` approves the current contract; `/plan:approve execute` authorizes execution; `/plan:execute` then confirms the initial phase and its roots. Resuming an existing unchanged phase retains its original execution identity and baseline.
+
+Reopen, abandon, plan completion, phase finalize, closure edits and DocSync changes require their own capabilities. Slash commands request an actual UI confirmation because other extensions can inject commands. Without UI, only exact trusted interactive/RPC input with an unambiguous existing context can grant authority; first execution requires confirmed roots. A serialized token, boolean or model statement is insufficient. Successful transitions save an authorization receipt in the same CAS write as the state change; failed attempts consume authority and require a new decision where consumption occurred.
+
+V1→V2 apply migration is disabled, including direct calls to the legacy migration module. Read-only migration proposals remain available. Native V2 execution and the full evidence/Controller boundary are not yet a released capability. The Pi write hook is a coordination guard, not a sandbox.

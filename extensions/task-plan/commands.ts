@@ -4,7 +4,9 @@ import { modelSwitchEntryData, switchTaskPlanModel, type TaskPlanModelSwitchConf
 import { renderPlanOperationResult } from "./operation-result.ts";
 import { reminderForStage } from "./prompts.ts";
 import { TaskPlanService, type TaskPlanSessionState } from "./operations.ts";
-import { captureHumanDecision } from "./phase-contracts.ts";
+import { issueHumanCapability, type AuthorityAction } from "./authority.ts";
+import { documentAuthorityContext } from "./authority-context.ts";
+import { readPlanDocument } from "./plan-file.ts";
 import { inspectPhaseRecords } from "./phase-record.ts";
 import { currentRoundTasks } from "./tasks.ts";
 import { phaseSwitchHelp } from "./phase-input.ts";
@@ -41,7 +43,9 @@ async function executePhase(pi: ExtensionAPI, args: string, ctx: ExtensionComman
     target_root = await ctx.ui.input("Target Git repository root (absolute path)");
     governance_root = await ctx.ui.input("Governance root containing this Plan (absolute path)");
     if (!target_root || !governance_root || !await ctx.ui.confirm("Authorize this phase execution?", `${task_id}\nTarget: ${target_root}\nGovernance: ${governance_root}\n${phaseSwitchHelp()}`)) return;
-    state.humanDecision = captureHumanDecision({ action: "execute", source: "slash", input_id: randomUUID(), text: `/plan:execute ${current.path ?? ""}; Human confirmed ${task_id}, target=${target_root}, governance=${governance_root}` });
+    const approvedDocument = await readPlanDocument(current.path!);
+    if (approvedDocument.document_hash !== current.document_hash) return ctx.ui.notify("Plan changed during confirmation; authorize the new version explicitly.", "error");
+    state.humanCapability = issueHumanCapability("execute", await documentAuthorityContext(approvedDocument, task_id, { target_root, governance_root }), { source: "slash", input_id: randomUUID(), text: `/plan:execute ${current.path}; Human confirmed ${task_id}, target=${target_root}, governance=${governance_root}` });
   }
   const result = await service.executePhase({ expected_document_hash: current.document_hash, planPath: current.path, task_id, target_root, governance_root });
   notify(ctx, result);
@@ -61,7 +65,9 @@ async function docsync(args: string, ctx: ExtensionCommandContext, state: TaskPl
   if (!task_id) return ctx.ui.notify("DocSync requires one explicitly selected active phase.", "error");
   // Commands may also be injected by extensions; a trusted UI confirmation is the authority.
   if (!ctx.hasUI || !await ctx.ui.confirm(`Set DocSync ${setting}?`, `${task_id}\n${phaseSwitchHelp(setting === "on")}`)) return ctx.ui.notify("No Human confirmation; DocSync unchanged. Natural-language Human input is also supported.", "info");
-  state.humanDecision = captureHumanDecision({ action: setting === "on" ? "docsync_on" : "docsync_off", source: "slash", input_id: randomUUID(), text: `/docsync ${setting}; Human confirmed ${task_id}` });
+  const document = await readPlanDocument(current.path!);
+  if (document.document_hash !== current.document_hash) return ctx.ui.notify("Plan changed during Human decision; reread and confirm the new version.", "error");
+  state.humanCapability = issueHumanCapability(setting === "on" ? "docsync_on" : "docsync_off", await documentAuthorityContext(document, task_id), { source: "slash", input_id: randomUUID(), text: `/docsync ${setting}; Human confirmed ${task_id}` });
   notify(ctx, await service.setPhaseDocSync({ expected_document_hash: current.document_hash, task_id, enabled: setting === "on" }));
 }
 
@@ -71,6 +77,7 @@ async function finalizePhase(args: string, ctx: ExtensionCommandContext, state: 
   if (!current.document_hash) return notify(ctx, current);
   const task_id = args.trim() || state.binding?.task_id || state.phaseTaskId;
   if (!task_id || !/^T\d{3}$/.test(task_id)) return ctx.ui.notify("Usage: /plan:finalize TNNN", "error");
+  if (!await confirmAuthority(ctx, state, current.path!, current.document_hash, "finalize", task_id)) return;
   notify(ctx, await service.finalizePhase({ expected_document_hash: current.document_hash, task_id }));
 }
 
@@ -119,14 +126,16 @@ async function approve(pi: ExtensionAPI, args: string, ctx: ExtensionCommandCont
   const current = await service.get();
   if (!current.document_hash) return notify(ctx, current);
   const stage = (current.snapshot as { metadata?: { stage?: string } })?.metadata?.stage;
-  let action: "execute" | "next_round" | "complete" | undefined;
+  let action: "approve_contract" | "execute" | "next_round" | "complete" | undefined;
   let reason: string | undefined;
-  if (stage === "awaiting_execution_approval") action = "execute";
+  if (stage === "awaiting_execution_approval") action = args.trim() === "execute" ? "execute" : "approve_contract";
   else if (stage === "awaiting_round_decision") {
     const trimmed = args.trim();
     if (trimmed === "next" || trimmed === "next_round") action = "next_round";
     else { action = "complete"; reason = trimmed; }
   }
+  const authorityAction: AuthorityAction | undefined = stage === "what_why" ? "approve_what_why" : stage === "plan" ? "approve_plan" : action === "execute" ? "authorize_execution" : action;
+  if (!authorityAction || !await confirmAuthority(ctx, state, current.path!, current.document_hash, authorityAction)) return;
   const result = await service.advance({ expected_document_hash: current.document_hash, action, reason });
   const nextStage = (result.snapshot as { metadata?: { stage?: string } } | undefined)?.metadata?.stage;
   if (result.status === "applied" && (nextStage === "plan" || nextStage === "tasks")) {
@@ -163,6 +172,7 @@ async function task(args: string, ctx: ExtensionCommandContext, state: TaskPlanS
   const service = new TaskPlanService(ctx.cwd, state);
   const current = await service.get();
   if (!current.document_hash) return notify(ctx, current);
+  if (action !== "start" && !await confirmAuthority(ctx, state, current.path!, current.document_hash, action === "done" ? "finalize" : "reopen", task_id!)) return;
   const result = action === "start"
     ? await service.bindTask({ expected_document_hash: current.document_hash, task_id: task_id! })
     : await service.setTaskStatus({ expected_document_hash: current.document_hash, task_id: task_id!, status: action === "done" ? "completed" : "open" });
@@ -173,6 +183,7 @@ async function abandon(pi: ExtensionAPI, args: string, ctx: ExtensionCommandCont
   const service = new TaskPlanService(ctx.cwd, state);
   const current = await service.get();
   if (!current.document_hash) return notify(ctx, current);
+  if (!await confirmAuthority(ctx, state, current.path!, current.document_hash, "abandon")) return;
   const result = await service.abandon({ expected_document_hash: current.document_hash, reason: args.trim() || undefined });
   if (result.status === "applied") {
     await switchTaskPlanModel(pi, ctx, state.modelSwitch ??= {}, modelConfig, "normal");
@@ -182,6 +193,7 @@ async function abandon(pi: ExtensionAPI, args: string, ctx: ExtensionCommandCont
   if (result.status !== "applied" || args.trim() || !result.document_hash || !ctx.hasUI) return;
   const reason = await ctx.ui.input("可选：为什么放弃这个 Plan？", "不想填写可以直接按 Esc 或留空");
   if (!reason?.trim()) return;
+  if (!await confirmAuthority(ctx, state, result.path!, result.document_hash, "update_closure")) return;
   notify(ctx, await service.updateClosureReason({ expected_document_hash: result.document_hash, reason }));
 }
 
@@ -207,4 +219,16 @@ function queueDraftFollowUp(pi: ExtensionAPI, stage: string, path?: string): voi
 function notify(ctx: ExtensionCommandContext, result: { status: string; snapshot?: unknown }) {
   const stage = (result.snapshot as { metadata?: { stage?: string } } | undefined)?.metadata?.stage;
   ctx.ui.notify(`${renderPlanOperationResult(result as never)}${stage ? `\n\n${reminderForStage(stage)}` : ""}`, result.status === "conflict" || result.status === "validation_error" ? "error" : "info");
+}
+
+/** Slash commands can originate in extensions: a real UI decision is still required. */
+async function confirmAuthority(ctx: ExtensionCommandContext, state: TaskPlanSessionState, path: string, hash: string, action: AuthorityAction, node = "$plan"): Promise<boolean> {
+  delete state.humanCapability;
+  if (!ctx.hasUI) { ctx.ui.notify("Human confirmation UI unavailable; use a concrete trusted input adapter.", "error"); return false; }
+  const document = await readPlanDocument(path);
+  if (document.document_hash !== hash) { ctx.ui.notify("Plan changed; reread before confirmation.", "error"); return false; }
+  const context = await documentAuthorityContext(document, node);
+  if (!await ctx.ui.confirm(`Authorize ${action}?`, `${path}\n${node}\nDocument: ${hash}\nContract: ${context.contract_hash}\nTarget: ${context.target_root}\nGovernance: ${context.governance_root}`)) return false;
+  state.humanCapability = issueHumanCapability(action, context, { source: "slash", input_id: randomUUID(), text: `Human confirmed ${action} for ${path} ${node}` });
+  return true;
 }

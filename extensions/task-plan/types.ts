@@ -25,6 +25,8 @@ export interface PlanMetadata {
   approved_what_why_hash?: string;
   approved_plan_hash?: string;
   reviewed_tasks_hash?: string;
+  approved_contract_hash?: string;
+  authority_receipts?: string;
   closure_reason?: string;
   [key: string]: unknown;
 }

@@ -1,10 +1,12 @@
+import { appendAuthorization, consumeDocumentAuthority } from "./authority-context.ts";
+import type { AuthorizationReceipt, HumanCapability } from "./authority.ts";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { isAbsolute, relative } from "node:path";
 import { promisify } from "node:util";
 import { inspectExecutionNotes, upsertExecutionNote, validateExecutionNote, type ExecutionNote } from "./execution-notes.ts";
-import { readHumanDecision, type HumanDecisionToken, type PhaseDependencies, type PhaseRecord } from "./phase-contracts.ts";
+import { type PhaseDependencies, type PhaseRecord } from "./phase-contracts.ts";
 import { inspectPhaseRecords, upsertPhaseRecord, validatePhaseRecord } from "./phase-record.ts";
 import { acquirePhaseFinalizeLock, canonicalSectionHash, canonicalTasksDefinitionHash, executionDefinitionHash, readPlanDocument, replaceFrontmatter, writeIfDocumentHash } from "./plan-file.ts";
 import { replaceSection } from "./sections.ts";
@@ -23,7 +25,7 @@ type Report = { task_id: string; work_item_id?: string; result: "in_progress" | 
 export class PhaseExecutionService {
   constructor(private readonly dependencies: PhaseDependencies = {}) {}
 
-  async start(document: PlanDocument, params: { task_id?: string; target_root?: string; governance_root?: string; decision?: HumanDecisionToken }): Promise<PlanOperationResult> {
+  async start(document: PlanDocument, params: { task_id?: string; target_root?: string; governance_root?: string; decision?: HumanCapability }): Promise<PlanOperationResult> {
     return this.operation(document, async () => {
       const d = await this.current(document);
       const { task, records } = this.select(d, params.task_id);
@@ -34,7 +36,8 @@ export class PhaseExecutionService {
         if (params.governance_root && await realpath(params.governance_root) !== record.context.governance_root) fail("root_mismatch: governance root differs from original execution");
         return { status: "ok", path: d.path, document_hash: d.document_hash, message: `Resumed ${task.id}, execute ${record.context.execute_id}; DocSync ${record.docsync.enabled ? "on" : "off"}. ${SWITCH_HELP}`, snapshot: record };
       }
-      const authorization = readHumanDecision(params.decision, "execute") ?? fail("human_authorization_required: a real Human execute decision is required");
+      const receipt = await consumeDocumentAuthority(d, params.decision, "execute", task.id, params);
+      const authorization = { ...receipt.provenance, action: "execute" as const };
       if (!params.target_root || !params.governance_root) fail("roots_required: explicitly supply target Git root and governance root");
       if (![params.target_root, params.governance_root].every(p => typeof p === "string" && isAbsolute(p))) fail("invalid_roots: explicitly supply absolute roots");
       if (task.workItems.some(w => w.note)) fail("baseline_missing: existing progress cannot acquire a replacement baseline");
@@ -45,7 +48,7 @@ export class PhaseExecutionService {
       record = { version: 1, context, definition_hash: this.contract(d, task.id), baseline, authorization, docsync: { enabled: true }, acceptance: [] };
       if (!validatePhaseRecord(record)) fail("baseline_invalid: provider returned an invalid baseline reference");
       await this.verify(d, task, record);
-      return this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `Started ${task.id}, execute ${context.execute_id}; DocSync on. ${SWITCH_HELP}`, record);
+      return this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `Started ${task.id}, execute ${context.execute_id}; DocSync on. ${SWITCH_HELP}`, record, receipt);
     });
   }
 
@@ -81,28 +84,32 @@ export class PhaseExecutionService {
     });
   }
 
-  async setDocSync(document: PlanDocument, task_id: string, enabled: boolean, decision?: HumanDecisionToken): Promise<PlanOperationResult> {
+  async setDocSync(document: PlanDocument, task_id: string, enabled: boolean, decision?: HumanCapability): Promise<PlanOperationResult> {
     return this.operation(document, async () => {
       if (typeof enabled !== "boolean") fail("invalid_docsync_switch");
-      const authority = readHumanDecision(decision, enabled ? "docsync_on" : "docsync_off") ?? fail("human_authorization_required: only actual Human input may change DocSync");
       const d = await this.current(document);
       const { task, records } = this.select(d, task_id);
       const record = records[task.id] ?? fail("execution_missing");
       await this.verify(d, task, record);
-      record.docsync = { enabled, decision: authority };
+      const receipt = await consumeDocumentAuthority(d, decision, enabled ? "docsync_on" : "docsync_off", task.id);
+      record.docsync = { enabled, decision: { ...receipt.provenance, action: enabled ? "docsync_on" : "docsync_off" } };
       delete record.last_finalize;
-      return this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `DocSync ${enabled ? "on" : "off"}. ${SWITCH_HELP}`, record);
+      return this.save(d, upsertPhaseRecord(d.sections.tasks, task.id, record), `DocSync ${enabled ? "on" : "off"}. ${SWITCH_HELP}`, record, receipt);
     });
   }
 
-  async finalize(document: PlanDocument, task_id: string): Promise<PlanOperationResult> {
+  async finalize(document: PlanDocument, task_id: string, decision?: HumanCapability): Promise<PlanOperationResult> {
     return this.operation(document, async () => {
       const release = await acquirePhaseFinalizeLock(document.path, task_id);
-      try { return await this.finalizeLocked(document, task_id); } finally { await release(); }
+      try {
+        const current = await this.current(document);
+        const receipt = await consumeDocumentAuthority(current, decision, "finalize", task_id);
+        return await this.finalizeLocked(current, task_id, receipt);
+      } finally { await release(); }
     });
   }
 
-  private async finalizeLocked(document: PlanDocument, task_id: string): Promise<PlanOperationResult> {
+  private async finalizeLocked(document: PlanDocument, task_id: string, authorization: AuthorizationReceipt): Promise<PlanOperationResult> {
     let attempt: { document: PlanDocument; record: PhaseRecord } | undefined;
     return this.operation(document, async () => {
       const d = await this.current(document);
@@ -157,7 +164,7 @@ export class PhaseExecutionService {
       // No implicit next-phase start. One CAS contains every target checkbox and the receipt.
       const finalVersion = await this.dependencies.baseline!.verify(structuredClone(record.context), structuredClone(record.baseline));
       if (finalVersion !== finalized.content_version) fail("content_changed: repository changed before completion write");
-      return this.write(d, text, `${task.id} finalized: ${finalized.check}${finalized.debt_refs.length ? `; debt: ${finalized.debt_refs.join(", ")}` : ""}${finalized.human_exceptions.length ? `; Human exceptions: ${finalized.human_exceptions.join(", ")}` : ""}. ${allDone ? "Awaiting Human round decision." : "Other phases remain open."}`, record);
+      return this.write(d, appendAuthorization(text, authorization), `${task.id} finalized: ${finalized.check}${finalized.debt_refs.length ? `; debt: ${finalized.debt_refs.join(", ")}` : ""}${finalized.human_exceptions.length ? `; Human exceptions: ${finalized.human_exceptions.join(", ")}` : ""}. ${allDone ? "Awaiting Human round decision." : "Other phases remain open."}`, record);
     }, async message => {
       if (!attempt) return undefined;
       const { document: d, record } = attempt;
@@ -223,8 +230,9 @@ private contract(d: PlanDocument, nodeId: string): string {
     return version;
   }
 
-  private async save(d: PlanDocument, tasks: string, message: string, record: PhaseRecord): Promise<PlanOperationResult> {
-    return this.write(d, replaceSection(d.text, "tasks", tasks), message, record);
+  private async save(d: PlanDocument, tasks: string, message: string, record: PhaseRecord, receipt?: AuthorizationReceipt): Promise<PlanOperationResult> {
+    const text = replaceSection(d.text, "tasks", tasks);
+    return this.write(d, receipt ? appendAuthorization(text, receipt) : text, message, record);
   }
   private async write(d: PlanDocument, text: string, message: string, record: PhaseRecord): Promise<PlanOperationResult> {
     const result = await writeIfDocumentHash(d.path, d.document_hash, text);

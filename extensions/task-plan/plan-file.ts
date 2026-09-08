@@ -58,7 +58,7 @@ export function renderFrontmatter(metadata: PlanMetadata): string {
     "harness", "plan_id", "round", "stage", "stage_status",
     "approved_what_why_hash", "approved_plan_hash", "reviewed_tasks_hash", "closure_reason",
   ];
-  const keys = [...ordered.filter((k) => metadata[k] !== undefined && metadata[k] !== ""), ...Object.keys(metadata).filter((k) => !ordered.includes(k)).sort()];
+  const keys = [...ordered.filter((k) => metadata[k] !== undefined && metadata[k] !== ""), ...Object.keys(metadata).filter((k) => !ordered.includes(k) && metadata[k] !== undefined).sort()];
   return `---\n${keys.map((key) => `${key}: ${formatScalar(metadata[key])}`).join("\n")}\n---\n`;
 }
 
@@ -215,7 +215,8 @@ async function exists(path: string): Promise<boolean> {
 function parseScalar(value: string): unknown {
   if (value === "") return undefined;
   if (/^-?\d+$/.test(value)) return Number(value);
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) return value.slice(1, -1);
+  if (value.startsWith('"')) return JSON.parse(value);
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1).replace(/''/g, "'");
   return value;
 }
 
@@ -224,5 +225,5 @@ function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()
 function formatScalar(value: unknown): string {
   if (value === undefined || value === null) return "";
   const text = String(value);
-  return /[:#\n]|^\s|\s$/.test(text) ? JSON.stringify(text) : text;
+  return /[:#\n"\\]|^\s|\s$/.test(text) ? JSON.stringify(text) : text;
 }
