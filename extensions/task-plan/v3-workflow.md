@@ -1,16 +1,21 @@
 # Working with a readable Plan
 
-Start with `/plan` followed by what you want to do. The planner asks at most one currently blocking question, states reasonable nonblocking defaults, and saves the current requirements with a short checklist. A simple request may have just one task. Planning alone does not start implementation.
+Use `/plan` followed by what you want to do. It updates the selected Plan by default, including a fully completed Plan; it creates a file only when none exists. All additions and goal/scope changes stay in the same Markdown without judging whether they are related. Explicitly ask for a new/separate Plan, or use `/plan:new`, to create another file. The planner asks at most one currently blocking question, states reasonable nonblocking defaults, and saves the current requirements with a short checklist. A simple request may have just one task. Planning alone does not start implementation.
 
 | Action | How |
 |---|---|
-| Change requirements | Describe the change, or use `/plan:edit …` |
+| Add or change requirements in the same file | Describe the change, `/plan …`, or `/plan:edit …` |
+| Explicitly create another Plan | `/plan:new …` or explicitly ask for a new Plan |
 | Open an existing file | `/plan:open plans/001-example.md` |
 | See progress | `/plan:status` |
 | Review current code changes | `/plan:review` or `/plan:review focus on negative weights` |
 | Mark ordinary completion | `/plan:task T001 done`, or edit `[ ]` to `[x]` |
 | Reopen work | `/plan:task T001 open` |
 | Continue current work | Ask to execute the ready Plan (for example “继续” or “开始做”), or use `/plan:next` |
+
+The selected file remains the default after completion. Add new tasks or reopen affected work through the existing update rules; preserve unaffected progress and reply only with changes/impact. Without a selection, the existing discovery rule selects a unique unfinished Plan, or a unique completed Plan if no unfinished one exists. If selection is ambiguous, open the intended file; do not create another one as a workaround. A missing, malformed or unreadable selected file is an error to recover, not proof that no Plan exists. Selected V1/V2 files keep their read-only compatibility boundary; this policy does not migrate them.
+
+`plan_start` is guarded: when a Plan already exists it returns a redirect to `plan_get` and `plan_update`, without creating a file or overwriting requirements. The Agent must submit an intentional update after reading the source. Only an explicit Human new-Plan request uses `new_plan: true`; that flag expresses authoring intent, not an authenticated permission or a new execution grant. `/plan:new` queues this explicit creation request; it does not create a file until the Agent saves it. Direct low-level `ReadablePlanService.start` remains an explicit create API.
 
 After a ready Plan, a request to begin or continue implementation tells the Agent to call `plan_continue` and then use ordinary work tools. It receives the current requirements, checklist and first unfinished subtask position. `/plan:next` supplies the same handoff directly. Natural-language intent is interpreted by the model: continuing clarification or discussion does not start implementation, and merely approving a Plan is not an execution request. If the selected file cannot be read, the Agent receives the error and should recover the file or clarify its path rather than guess the work. Other ordinary work remains available.
 

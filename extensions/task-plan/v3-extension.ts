@@ -68,6 +68,15 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     const source = await selectedSource(cwd, path);
     if (source && source.format !== "v3") throw new Error("legacy_readonly: 旧文件请在原流程编辑，或明确整理当前需求后预览 V3；普通工作工具仍可使用。");
   };
+  // Only absence is a reason to create; ambiguity and selected-file failures propagate.
+  const existingPlan = async (cwd: string): Promise<ReadableSnapshot | undefined> => {
+    await editable(cwd);
+    try { return await service(cwd).peek(); }
+    catch (error) {
+      if (!state.currentPlanPath && error instanceof Error && error.message === "v3_no_plan") return undefined;
+      throw error;
+    }
+  };
   const remember = () => pi.appendEntry("pi-plan-readable", { currentPlanPath: state.currentPlanPath, modelSwitch: modelSwitchEntryData(state.modelSwitch) });
   const response = (content: string) => ({ content: [{ type: "text" as const, text: content }], details: { readable: true } });
   const failure = (error: unknown) => response(`未更新：${error instanceof Error ? error.message : String(error)}`);
@@ -86,11 +95,19 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
       const switched = await switchModel(ctx, params.mode); remember();
       return response(!options.modelConfig.enabled ? "模型自动切换已关闭，继续使用当前模型。" : switched ? `已切换到 ${params.mode} 模型偏好。按用户要求继续；阶段选择不增加执行权限，也不代表完成或审阅通过。` : "模型偏好暂不可用，继续使用当前模型；不要重复尝试切换。");
     } });
-  pi.registerTool({ name: "plan_start", label: "创建 Plan", description: "Save current deduplicated requirements and a rolling checklist. One task without subtasks is valid. Add detail only when useful; nearby unfinished tasks may be refined before execution. This does not start implementation.",
-    parameters: Type.Object({ title: Type.String(), brief: Type.String(), tasks }, { additionalProperties: false }), executionMode: "sequential",
+  pi.registerTool({ name: "plan_start", label: "创建 Plan", description: "Create a Plan only when none exists, or when the Human explicitly requests a new one (new_plan=true). Existing Plans, even completed ones, must normally be read and updated with plan_update. Save current deduplicated requirements and a rolling checklist. One task without subtasks is valid. Add detail only when useful; nearby unfinished tasks may be refined before execution. This does not start implementation.",
+    parameters: Type.Object({ title: Type.String(), brief: Type.String(), tasks, new_plan: Type.Optional(Type.Boolean({ description: "True only when the Human explicitly requested another/new Plan. Do not set it for added requirements, changed goals, completed work, or read failures." })) }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, signal, _update, ctx) {
       if (signal?.aborted) throw new Error("plan_start aborted");
-      try { const snapshot = await service(ctx.cwd).start(params.brief, params.title, params.tasks && normalizeTasks(params.tasks)); remember(); const result = view(snapshot); if (currentReadableTask(snapshot.plan)) result.content.push({ type: "text", text: PLAN_CONTINUE_HINT }); return result; } catch (error) { return failure(error); }
+      try {
+        const existing = params.new_plan === true ? undefined : await existingPlan(ctx.cwd);
+        if (existing) {
+          state.currentPlanPath = existing.path; remember();
+          return response(`已有当前 Plan：${existing.path}。未另建文件。先调用 plan_get 读取，再用 plan_update 原位补充需求和受影响任务；全部完成也继续更新这份文件。只有用户明确要求另开 Plan 时才设置 new_plan=true。`);
+        }
+        const snapshot = await service(ctx.cwd).start(params.brief, params.title, params.tasks && normalizeTasks(params.tasks)); remember();
+        const result = view(snapshot); if (currentReadableTask(snapshot.plan)) result.content.push({ type: "text", text: PLAN_CONTINUE_HINT }); return result;
+      } catch (error) { return failure(error); }
     } });
   pi.registerTool({ name: "plan_get", label: "读取 Plan", description: "Read the selected Plan without changing files. Markdown completion is accepted without runtime state.", parameters: Type.Object({ path: pathField }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, _signal, _update, ctx) { try { const old = await legacy(ctx.cwd, params.path, true); if (old) { remember(); return response(legacyViewText(old)); } const snapshot = await service(ctx.cwd).get(params.path); remember(); return view(snapshot); } catch (error) { return failure(error); } } });
@@ -145,15 +162,19 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
   } });
 
   const queue = (content: string) => pi.sendMessage({ customType: "pi-plan-readable-request", display: true, content }, { triggerTurn: true, deliverAs: "followUp" });
-  async function newPlan(args: string, ctx: ExtensionCommandContext) {
+  async function planRequest(args: string, ctx: ExtensionCommandContext, explicitNew = false) {
     const request = args.trim() || (ctx.hasUI ? (await ctx.ui.input("想做什么？", "直接描述需求即可"))?.trim() : undefined);
     if (!request) return;
-    // Model preferences must not make basic planning unavailable.
-    await switchModel(ctx, "planning");
-    remember(); queue(newReadablePlanPrompt(request));
+    try {
+      const existing = explicitNew ? undefined : await existingPlan(ctx.cwd);
+      if (existing) state.currentPlanPath = existing.path;
+      // Model preferences must not make basic planning unavailable.
+      await switchModel(ctx, "planning"); remember();
+      queue(existing ? reviseReadablePlanPrompt(request) : newReadablePlanPrompt(request, explicitNew));
+    } catch (error) { ctx.ui.notify(`未更新：${error instanceof Error ? error.message : String(error)}。请恢复或打开当前 Plan；未另建文件。`, "error"); }
   }
-  pi.registerCommand("plan", { description: "整理需求并建立简洁 Plan", handler: newPlan });
-  pi.registerCommand("plan:new", { description: "建立新的简洁 Plan", handler: newPlan });
+  pi.registerCommand("plan", { description: "默认原位更新当前 Plan；没有 Plan 时才创建", handler: (args, ctx) => planRequest(args, ctx) });
+  pi.registerCommand("plan:new", { description: "明确另建一份简洁 Plan", handler: (args, ctx) => planRequest(args, ctx, true) });
   pi.registerCommand("plan:edit", { description: "原位更新需求或任务", async handler(args, ctx) { if (!args.trim()) return ctx.ui.notify("用 /plan:edit 描述修改。", "info"); await switchModel(ctx, "planning"); queue(reviseReadablePlanPrompt(args)); } });
   pi.registerCommand("plan:review", { description: "使用审阅模型检查代码，不改变任务状态", async handler(args, ctx) {
     await switchModel(ctx, "review"); remember();
