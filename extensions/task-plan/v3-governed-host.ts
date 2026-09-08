@@ -6,6 +6,7 @@ import { currentReadableTask } from "./v3-format.ts";
 import { readReadablePlan, type ReadablePlanSnapshot } from "./v3-file.ts";
 import type { SandboxedProcessRequest, SandboxedProcessResult } from "./execution-sandbox.ts";
 import type { V3Governed, V3GovernedAction, V3GovernedStatus } from "./v3-governed.ts";
+import type { TaskPlanModelPreset } from "./model-switch.ts";
 
 /** Trusted host composition only. Never accept a factory or context from a model tool. */
 export type V3GovernedFactory = (path: string, ctx: ExtensionContext) => V3Governed | Promise<V3Governed>;
@@ -68,9 +69,13 @@ function summary(action: CommandAction, status: V3GovernedStatus): string {
 /** Only explicit Human commands select actors. A model run cannot configure or discover a runtime. */
 export class V3GovernedHost {
   readonly #factory: V3GovernedFactory;
+  readonly #reviewModel?: TaskPlanModelPreset;
   readonly #actors = new Map<string, V3Governed>();
   #generation = 0;
-  constructor(factory: V3GovernedFactory) { this.#factory = factory; }
+  constructor(factory: V3GovernedFactory, reviewModel?: TaskPlanModelPreset) {
+    this.#factory = factory;
+    this.#reviewModel = reviewModel === undefined ? undefined : structuredClone(reviewModel);
+  }
   clear(): void { this.#generation++; this.#actors.clear(); }
   private live(generation: number): void { if (generation !== this.#generation) v3Fail("governed_selection_cleared"); }
   private binding(actor: V3Governed, source: ReadablePlanSnapshot): void {
@@ -111,7 +116,7 @@ export class V3GovernedHost {
     } else {
       result = selectedAction === "prepare" ? await actor.prepare()
         : selectedAction === "verify" ? await actor.verify()
-        : selectedAction === "review" ? await actor.review()
+        : selectedAction === "review" ? await actor.review(this.#reviewModel === undefined ? undefined : structuredClone(this.#reviewModel))
         : await actor.status();
     }
     return summary(selectedAction, result);

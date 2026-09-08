@@ -40,7 +40,7 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
   const governedFactory = options.governed;
   const optionalHost = async (generation: number) => {
     if (!governedFactory) throw new Error("未配置受控执行；普通 Plan 和工作工具可以继续使用。");
-    if (!governedHost) { const { V3GovernedHost } = await import("./v3-governed-host.ts"); if (generation !== governedGeneration) throw new Error("governed_session_changed"); governedHost ??= new V3GovernedHost(governedFactory); }
+    if (!governedHost) { const { V3GovernedHost } = await import("./v3-governed-host.ts"); if (generation !== governedGeneration) throw new Error("governed_session_changed"); governedHost ??= new V3GovernedHost(governedFactory, options.modelConfig.enabled ? options.modelConfig.review : undefined); }
     if (generation !== governedGeneration) throw new Error("governed_session_changed");
     return governedHost;
   };
@@ -81,7 +81,8 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
 
   pi.registerTool({ name: "plan_set_mode", label: "选择工作阶段", description: "Before drafting a Plan, performing ordinary work, or reviewing code, select planning, normal, or review to apply the globally configured model preference. This grants no permissions and does not create independent review evidence. Do not repeatedly retry an unavailable preference.",
     parameters: Type.Object({ mode: Type.Union([Type.Literal("planning"), Type.Literal("normal"), Type.Literal("review")]) }, { additionalProperties: false }), executionMode: "sequential",
-    async execute(_id, params, _signal, _update, ctx) {
+    async execute(_id, params, signal, _update, ctx) {
+      signal?.throwIfAborted();
       const switched = await switchModel(ctx, params.mode); remember();
       return response(!options.modelConfig.enabled ? "模型自动切换已关闭，继续使用当前模型。" : switched ? `已切换到 ${params.mode} 模型偏好。按用户要求继续；阶段选择不增加执行权限，也不代表完成或审阅通过。` : "模型偏好暂不可用，继续使用当前模型；不要重复尝试切换。");
     } });

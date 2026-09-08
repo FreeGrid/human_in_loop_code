@@ -7,6 +7,7 @@ Start with `/plan` followed by what you want to do. The planner asks at most one
 | Change requirements | Describe the change, or use `/plan:edit …` |
 | Open an existing file | `/plan:open plans/001-example.md` |
 | See progress | `/plan:status` |
+| Review current code changes | `/plan:review` or `/plan:review focus on negative weights` |
 | Mark ordinary completion | `/plan:task T001 done`, or edit `[ ]` to `[x]` |
 | Reopen work | `/plan:task T001 open` |
 | Continue current work | Ask to execute the ready Plan (for example “继续” or “开始做”), or use `/plan:next` |
@@ -15,9 +16,35 @@ After a ready Plan, a request to begin or continue implementation tells the Agen
 
 Only the current task receives new detail. Completed tasks retain their subtasks and each subtask’s checkbox, so the work remains readable later. During authorized ordinary work, the Agent updates each finished subtask without waiting for a separate Human checkbox request. The last completed subtask automatically checks its parent; reopening a child reopens its parent. Unfinished or failed work stays unchecked. Tasks without children can be completed directly. Explicit Human/manual parent checks remain available. Reopening or selecting a task also preserves recorded children. The next task is refined when needed. Changing requirements replaces the old wording in place; affected completed work reopens by default. You remain free to mark work complete yourself. Edits normally report only their changes and impact rather than printing the entire Plan again.
 
-The ordinary tools are `plan_start`, `plan_get`, `plan_update`, `plan_refine`, `plan_set_task_status`, `plan_select`, `plan_status`, and `plan_continue`. They work without a signing key, journal, execution approval or hidden state. A copied readable file can be opened in a fresh session. If another editor changes a file after it was read, reread it before retrying the edit. No command blocks ordinary host tools merely because a Plan is selected.
+The ordinary tools are `plan_set_mode`, `plan_start`, `plan_get`, `plan_update`, `plan_refine`, `plan_set_task_status`, `plan_select`, `plan_status`, and `plan_continue`. They work without a signing key, journal, execution approval or hidden state. A copied readable file can be opened in a fresh session. If another editor changes a file after it was read, reread it before retrying the edit. No command blocks ordinary host tools merely because a Plan is selected.
 
-Preferred planning/execution model settings are optional. If that model is unavailable, the current model can still plan and work. The file never stores model settings.
+Model preferences for planning, normal execution and review are configured globally through environment variables read when the extension loads. Set them in your shell startup file before launching Pi, then restart/reload the extension after changing them. A running process does not reread later shell changes. The file never stores model settings.
+
+| Stage | Provider | Model ID | Thinking level |
+|---|---|---|---|
+| Planning | `PI_TASK_PLAN_PLANNING_MODEL_PROVIDER` | `PI_TASK_PLAN_PLANNING_MODEL_ID` | `PI_TASK_PLAN_PLANNING_THINKING` |
+| Execution | `PI_TASK_PLAN_NORMAL_MODEL_PROVIDER` | `PI_TASK_PLAN_NORMAL_MODEL_ID` | `PI_TASK_PLAN_NORMAL_THINKING` |
+| Review | `PI_TASK_PLAN_REVIEW_MODEL_PROVIDER` | `PI_TASK_PLAN_REVIEW_MODEL_ID` | `PI_TASK_PLAN_REVIEW_THINKING` |
+
+For example, these values reproduce the built-in presets; replace the IDs/providers with models configured in your Pi installation:
+
+```sh
+export PI_TASK_PLAN_PLANNING_MODEL_PROVIDER=openai-codex
+export PI_TASK_PLAN_PLANNING_MODEL_ID=gpt-6-astra
+export PI_TASK_PLAN_PLANNING_THINKING=xhigh
+export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=openai-codex
+export PI_TASK_PLAN_NORMAL_MODEL_ID=gpt-6-astra
+export PI_TASK_PLAN_NORMAL_THINKING=medium
+export PI_TASK_PLAN_REVIEW_MODEL_PROVIDER=openai-codex
+export PI_TASK_PLAN_REVIEW_MODEL_ID=gpt-6-astra
+export PI_TASK_PLAN_REVIEW_THINKING=xhigh
+```
+
+Existing `PI_TASK_PLAN_MODEL_PROVIDER` and `PI_TASK_PLAN_MODEL_ID` remain common fallbacks; explicit stage variables override them. Existing `PI_TASK_PLAN_THINKING` remains a planning alias. Thinking values are `off`, `minimal`, `low`, `medium`, `high`, `xhigh` (existing aliases remain accepted). Explicit host configuration overrides environment values per preset field. `PI_TASK_PLAN_MODEL_SWITCH=0` disables automatic model switching. The default `PI_TASK_PLAN_RESTORE_MODE=configured` selects the configured execution model; `previous` instead restores the model and thinking level saved before entering planning or review.
+
+`/plan` and `/plan:edit` select planning; `/plan:next` and `plan_continue` select execution; `/plan:review` selects review. For natural-language activities the Agent is instructed to call `plan_set_mode` before drafting, implementation or review; natural-language selection still depends on the model following that instruction. Recording execution progress alone does not switch back to planning. Missing models or authentication produce a notice and leave ordinary work on the current model.
+
+Ordinary `/plan:review` asks the current session to inspect actual changes and report findings without editing files or checklist. It is not independent Harness acceptance. Optional governed review receives the review preset through its trusted reviewer callback, rather than changing the implementer model; the embedding host must honor that request when launching the independent reviewer (see the governed guide). The legacy entry retains its existing two-stage command routing; the new ordinary review entry is V3.
 
 The host defaults to V3. `plan_get` and `/plan:open` can also display the title and checklist of existing V1/V2 files without importing their old planning layers into ordinary context. These old files are read-only through the V3 tools; their bytes and execution records stay intact. Unsupported historical sketches are rejected without rewriting them. An explicit migration-preview request can supply a new current brief and checklist to `plan_migration_preview`. The preview writes no file, transfers no execution evidence and has no apply action.
 
