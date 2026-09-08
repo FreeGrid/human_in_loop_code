@@ -11,13 +11,13 @@ those decisions visible, reviewable, and recoverable.
 ## From ownership to approved execution
 
 ```text
-repository boundaries     durable Human gates      coordinated execution
+repository boundaries     current requirements     coordinated execution
     control-init       ->       task-plan        ->  collaborating-agents
 ```
 
 The arrows show the recommended sequence, not runtime dependencies. The three
 extensions can be used independently: workspace governance establishes ownership,
-Task Plan records approval and progress, and collaborating Agents carry out
+Task Plan keeps current requirements and progress, and collaborating Agents carry out
 scoped work. A subagent result is evidence to review, not automatic acceptance.
 
 ### 1. Control Init: make ownership and boundaries durable
@@ -51,47 +51,34 @@ configurable specialist roles.
 
 [Read the Collaborating Agents guide](extensions/collaborating-agents/README.md)
 
-### 3. Task Plan: preserve decisions across planning and execution
+### 3. Task Plan: keep current requirements and a rolling checklist
 
-A long planning conversation should not be the only place that knows what was
-approved or what remains unfinished. Task Plan keeps requirements, the staged
-approach, executable work and acceptance criteria in one Markdown file. Planning
-approval and execution authorization are separate Human gates.
+Use `/plan` with a natural-language request to create a readable V3 file. The
+Planner consolidates the current requirements, asks at most one blocking question
+and expands only the current task. Simple requests may have one task. Changes
+replace old wording in place; completed work keeps its checked line without
+results, summaries or execution records.
 
-`/plan:execute [plan-path]` starts or resumes one approved phase. Work reports
-leave bounded notes in that Plan; “implemented” does not prematurely mean “done”.
-`/plan:finalize T001` checks the entire phase before writing its completion markers
-together. Resume retains the original execution identity, repository binding and
-DocSync decision rather than silently starting a fresh comparison baseline.
+Humans may check tasks directly. `/plan:task T001 done` records ordinary completion,
+`/plan:status` shows the short checklist, and `/plan:next` continues ordinary work.
+A copied Plan needs no hidden runtime or certification. Planning alone does not
+request implementation.
 
-Documentation impact now starts from **what actually changed**, not just an Agent's
-summary. The default Git provider preserves the phase's original dirty/untracked
-state across stage, commit and Session changes. A standalone dependency map turns
-final content changes into document obligations; uncovered code and user-visible
-changes also prompt a distinct README narrative question, even when README was
-already edited. This connects execution evidence back to the explanation users need.
+Configured hosts may explicitly choose an additional governed flow, retaining
+Human authority, scoped execution, actual verification and independent review
+behind the readable file. Its unavailable state does not block ordinary work.
+Existing V1/V2 files have a read-only view and explicit migration preview; their
+original lifecycle remains available through `legacy-index.ts`.
 
-**Current delivery boundary:** real Git baselines and deterministic candidates are
-available; the DocSync decision/debt gate and Maintainer writer are not yet supplied.
-Candidates remain pending, never proof of synchronization. DocSync on therefore
-still blocks finalization without a gate; an explicit Human off records skipped
-while retaining baseline and Task acceptance checks. Missing or malformed dependency
-policy does not prevent a trusted baseline or Human off, but candidate construction
-reports the policy error rather than returning an empty success.
+[Read the ordinary Task Plan guide](extensions/task-plan/README.md) ·
+[Optional governed execution](extensions/task-plan/v3-governed.md) ·
+[Legacy execution and DocSync](extensions/task-plan/legacy-workflow.md)
 
-[Configure dependencies and inspect candidate facts](extensions/task-plan/docsync/README.md)
-
-[Read the Task Plan execution guide](extensions/task-plan/README.md)
-
-`/plan` switches the current main session to a dedicated planning preset before
-it queues plan drafting. By default the planning preset is
-`openai-codex/gpt-6-astra` with thinking level `xhigh` (Extra high). When the
-plan enters execution, completes, or is abandoned, the extension switches back
-to the normal coding preset: `openai-codex/gpt-6-astra` with thinking level
-`medium`.
-
-The switch uses Pi's current-session model API, not a subagent, so the
-conversation context stays in the main Agent.
+`/plan` requests the planning preset: `openai-codex/gpt-6-astra` with thinking
+level `xhigh`. `/plan:next` or `plan_continue` requests the normal coding preset:
+`openai-codex/gpt-6-astra` with thinking level `medium`. These settings use Pi's
+current-session model API. Unavailable model preferences leave ordinary planning
+and work available with the current model; checking a task does not switch models.
 
 Configuration is available through environment variables:
 
@@ -115,8 +102,9 @@ export PI_TASK_PLAN_RESTORE_MODE=previous
 
 Package consumers that import the extension directly can also pass a
 `TaskPlanExtensionConfig` object to the default task-plan extension factory. It
-extends the model-switch configuration with an optional `phase` provider adapter
-set; the default has no test doubles or automatically passing adapters.
+extends model preferences with an optional trusted `governed` factory. Explicit
+legacy configuration is awaitable; the default has no test doubles or automatically
+passing verification adapters.
 
 ## Installation
 
@@ -180,9 +168,9 @@ installing or updating the package so the extensions and skill are reloaded.
 
 1. Run `/control:init` or ask Pi in natural language to initialize the named
    repositories. Review the complete preview before approving any write.
-2. Use `/plan` when the work needs structured planning. Review the requirements,
-   Plan and Tasks, then separately authorize execution. Phase execution additionally
-   requires the provider capabilities described in the Task Plan guide.
+2. Use `/plan` to keep current requirements and a rolling checklist. Refine the
+   current task when ready to work, and check completed tasks yourself. Request
+   implementation separately; the additional governed flow is optional.
 3. Explicitly assign approved work. Use `/subagent` or let an orchestrator use
    the `subagent` tool when delegation or context isolation is worthwhile.
 4. Use `/agents` to inspect active Agents, messages, and file reservations;
