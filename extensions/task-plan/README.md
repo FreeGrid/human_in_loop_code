@@ -23,7 +23,10 @@ Change requirements in place with `/plan:edit …`. Use `/plan:status` for progr
 
 Planning, execution and review have separate global model preferences. They currently
 all default to `custom-qwen/qwen38-27b-fp8` (the locally registered Qwen 3.8 model),
-with thinking `off`. Use the exact provider/model registered in your Pi installation.
+with thinking `high` for planning/review and `medium` for execution. Enable reasoning
+in the Pi model registration; for vLLM use `qwen-chat-template` compatibility.
+That format maps both levels to thinking enabled, not separate token budgets.
+Use the exact provider/model registered in your Pi installation.
 
 | Stage | Model ID variable | Entry |
 |---|---|---|

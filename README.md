@@ -76,8 +76,8 @@ original lifecycle remains available through `legacy-index.ts`.
 
 Planning, ordinary execution and review have separate global model presets. All
 three currently default to the locally registered Qwen model
-`custom-qwen/qwen38-27b-fp8` (Qwen 3.8), with thinking `off` because that registration
-has reasoning disabled. This provider/model must exist in your Pi model registry;
+`custom-qwen/qwen38-27b-fp8` (Qwen 3.8), with thinking `high` for planning/review
+and `medium` for execution. This provider/model must exist in your Pi model registry;
 otherwise a notice is shown and ordinary work continues with the current model.
 
 - `/plan` and `/plan:edit` select the planning model.
@@ -94,15 +94,24 @@ Set these environment variables before starting Pi (for example in `~/.zshrc`):
 export PI_TASK_PLAN_MODEL_SWITCH=1
 export PI_TASK_PLAN_PLANNING_MODEL_PROVIDER=custom-qwen
 export PI_TASK_PLAN_PLANNING_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_PLANNING_THINKING=off
+export PI_TASK_PLAN_PLANNING_THINKING=high
 export PI_TASK_PLAN_NORMAL_MODEL_PROVIDER=custom-qwen
 export PI_TASK_PLAN_NORMAL_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_NORMAL_THINKING=off
+export PI_TASK_PLAN_NORMAL_THINKING=medium
 export PI_TASK_PLAN_REVIEW_MODEL_PROVIDER=custom-qwen
 export PI_TASK_PLAN_REVIEW_MODEL_ID=qwen38-27b-fp8
-export PI_TASK_PLAN_REVIEW_THINKING=off
+export PI_TASK_PLAN_REVIEW_THINKING=high
 export PI_TASK_PLAN_RESTORE_MODE=configured
 ```
+
+For a self-hosted Qwen/vLLM endpoint, the model entry in Pi's `models.json`
+must have `reasoning: true` and `compat.thinkingFormat: "qwen-chat-template"`.
+Keep `compat.supportsReasoningEffort: false` when the endpoint does not accept
+OpenAI-style effort values. Pi then sends `chat_template_kwargs.enable_thinking`
+(and preserves thinking history). In this format high/medium both enable thinking;
+they do not set different token budgets. These are client request settings, not
+proof of how the deployed server/model handles reasoning. See the
+[Qwen vLLM deployment guide](https://github.com/QwenLM/Qwen3/blob/main/docs/source/deployment/vllm.md).
 
 Each stage can be changed independently. Existing `PI_TASK_PLAN_MODEL_PROVIDER`
 and `PI_TASK_PLAN_MODEL_ID` remain common fallbacks; explicit stage variables win.

@@ -25,9 +25,9 @@ export interface TaskPlanModelSwitchState {
 
 export const DEFAULT_TASK_PLAN_MODEL_CONFIG: Required<TaskPlanModelSwitchConfig> = {
   enabled: true,
-  planning: { provider: "custom-qwen", model: "qwen38-27b-fp8", thinkingLevel: "off" },
-  normal: { provider: "custom-qwen", model: "qwen38-27b-fp8", thinkingLevel: "off" },
-  review: { provider: "custom-qwen", model: "qwen38-27b-fp8", thinkingLevel: "off" },
+  planning: { provider: "custom-qwen", model: "qwen38-27b-fp8", thinkingLevel: "high" },
+  normal: { provider: "custom-qwen", model: "qwen38-27b-fp8", thinkingLevel: "medium" },
+  review: { provider: "custom-qwen", model: "qwen38-27b-fp8", thinkingLevel: "high" },
   restoreMode: "configured",
 };
 
