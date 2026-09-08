@@ -104,7 +104,8 @@ export async function inspectDocumentationImpact(input: DeliveryImpactInput): Pr
     else if (!mapped) unresolved.push(`Unmapped changed path requires documentation impact review: ${change.path}`);
   }
   const isDoc = (path: string) => match(docPaths, path) || targets.has(path) || match(policy?.config?.classification.docs ?? [], path);
-  const selected = [...new Set([...targets, ...enumeration.filter(p => match([...codePaths, ...docPaths], p))])].sort();
+  const searchDomains = [...codePaths, ...docPaths, ...policy?.config?.classification.docs ?? []];
+  const selected = [...new Set([...targets, ...enumeration.filter(p => match(searchDomains, p)), ...scope.localPaths.filter(p => match(searchDomains, p))])].sort();
   if (selected.length > 128) unresolved.push(`Inspection file limit exceeded: ${selected.length} selected; only 128 inspected`);
   const facts: Array<{ path: string; identity: string; budget: number }> = [];
   const references: DeliveryImpact["references"] = [];
@@ -135,7 +136,7 @@ export async function inspectDocumentationImpact(input: DeliveryImpactInput): Pr
   if ((await inspectDeliveryScope(input)).version !== scope.version) throw new Error("Delivery scope changed during inspection");
   const issues = [...new Set(unresolved)];
   const report = { scope, context: "current-worktree" as const, contextHead, candidates: [...candidates].sort(([a], [b]) => a.localeCompare(b)).map(([path, reasons]) => ({ path, reasons: [...reasons].sort() })), references, unresolved: issues.length > 64 ? [...issues.slice(0, 63), `${issues.length - 63} additional unresolved questions omitted; narrow the scope`] : issues };
-  const domains = [...codePaths, ...docPaths, ...mappings.flatMap(m => m.docs)];
+  const domains = [...searchDomains, ...mappings.flatMap(m => m.docs)];
   const relevantEnumeration = enumeration.filter(p => match(domains, p) || targets.has(p));
   return { ...report, version: `sha256:${digest(JSON.stringify({ report, mappings, terms, codePaths, docPaths, governanceRoot, policy, enumeration: relevantEnumeration, selected, facts }))}` };
 }
