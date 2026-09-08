@@ -248,6 +248,16 @@ update is applied. This does not prevent ordinary Codex file editing.
 
 ## Compatibility and removal
 
+The generated rules also include lightweight documentation synchronization:
+update related docs as user-visible behavior stabilizes, then check related
+delivery changes once before completing a major task or delivering a PR. Use
+PR base/head commits or explicit ranges (each stacked PR's own base), include
+related local work, and follow source/document mappings and relevant references
+with bounded context. A touched document or empty search result is not semantic
+verification. Ordinary Codex/Pi editing needs no DocSync runtime, extra document
+task or separate Agent. These rules use the same explicit template-refresh
+workflow for existing workspaces described above.
+
 Control-init was verified against
 `@mariozechner/pi-coding-agent@0.73.1` on Node.js `>=20.6.0`. Other Pi versions
 are unverified. Internal JSON and Markdown templates load relative to the
