@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Retain recorded V3 subtasks and their checkboxes after completion, reopening and task selection; ordinary completion changes only the parent checkbox.
+- Retain recorded V3 subtasks after completion, reopening and task selection. Ordinary child progress automatically completes the parent after the last child, and reopening a child reopens the parent; governed finalize checks the accepted task and its retained children after verification/review.
 
 - Default Task Plan to readable `pi-plan/v3`: current requirements, current-only rolling detail, concise edits and ordinary manual completion without runtime state.
 - Preserve V1/V2 through explicit `legacy-index.ts` selection and read-only views; migration remains preview-only. Named legacy APIs moved to that entry, and legacy configuration through the default entry is awaitable.
