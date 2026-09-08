@@ -87,6 +87,19 @@ the control repository or pass its exact path; when no index exists at the
 resolved location, status asks for that path instead of incorrectly asking you
 to initialize again.
 
+After restarting Pi or when initialization succeeded but Pi stayed in the old
+directory, enter the already initialized workspace with:
+
+```text
+/control:enter /exact/path/to/name_control
+```
+
+Replace the example with your control repository's full path. Do not rerun
+`/control:init` just to enter it. In the same session that initialized the
+workspace, `/control:enter` alone uses the remembered path; after restarting,
+provide the full path. With `--no-session`, start Pi from the control directory
+using the displayed `cd ... && pi` command instead.
+
 Before asking about exceptions, the wizard displays the selected profile's
 default ownership, privacy, dependency, approval, delivery, and delegation
 rules. It then renders the candidate index plus the exact managed AGENTS

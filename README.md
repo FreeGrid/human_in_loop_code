@@ -207,6 +207,11 @@ installing or updating the package so the extensions and skill are reloaded.
 
 1. Run `/control:init` or ask Pi in natural language to initialize the named
    repositories. Review the complete preview before approving any write.
+   After Agent-tool initialization, run `/control:enter` to enter control.
+   If you restart Pi or initialization succeeded but the directory did not
+   switch, use `/control:enter /exact/path/to/name_control`, replacing the
+   example with the initialized control repository's full path. You do not
+   need to initialize it again.
 2. Use `/plan` to keep current requirements and a rolling checklist. Refine the
    current task when ready to work, and check completed tasks yourself. Request
    implementation separately; the additional governed flow is optional.
