@@ -7,6 +7,7 @@ import { readReadablePlan, writeReadablePlan, type ReadablePlanSnapshot } from "
 import { prepareReadableContract, readableContractMatches, textV3, v3Fail, type ReadableContract, type ReadableCriterion, type ReadableExecutionPolicy } from "./v3-contract.ts";
 import { v3BytesHash, v3ProjectionKind, type V3ExecutionRevision, type V3Projection, type V3Runtime, type V3RuntimeSnapshot, type V3RuntimeState } from "./v3-runtime.ts";
 import { assertV3Sandbox, captureV3Baseline, inspectV3Scope, v3ContentVersion } from "./v3-scope.ts";
+import type { TaskPlanModelPreset } from "./model-switch.ts";
 
 export type V3GovernedAction = "approve_contract" | "authorize_execution" | "finalize" | "recover";
 export interface V3GovernedConfiguration {
@@ -16,7 +17,8 @@ export interface V3GovernedConfiguration {
   policy: (plan: ReadablePlan) => ReadableExecutionPolicy | Promise<ReadableExecutionPolicy>;
   sandbox: (contract: ReadableContract) => ExecutionSandbox | Promise<ExecutionSandbox>;
   verification: (request: { contract: ReadableContract; criterion: ReadableCriterion; input: VerificationInput; sandbox: ExecutionSandbox }) => VerificationAuthority | Promise<VerificationAuthority>;
-  reviewer: (request: { contract: ReadableContract; verification_refs: string[]; content_version: string; implementer_session_id: string }) => ReviewAuthority | Promise<ReviewAuthority>;
+  /** Trusted host must honor the optional model request when launching its independent reviewer. */
+  reviewer: (request: { contract: ReadableContract; verification_refs: string[]; content_version: string; implementer_session_id: string; model?: TaskPlanModelPreset }) => ReviewAuthority | Promise<ReviewAuthority>;
 }
 export interface V3GovernedStatus {
   mode: "optional_governed";
@@ -213,12 +215,13 @@ export class V3Governed {
       const receipt = assertVerificationEvidence(matches[0], this.#config.signer, this.input(revision, criterion, content)); await verifyArtifactContents(receipt); refs.push(receipt.receipt_hash);
     } return refs;
   }
-  async review(): Promise<V3GovernedStatus> {
+  async review(model?: TaskPlanModelPreset): Promise<V3GovernedStatus> {
+    const requestedModel = model === undefined ? undefined : structuredClone(model);
     await this.#config.runtime.transaction(async tx => {
       const source = await this.source(); let snapshot = await tx.read(); const { state, revision } = await this.bound(snapshot, source, tx.save);
       const content = await this.content(revision); await this.dependencies(state, source.plan, revision); const refs = await this.verificationRefs(revision, content);
       revision.review = null; snapshot = await tx.save(state, snapshot);
-      const reviewer = await this.#config.reviewer({ contract: structuredClone(revision.contract), verification_refs: [...refs], content_version: content, implementer_session_id: revision.implementer_session_id });
+      const reviewer = await this.#config.reviewer({ contract: structuredClone(revision.contract), verification_refs: [...refs], content_version: content, implementer_session_id: revision.implementer_session_id, ...(requestedModel === undefined ? {} : { model: requestedModel }) });
       const review = await runReview(reviewer, { node_id: revision.contract.node_id, contract_hash: revision.contract.contract_hash, risk: "high" });
       revision.review = review; snapshot = await tx.save(state, snapshot);
       this.reviewRef(revision, refs);
