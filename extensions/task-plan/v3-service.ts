@@ -21,7 +21,16 @@ export interface ReadableRevision {
 
 const meaning = (text: string) => text.trim().replace(/\s+/gu, " ");
 const childMeaning = (task: ReadableTask) => JSON.stringify(task.subtasks.map(item => meaning(item.text)).sort());
-const childChecks = (task: ReadableTask) => JSON.stringify(task.subtasks.map(item => JSON.stringify([meaning(item.text), item.completed])).sort());
+function childChecks(task: ReadableTask): string {
+  // Match the authoring adapter's text-plus-occurrence identity. Distinct labels
+  // may move without changing their status, but duplicate occurrences must not merge.
+  const checks = new Map<string, boolean[]>();
+  for (const item of task.subtasks) {
+    const text = meaning(item.text), occurrences = checks.get(text) ?? [];
+    occurrences.push(item.completed); checks.set(text, occurrences);
+  }
+  return JSON.stringify([...checks.keys()].sort().map(text => [text, checks.get(text)]));
+}
 const clone = <T>(value: T): T => structuredClone(value);
 function rollUpCompletion(task: ReadableTask): void {
   if (task.subtasks.length) task.completed = task.subtasks.every(item => item.completed);
