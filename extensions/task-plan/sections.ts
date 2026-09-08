@@ -72,3 +72,31 @@ export function extractAllSections(text: string): Record<SectionName, string> {
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+export interface NativeSections { prefix: string; what_why: string; strategy: string; nodes: string; review: string }
+/** Native V2 has one canonical Nodes region and no persisted Plan/Tasks projections. */
+export function extractNativeSections(body: string): NativeSections {
+  const names = ["what-why", "strategy", "nodes", "review"] as const;
+  const spans: Array<{name: typeof names[number]; start: number; contentStart: number; end: number; after: number}> = [];
+  let previous = -1;
+  for (const name of names) {
+    const start = `<!-- pi-plan:${name}:start -->`, end = `<!-- pi-plan:${name}:end -->`;
+    if (body.split(start).length !== 2 || body.split(end).length !== 2) throw new Error(`invalid_native_section_count: ${name}`);
+    const a=body.indexOf(start), b=body.indexOf(end);
+    if (a<=previous || b<a) throw new Error("invalid_native_section_order");
+    for (const [at,token] of [[a,start],[b,end]] as const) if ((at>0&&body[at-1]!=="\n") || !/^(?:\r?\n|$)/.test(body.slice(at+token.length))) throw new Error("invalid_native_marker_line");
+    if (previous>=0 && body.slice(previous,a).trim()) throw new Error("unowned_native_document_content");
+    spans.push({name,start:a,contentStart:a+start.length,end:b,after:b+end.length}); previous=b+end.length;
+  }
+  if(body.slice(previous).trim()) throw new Error("unowned_native_document_content");
+  const nodes=spans[2]!;
+  for(const match of body.matchAll(/<!--\s*pi-plan:/gi)) {
+    const at=match.index!;
+    const token=body.slice(at).match(/^<!-- pi-plan:(?:(?:what-why|strategy|nodes|review):(?:start|end)|(?:phase:T\d{3}|execution:T\d{3}\.W\d{3}):(?:start|end)) -->/)?.[0];
+    if(!token)throw new Error("unknown_or_malformed_native_marker");
+    if(/^<!-- pi-plan:(phase|execution):/.test(token)&&!(at>=nodes.contentStart&&at<nodes.end))throw new Error("misplaced_native_record_marker");
+  }
+  const result: NativeSections={prefix:body.slice(0,spans[0]!.start),what_why:"",strategy:"",nodes:"",review:""};
+  for(const span of spans)result[span.name.replace("-","_") as Exclude<keyof NativeSections,"prefix">]=body.slice(span.contentStart,span.end).replace(/\r\n/g,"\n").trim();
+  return result;
+}

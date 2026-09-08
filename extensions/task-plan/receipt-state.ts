@@ -1,4 +1,5 @@
 import { parseStrictJson } from "./plan-text.ts";
+import { nodeDeclaredContractHash } from "./plan-identity.ts";
 import { canonicalHash } from "./authority.ts";
 import { assertFinalizeEvidence, assertVerificationEvidence, assertReviewEvidence, type FinalizeDependencyRef, type ReceiptSigner, type ReviewAuthority, type ReviewEvidence, type Risk, type SealedEvidence, type VerificationAuthority, type VerificationInput } from "./evidence.ts";
 import { canonicalTaskDefinition, parseTasks, taskField } from "./tasks.ts";
@@ -15,6 +16,8 @@ export interface EvidenceRuntime {
   implementer_session_id: string;
   reviewer?: ReviewAuthority;
   minimum_risk?: Risk;
+  /** Trusted verifier/reviewer policy version. Changing it invalidates node-v1 evidence. */
+  policy_id?: string;
   verificationAuthority?: (request: Readonly<VerificationInput>, context: Readonly<PhaseContext>) => Promise<VerificationAuthority>;
 }
 const risks: Risk[] = ["low", "medium", "high", "unknown"];
@@ -37,9 +40,15 @@ export function nodeEvidencePolicy(task: TaskBlock): NodeEvidencePolicy {
   }
   return v;
 }
-export function nodeContractHash(document: PlanDocument, nodeId: string): string {
+export function nodeContractHash(document: PlanDocument, nodeId: string, runtime?: EvidenceRuntime, dependencies?: FinalizeDependencyRef[]): string {
   const task = parseTasks(document.sections.tasks).find(t => t.id === nodeId) ?? fail("unknown_contract_node");
   nodeEvidencePolicy(task); // Reject malformed policy before deriving identity.
+  if (document.metadata.identity_policy === "node-v1") {
+    if (!runtime) fail("capability_unavailable: node identity requires trusted evidence runtime");
+    const policy = runtime.policy_id ?? "controller-evidence/v1";
+    if (!text(policy)) fail("invalid_runtime_policy_id");
+    return canonicalHash({schema:"pi-plan/execution/node-v1", declared_contract_hash:nodeDeclaredContractHash(document,nodeId), risk:effectiveNodeRisk(task,runtime), policy_id:policy, dependency_refs:dependencies ?? dependencyFinalizations(document,nodeId,runtime)});
+  }
   return canonicalHash({ plan_id: document.metadata.plan_id, node_id: nodeId, definition: canonicalTaskDefinition(task.definition) });
 }
 export function effectiveNodeRisk(task: TaskBlock, runtime: EvidenceRuntime): Risk {
@@ -48,10 +57,10 @@ export function effectiveNodeRisk(task: TaskBlock, runtime: EvidenceRuntime): Ri
   if (!risks.includes(floor)) fail("invalid_runtime_risk_floor");
   return risks[Math.max(risks.indexOf(declared),risks.indexOf(floor))]!;
 }
-export function verificationInputFor(document: PlanDocument, nodeId: string, acceptanceId: string, contentVersion: string): VerificationInput {
+export function verificationInputFor(document: PlanDocument, nodeId: string, acceptanceId: string, contentVersion: string, runtime?: EvidenceRuntime, dependencies?: FinalizeDependencyRef[]): VerificationInput {
   const task = parseTasks(document.sections.tasks).find(t => t.id === nodeId) ?? fail("unknown_contract_node");
   const method = nodeEvidencePolicy(task).verification[acceptanceId] ?? fail("verification_plan_required: every Acceptance needs an approved verification method");
-  return { acceptance_id: acceptanceId, contract_hash: nodeContractHash(document,nodeId), content_version: contentVersion, ...method };
+  return { acceptance_id: acceptanceId, contract_hash: nodeContractHash(document,nodeId,runtime,dependencies), content_version: contentVersion, ...method };
 }
 export function readReviewEvidence(document: PlanDocument): Record<string, SealedEvidence<ReviewEvidence>> {
   const raw = document.metadata.review_receipts;
@@ -67,11 +76,11 @@ export function writeReviewEvidence(text: string, nodeId: string, evidence: Seal
   if (!object(previous)) fail("invalid_review_receipts");
   return replaceFrontmatter(text,{...metadata,review_receipts:JSON.stringify({...previous,[nodeId]:evidence})});
 }
-export function requireNodeReview(document: PlanDocument, nodeId: string, runtime: EvidenceRuntime | undefined): ReviewEvidence {
+export function requireNodeReview(document: PlanDocument, nodeId: string, runtime: EvidenceRuntime | undefined, dependencies?: FinalizeDependencyRef[]): ReviewEvidence {
   if (!runtime) fail("capability_unavailable: trusted evidence runtime is required");
   const task = parseTasks(document.sections.tasks).find(t => t.id === nodeId) ?? fail("unknown_contract_node");
   const record = inspectPhaseRecords(document.sections.tasks).records[nodeId];
-  return assertReviewEvidence(readReviewEvidence(document)[nodeId],runtime.signer,{node_id:nodeId,contract_hash:nodeContractHash(document,nodeId),risk:effectiveNodeRisk(task,runtime),implementer_session_id:record?.implementer_session_id ?? runtime.implementer_session_id});
+  return assertReviewEvidence(readReviewEvidence(document)[nodeId],runtime.signer,{node_id:nodeId,contract_hash:nodeContractHash(document,nodeId,runtime,dependencies),risk:effectiveNodeRisk(task,runtime),implementer_session_id:record?.implementer_session_id ?? runtime.implementer_session_id});
 }
 /** Walk all transitive edges, not just the current round's checkbox projection. */
 export function dependencyFinalizations(document: PlanDocument, nodeId: string, runtime: EvidenceRuntime | undefined): FinalizeDependencyRef[] {
@@ -124,11 +133,11 @@ export function authenticateFinalizedNode(document: PlanDocument, nodeId: string
   const record = inspectPhaseRecords(document.sections.tasks).records[nodeId];
   const task = parseTasks(document.sections.tasks).find(t => t.id === nodeId) ?? fail("unknown_contract_node");
   if (!task.completed || !record?.finalized?.evidence) fail("finalize_evidence_required");
-  const finalized = assertFinalizeEvidence(record.finalized.evidence,runtime.signer,{plan_id:document.metadata.plan_id,node_id:nodeId,contract_hash:nodeContractHash(document,nodeId),dependency_refs:dependencies});
-  if (finalized.review_ref !== requireNodeReview(document,nodeId,runtime).receipt_hash) fail("finalize_review_invalidated");
+  const finalized = assertFinalizeEvidence(record.finalized.evidence,runtime.signer,{plan_id:document.metadata.plan_id,node_id:nodeId,contract_hash:nodeContractHash(document,nodeId,runtime,dependencies),dependency_refs:dependencies});
+  if (finalized.review_ref !== requireNodeReview(document,nodeId,runtime,dependencies).receipt_hash) fail("finalize_review_invalidated");
   const refs = task.acceptance.map(item => {
     const evidence = record.verification?.find(e => e.receipt.acceptance_id === item.id);
-    return assertVerificationEvidence(evidence,runtime.signer,verificationInputFor(document,nodeId,item.id,finalized.content_version)).receipt_hash;
+    return assertVerificationEvidence(evidence,runtime.signer,verificationInputFor(document,nodeId,item.id,finalized.content_version,runtime,dependencies)).receipt_hash;
   });
   if (canonicalHash([...refs].sort()) !== canonicalHash([...finalized.verification_refs].sort())) fail("finalize_verification_invalidated");
   return finalized;

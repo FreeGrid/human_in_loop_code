@@ -1,0 +1,748 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:task-plan:domain:node-v1",
+  "title": "Task Plan common domain and native node schema",
+  "$ref": "#/$defs/PlanDomain",
+  "$comment": "This schema documents structural domain data. It is not an authority verifier, Markdown parser or substitute for runtime validation. New V1 and V2 plans use node-v1 identity. Absent policy on existing V1 selects unchanged legacy identity; existing execution/baseline records cannot be silently upgraded. Migration apply remains disabled. All mutations keep exact whole-document CAS and the durable operation journal. Review selects one node after authenticated dependency finalization; Human contract approval, execution authorization, start, finalize and reopen remain distinct gates.",
+  "$defs": {
+    "PlanDomain": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "originalRequest",
+        "title",
+        "whatWhy",
+        "strategy",
+        "nodes",
+        "review"
+      ],
+      "properties": {
+        "originalRequest": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1048576
+        },
+        "whatWhy": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "strategy": {
+          "type": "string",
+          "maxLength": 1048576
+        },
+        "nodes": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/DomainNode"
+          }
+        },
+        "review": {
+          "type": "string",
+          "maxLength": 1048576
+        }
+      },
+      "description": "Format-independent in-memory domain, never a second persisted Plan/Tasks definition. Native storage requires scalar frontmatter harness=pi-plan/v2, format=pi-plan/v2, identity_policy=node-v1 and one ordered What/Why, Strategy, Nodes, Review region. Empty nodes are structurally allowed for the initial drafting skeleton, but review/start need a complete selected executable contract. Unknown/duplicate native fields, unowned content and misplaced reserved markup are rejected. Unicode, exact UTF-8, metadata authority, DAG and receipt checks remain normative runtime requirements."
+    },
+    "NativePlanDomain": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/PlanDomain"
+        },
+        {
+          "properties": {
+            "nodes": {
+              "items": {
+                "not": {
+                  "required": [
+                    "legacyDefinition"
+                  ]
+                },
+                "properties": {
+                  "outline": {
+                    "propertyNames": {
+                      "enum": [
+                        "Work Areas",
+                        "Ordering",
+                        "Exit Condition",
+                        "Promotion Condition",
+                        "Dependencies on T001",
+                        "Candidate Work",
+                        "Conditional Direction",
+                        "Dependencies / Assumptions",
+                        "Replan Triggers"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "DomainNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "title",
+        "round",
+        "outcome",
+        "outline",
+        "work",
+        "acceptance",
+        "dependsOn",
+        "verification",
+        "scopes",
+        "forbidden",
+        "nonGoals",
+        "reviewPolicy",
+        "progress",
+        "notes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^T[0-9]{3}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 65536
+        },
+        "round": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "maxLength": 65536
+        },
+        "outline": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 65536
+          },
+          "description": "V1 adapter preserves unknown legacy outline fields; native nodes accept only the documented outline field names."
+        },
+        "work": {
+          "type": "string",
+          "maxLength": 65536,
+          "description": "Native Work uses one - text [ ] or - text [x] line per item. Ordinal W IDs are stable only within a frozen contract. Only finalize may mark completion."
+        },
+        "acceptance": {
+          "type": "string",
+          "maxLength": 65536,
+          "description": "Native Acceptance uses one - [ ] text or - [x] text line per criterion. Ordinal A IDs are stable only within a frozen contract."
+        },
+        "dependsOn": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^T[0-9]{3}$"
+          }
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/VerificationPolicy"
+            }
+          ]
+        },
+        "scopes": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/Scopes"
+            }
+          ]
+        },
+        "forbidden": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "nonGoals": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "reviewPolicy": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/ReviewPolicy"
+            }
+          ]
+        },
+        "progress": {
+          "enum": [
+            "outline",
+            "open",
+            "completed"
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/PhaseRecord"
+        },
+        "notes": {
+          "type": "object",
+          "maxProperties": 128,
+          "propertyNames": {
+            "pattern": "^T[0-9]{3}\\.W[0-9]{3}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/ExecutionNote"
+          }
+        },
+        "legacyDefinition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "outline",
+            "task"
+          ],
+          "properties": {
+            "outline": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "task": {
+              "type": "string",
+              "maxLength": 65536
+            }
+          }
+        }
+      },
+      "description": "One canonical domain node. legacyDefinition is a V1-adapter-only exact definition projection; it is forbidden in NativePlanDomain. Executable nodes require a non-null round; outline nodes cannot own phase or execution notes. Runtime enforces duplicate/self/unknown dependency denial and a DAG across all nodes. Definition edits cannot confer completion or change reserved execution evidence. Finalized nodes require explicit Human reopen.",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "progress": {
+                "enum": [
+                  "open",
+                  "completed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "round": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "progress": {
+                "const": "outline"
+              }
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "phase"
+              ]
+            },
+            "properties": {
+              "notes": {
+                "maxProperties": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "VerificationPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "risk",
+        "verification"
+      ],
+      "properties": {
+        "risk": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "unknown"
+          ]
+        },
+        "verification": {
+          "type": "object",
+          "maxProperties": 128,
+          "propertyNames": {
+            "pattern": "^T[0-9]{3}\\.A[0-9]{3}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "command_or_method",
+              "inputs",
+              "expected"
+            ],
+            "properties": {
+              "command_or_method": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              },
+              "inputs": {
+                "type": "array",
+                "maxItems": 128,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 8192
+                }
+              },
+              "expected": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 8192
+              }
+            }
+          }
+        }
+      }
+    },
+    "Scopes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "read",
+        "write",
+        "commands"
+      ],
+      "properties": {
+        "read": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "write": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        },
+        "commands": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        }
+      }
+    },
+    "ReviewPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "independent",
+        "required_evidence"
+      ],
+      "properties": {
+        "independent": {
+          "type": "boolean"
+        },
+        "required_evidence": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 8192
+          }
+        }
+      }
+    },
+    "Decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "source",
+        "input_id",
+        "text"
+      ],
+      "properties": {
+        "action": {
+          "enum": [
+            "execute",
+            "docsync_on",
+            "docsync_off"
+          ]
+        },
+        "source": {
+          "enum": [
+            "interactive",
+            "rpc",
+            "slash"
+          ]
+        },
+        "input_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      }
+    },
+    "PhaseRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "context",
+        "definition_hash",
+        "baseline",
+        "authorization",
+        "docsync",
+        "acceptance"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "implementer_session_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "verification": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "evidence.schema.json#/$defs/verificationEnvelope"
+          }
+        },
+        "context": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "execute_id",
+            "phase_id",
+            "round",
+            "plan_path",
+            "target_root",
+            "governance_root"
+          ],
+          "properties": {
+            "execute_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "phase_id": {
+              "type": "string",
+              "pattern": "^T[0-9]{3}$"
+            },
+            "round": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "plan_path": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "target_root": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            },
+            "governance_root": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 4096
+            }
+          }
+        },
+        "definition_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "baseline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "initial_version"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "initial_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            }
+          }
+        },
+        "authorization": {
+          "$ref": "#/$defs/Decision"
+        },
+        "docsync": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "decision": {
+              "$ref": "#/$defs/Decision"
+            }
+          }
+        },
+        "acceptance": {
+          "type": "array",
+          "maxItems": 128,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "satisfied",
+              "summary",
+              "content_version"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^T[0-9]{3}\\.A[0-9]{3}$"
+              },
+              "satisfied": {
+                "type": "boolean"
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "content_version": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            }
+          }
+        },
+        "last_finalize": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "summary",
+            "outcome"
+          ],
+          "properties": {
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "outcome": {
+              "const": "blocked"
+            }
+          }
+        },
+        "finalized": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "check",
+            "summary",
+            "content_version",
+            "debt_refs",
+            "human_exceptions"
+          ],
+          "properties": {
+            "evidence": {
+              "$ref": "evidence.schema.json#/$defs/finalizeEnvelope"
+            },
+            "check": {
+              "enum": [
+                "passed",
+                "with_debt",
+                "with_exceptions",
+                "skipped"
+              ]
+            },
+            "summary": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2000
+            },
+            "content_version": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 500
+            },
+            "debt_refs": {
+              "type": "array",
+              "maxItems": 128,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            },
+            "human_exceptions": {
+              "type": "array",
+              "maxItems": 128,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500
+              }
+            }
+          }
+        }
+      },
+      "description": "Existing version-1 PhaseRecord payload. Native parser additionally enforces exact canonical JSON, record placement at the end of Depends On, owner and round equality, note ownership, finalize consistency and bounded encoded size. Schema validity never authenticates receipt seals, grants Human authority or permits baseline replacement."
+    },
+    "ExecutionNote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "status",
+        "summary",
+        "files",
+        "change_types"
+      ],
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "status": {
+          "enum": [
+            "in_progress",
+            "blocked",
+            "pending_finalize"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "files": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "change_types": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "enum": [
+              "api",
+              "cli",
+              "config",
+              "extension",
+              "code",
+              "docs",
+              "test",
+              "other"
+            ]
+          }
+        }
+      }
+    },
+    "NodeApproval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_hash",
+        "contract_authorization_ref"
+      ],
+      "properties": {
+        "contract_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "contract_authorization_ref": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "execution_authorization_ref": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    }
+  }
+}

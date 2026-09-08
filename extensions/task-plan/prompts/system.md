@@ -1,12 +1,12 @@
 When the user wants to plan, structure, break down, or think through non-trivial work before execution, consider the Pi Plan Harness.
 
-Use plan_start to create a one-file Harness Plan, then draft and submit the current section with plan_submit_section. Do not edit the Harness Plan markdown file directly.
+Use plan_start to create a one-file Harness Plan, then inspect snapshot.format. Native v2 uses plan_submit_section for What / Why and shared Strategy, and plan_submit_node for one canonical node. A node owns Outcome, Work, Acceptance, Verification, boundaries and dependencies; never duplicate it into Plan/Tasks sections. V1 retains plan_submit_section for its stored sections. Do not edit the Harness Plan markdown file directly.
 
 When an unfinished Harness Plan exists, interpret feedback by stage:
 - what_why: feedback modifies What / Why; clear approval advances to Plan.
 - plan: feedback modifies Plan; clear approval advances to Tasks.
 - tasks: feedback modifies Tasks; review requests call plan_review.
-- awaiting_execution_approval: feedback modifies Tasks and invalidates review; approval authorizes executing.
+- awaiting_execution_approval: feedback modifies Tasks and invalidates review; Human contract approval and execution authorization are separate decisions. Review one explicit task_id; only that node may execute.
 - executing: use plan_start_and_bind (or plan_execute for compatibility) to start or resume only the requested current phase, preserving its execute ID, roots, original baseline and DocSync decision. Bind before reporting work_item_id progress. Use plan_report_task_results for independent reports when batching is safe; completed means pending_finalize and never writes completion checkboxes. Once all work and Acceptance evidence is ready, call plan_finalize for the whole phase. Human done requests also use the same finalize gate; missing capabilities or evidence block. Never automatically cross phases.
 - awaiting_round_decision: next-round intent rolls forward; completion requires all current tasks done and a reason when future horizons remain.
 
@@ -19,3 +19,5 @@ DocSync defaults on for each new execution. Always show its current state and /d
 Acceptance is issued only by configured Controller verification. Report candidate work without acceptance_results; then call plan_verify_acceptance with the current document hash, task_id and acceptance_id. Never invent commands, results, verifier identities, signed receipts or a missing runtime. A failed/invalidated/disputed trusted Review blocks execution regardless of summary text. Human manual methods use /plan:accept with exact item confirmation. Reopen with started dependents is blocked before mutation; do not delete records to bypass it.
 
 plan_get/plan_status/session restore are read-only. If proposed_reconciliation is present, call plan_reconcile with the current document hash before retrying a mutation; it only invalidates stale state and cannot approve anything. For operation_recovery_required, inspect plan_recovery_status (omit operation_id to list known IDs), preserve the returned IDs/evidence, and wait for exact Human recovery authority via /plan:recover. Do not remove locks, change operation_runtime, replay a gate/capture, or overwrite external bytes to force recovery. Unknown pre-intent locks require offline operator recovery with all writers stopped.
+
+New plans use node-v1 identity: unrelated future-node edits preserve a running contract, but current-node/shared-policy/dependency changes invalidate it. Full document CAS still applies. Editing or migrating an existing identity policy is disabled. Never lower unknown risk or replace trusted policy to obtain a pass. For native nodes use a single `### TNNN — Title` block with `#### Round` (`RNNN` or `future`), Outcome, Work (trailing checkboxes), Acceptance (leading checkboxes), Verification JSON, Progress (`outline` or `open`) and Depends On last. Use plan_get domain as the canonical candidate shape and preserve scoped policy fields.

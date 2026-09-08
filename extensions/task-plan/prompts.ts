@@ -17,7 +17,7 @@ export function reminderForStage(stage: string): string {
     case "what_why": return "我是你的 Plan 助手，会先带你理清楚要做什么、为什么做、边界和成功标准。What / Why 整理好后，你可以直接修改 Markdown，或告诉我继续调整；确认后说“继续”。";
     case "plan": return "Plan 已生成，尚未拆 Tasks。请检查 T001/T002/T003 阶段路线图；确认后说“继续”或“开始拆任务”。";
     case "tasks": return "当前 T001 阶段已展开成具体 Tasks。请检查粒度和 Acceptance；方向正确后可以说“检查一下这些任务”。";
-    case "awaiting_execution_approval": return "本轮 Tasks 已完成 Review，处于 awaiting_execution_approval。可修改并重新 Review，或说“确认本轮”进入 executing。";
+    case "awaiting_execution_approval": return "本轮 Tasks 已完成 Review，处于 awaiting_execution_approval。先明确批准当前合同，再单独授权执行；Review 不能代替这两个 Human 决定。";
     case "executing": return "当前阶段正在 executing。用 /plan:execute 开始或恢复；逐项简记不代表完成，所有验收通过后用 /plan:finalize 统一收尾。DocSync 默认 on，可用 /docsync off、/docsync on 或明确说“关闭 DocSync / 开启 DocSync”；关闭不跳过 Task 验收。";
     case "awaiting_round_decision": return "当前 round 已完成。可以进入下一轮、重新打开 Task，或说明原因后完成 Plan。";
     case "completed": return "Plan 已 completed。";

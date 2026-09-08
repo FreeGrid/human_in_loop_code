@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
 import { link, lstat, mkdir, open, readdir, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import { extractAllSections } from "./sections.ts";
+import { createNativeSkeletonText } from "./plan-domain.ts";
+import { nodeDeclaredContractHash } from "./plan-identity.ts";
 import { canonicalTaskDefinition, parseTasks } from "./tasks.ts";
 import { HARNESS, type PlanDocument, type PlanMetadata } from "./types.ts";
 
@@ -26,19 +27,11 @@ export function phaseExecutionDefinitionHash(document: PlanDocument): string {
   return sha256(JSON.stringify([document.metadata.plan_id, document.metadata.round, canonicalSectionHash(document.sections.what_why), canonicalSectionHash(document.sections.plan), canonicalTasksDefinitionHash(document.sections.tasks)]));
 }
 
-/** V2 contract identity is scoped to one executable node and its direct definition. */
+/** Declared identity only; phase services add trusted policy and authenticated dependencies. */
 export function executionDefinitionHash(document: PlanDocument, nodeId: string): string {
-  return (document.metadata as Record<string, unknown>).format === "pi-plan/v2"
-    ? nodeExecutionDefinitionHash(document, nodeId)
-    : phaseExecutionDefinitionHash(document);
+  return document.metadata.identity_policy === "node-v1" ? nodeDeclaredContractHash(document,nodeId) : phaseExecutionDefinitionHash(document);
 }
-
-export function nodeExecutionDefinitionHash(document: PlanDocument, nodeId: string): string {
-  const task = parseTasks(document.sections.tasks).find((candidate) => candidate.id === nodeId);
-  const outline = [...document.sections.plan.matchAll(new RegExp(`^### ${escapeRegExp(nodeId)} — .+$[\\s\\S]*?(?=^### T\\d{3} — |$)`, "gm"))][0]?.[0] ?? "";
-  if (!task && !outline) throw new Error(`Unknown execution node ${nodeId}`);
-  return sha256(JSON.stringify([document.metadata.plan_id, document.metadata.round, nodeId, canonicalSectionHash(outline), task ? canonicalTasksDefinitionHash(task.definition) : ""]));
-}
+export const nodeExecutionDefinitionHash = nodeDeclaredContractHash;
 
 export function replaceFrontmatter(text: string, metadata: PlanMetadata): string {
   const match = text.match(FRONTMATTER);
@@ -86,6 +79,7 @@ export async function writeIfDocumentHash(path: string, expectedHash: string, co
     const current = await readFile(canonical);
     if (sha256(current) !== expectedHash) return { ok: false, conflict: "stale_document_hash" };
     const original = parsePlanCandidate(canonical, decodePlanUtf8(current));
+    if(original.metadata.identity_policy !== candidate.metadata.identity_policy || original.metadata.format !== candidate.metadata.format || original.metadata.harness !== candidate.metadata.harness) throw new Error("identity_migration_disabled");
     operation ??= await beginPlanOperation(original, { kind: options.kind ?? "mutation" });
     await prepareOperationCandidate(operation, content, options.completion);
     checkpoint = "prepared"; await journalCheckpoint(checkpoint, operation);
@@ -216,7 +210,8 @@ export function slugify(input: string): string {
   return input.toLowerCase().normalize("NFKD").replace(/[^\p{Letter}\p{Number}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "plan";
 }
 
-export async function createPlanSkeleton(root: string, goal: string, titleOverride?: string): Promise<PlanDocument> {
+export interface PlanCreationOptions { format?: "v1" | "v2"; identity_policy?: "node-v1" | "legacy" }
+export async function createPlanSkeleton(root: string, goal: string, titleOverride?: string, options: PlanCreationOptions = {}): Promise<PlanDocument> {
   const legacy = await detectLegacyWorkspaceConflict(root);
   if (legacy.length) throw new Error(`Legacy planning workspace conflict: ${legacy.join(", ")}`);
   const unfinished = await findUnfinishedHarnessPlans(root);
@@ -228,7 +223,7 @@ export async function createPlanSkeleton(root: string, goal: string, titleOverri
   assertNoReservedPlanMarkup(goal, "Original Request");
   assertNoReservedPlanMarkup(title, "title");
   if (/[\r\n\u2028\u2029]/u.test(title)) throw new Error("invalid_plan_title");
-  const text = renderSkeleton(planId, goal, title), candidate = parsePlanCandidate(path, text);
+  const text = renderSkeleton(planId, goal, title, options), candidate = parsePlanCandidate(path, text);
   await mkdir(dirname(path), { recursive: true });
   const operation = await beginPlanOperation(candidate, { kind: "create" });
   const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
@@ -257,8 +252,12 @@ export async function createPlanSkeleton(root: string, goal: string, titleOverri
   }
 }
 
-function renderSkeleton(planId: string, goal: string, title = planTitleFromGoal(goal)): string {
-  return `${renderFrontmatter({ harness: HARNESS, plan_id: planId, round: 0, stage: "what_why", stage_status: "drafting", operation_runtime: PLAN_RUNTIME_ROOT })}\n# ${planId} — ${title}\n\n## Original Request\n\n${goal}\n\n---\n\n<!-- pi-plan:what-why:start -->\n\nPending.\n\n<!-- pi-plan:what-why:end -->\n\n---\n\n## Plan\n\n<!-- pi-plan:plan:start -->\n\nPending approval of What / Why.\n\n<!-- pi-plan:plan:end -->\n\n<!-- pi-plan:tasks:start -->\n\nPending approval of Plan.\n\n<!-- pi-plan:tasks:end -->\n\n<!-- pi-plan:review:start -->\n\nNot run.\n\n<!-- pi-plan:review:end -->\n`;
+function renderSkeleton(planId: string, goal: string, title = planTitleFromGoal(goal), options:PlanCreationOptions = {}): string {
+  if ((options.format ?? "v2") === "v2") {
+    if(options.identity_policy === "legacy") throw new Error("native_requires_node_identity");
+    return createNativeSkeletonText({harness:HARNESS,plan_id:planId,round:0,stage:"what_why",stage_status:"drafting",operation_runtime:PLAN_RUNTIME_ROOT},goal,title);
+  }
+  return `${renderFrontmatter({ harness: HARNESS, plan_id: planId, round: 0, stage: "what_why", stage_status: "drafting", operation_runtime: PLAN_RUNTIME_ROOT, ...(options.identity_policy === "legacy" ? {} : {identity_policy:"node-v1"}) })}\n# ${planId} — ${title}\n\n## Original Request\n\n${goal}\n\n---\n\n<!-- pi-plan:what-why:start -->\n\nPending.\n\n<!-- pi-plan:what-why:end -->\n\n---\n\n## Plan\n\n<!-- pi-plan:plan:start -->\n\nPending approval of What / Why.\n\n<!-- pi-plan:plan:end -->\n\n<!-- pi-plan:tasks:start -->\n\nPending approval of Plan.\n\n<!-- pi-plan:tasks:end -->\n\n<!-- pi-plan:review:start -->\n\nNot run.\n\n<!-- pi-plan:review:end -->\n`;
 }
 
 async function exists(path: string): Promise<boolean> {

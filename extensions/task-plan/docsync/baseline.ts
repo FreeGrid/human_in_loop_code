@@ -14,7 +14,7 @@ import { documentIdentity, readDocument, resolveContainedPath, targetKey, target
 import { attributes, blobIdentity, canonicalDirectory, digest, git, missing, names, normalize, readRaw, safeName, same, snapshot, textGit, treeEntries, type Snapshot } from "./git.ts";
 
 const MAX_BASELINE = 16 * 1024 * 1024;
-interface Saved {
+interface SavedV1 {
   schema: 1;
   context: PhaseContext;
   git_dir: string;
@@ -29,6 +29,14 @@ interface Saved {
   documents: Record<string, { target: DocumentTarget; read: DocumentRead }>;
   configuration_version: string;
   plan_version: string;
+}
+type Saved = SavedV1 | (Omit<SavedV1, "schema"> & { schema: 2; plan_identity_policy: "node-v1" });
+type PlanIdentityPolicy = "legacy" | "node-v1";
+interface PlanSample { policy: PlanIdentityPolicy; bytes: Buffer; version: string; rawVersion: string }
+export interface GitBaselineOptions {
+  onContentRead?: (path: string) => void;
+  /** Trusted runtime adapter: parse this exact source and authenticate the selected node contract. */
+  planIdentityResolver?: (context: PhaseContext, text: string) => Promise<{ policy: "node-v1"; identity: string }>;
 }
 interface Located { context: PhaseContext; gitDir: string; runtime: string }
 interface Sample { facts: Omit<RepositoryFacts, "baseline" | "content_version">; version: string; stamp: string }
@@ -45,7 +53,7 @@ function validateIdentity(value: unknown, format: string): void {
 function validateRead(value: unknown): void {
   if (!object(value) || !["file_version,identity", "error,file_version,identity"].includes(Object.keys(value).sort().join(",")) || typeof value.file_version !== "string" || value.file_version.length > 200 || !(value.identity === null || typeof value.identity === "string" && value.identity.length <= 200) || (value.error !== undefined && (typeof value.error !== "string" || value.error.length > 4096))) throw new Error("Corrupt document identity");
 }
-function validateSaved(value: unknown): asserts value is Saved {
+function validateSavedV1(value: unknown): asserts value is SavedV1 {
   if (!object(value) || !exact(value, "schema,context,git_dir,head,tree,index,format,rules,attributes,exceptions,initial_untracked,documents,configuration_version,plan_version") || value.schema !== 1 || !["sha1", "sha256"].includes(String(value.format))) throw new Error("Corrupt baseline schema");
   if (!object(value.context) || !exact(value.context, "execute_id,phase_id,round,plan_path,target_root,governance_root") || typeof value.git_dir !== "string" || !isAbsolute(value.git_dir)) throw new Error("Corrupt baseline binding");
   if (!oid(value.head, String(value.format)) || !oid(value.tree, String(value.format)) || ![value.index, value.rules, value.attributes, value.plan_version].every(sha) || typeof value.configuration_version !== "string" || value.configuration_version.length > 200) throw new Error("Corrupt baseline digests");
@@ -54,6 +62,17 @@ function validateSaved(value: unknown): asserts value is Saved {
   for (const path of value.initial_untracked) { if (typeof path !== "string" || !Object.hasOwn(value.exceptions, path)) throw new Error("Corrupt untracked exceptions"); safeName(path); }
   for (const [key, entry] of Object.entries(value.documents)) { if (!object(entry) || !exact(entry, "target,read")) throw new Error("Corrupt document baseline"); const target = entry.target as DocumentTarget; if (!(typeof target === "string" || object(target) && exact(target, "path,section_id") && typeof target.section_id === "string")) throw new Error("Corrupt document target"); safeName(targetPath(target)); if (key !== targetKey(target)) throw new Error("Corrupt document key"); validateRead(entry.read); }
 }
+function validateSaved(value: unknown): asserts value is Saved {
+  if (object(value) && value.schema === 2) {
+    if (value.plan_identity_policy !== "node-v1") throw new Error("Corrupt baseline identity policy");
+    const { plan_identity_policy: _policy, ...legacy } = value;
+    validateSavedV1({ ...legacy, schema: 1 });
+    return;
+  }
+  validateSavedV1(value);
+}
+const savedPolicy = (saved: Saved): PlanIdentityPolicy => saved.schema === 2 ? saved.plan_identity_policy : "legacy";
+const savedId = (saved: Saved) => `git-v${saved.schema}:${hash(saved)}`;
 async function locate(input: PhaseContext): Promise<Located> {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(input.execute_id) || !/^T\d{3}$/.test(input.phase_id) || !Number.isSafeInteger(input.round) || input.round < 0) throw new Error("Invalid execution identity");
   const target_root = await canonicalDirectory(input.target_root), governance_root = await canonicalDirectory(input.governance_root);
@@ -133,7 +152,7 @@ function planBytes(bytes: Buffer): Buffer {
 }
 
 export class GitBaselineProvider implements BaselineProvider {
-  constructor(private readonly options: { onContentRead?: (path: string) => void } = {}) {}
+  constructor(private readonly options: GitBaselineOptions = {}) {}
 
   async capture(input: PhaseContext): Promise<BaselineReference> {
     const location = await locate(input), { context, gitDir, runtime } = location;
@@ -141,6 +160,7 @@ export class GitBaselineProvider implements BaselineProvider {
     // The execution directory is a durable exclusive claim. Failure leaves a blocked, never-recaptured execution.
     await mkdir(runtime, { mode: 0o700 });
     await safeDirectory(dirname(runtime), context.execute_id, false);
+    const plan = await this.planVersion(context);
     const initial = await snapshot(context.target_root, [], this.options.onContentRead);
     const configuration = await readConfiguration(context.governance_root);
     const targets = configuration.config ? configurationTargets(configuration.config) : [];
@@ -152,15 +172,15 @@ export class GitBaselineProvider implements BaselineProvider {
     }
     const attrs = await attributes(context.target_root, paths);
     const exceptions: Record<string, ContentIdentity> = Object.create(null);
-    for (const path of paths) exceptions[path] = await this.current(context, path, initial, attrs[path]!, initial.entries[path]);
+    for (const path of paths) exceptions[path] = await this.current(context, path, initial, attrs[path]!, plan, initial.entries[path]);
     const documents: Saved["documents"] = Object.create(null);
-    for (const target of targets) documents[targetKey(target)] = { target, read: await this.document(context, target) };
-    const saved: Saved = { schema: 1, context, git_dir: gitDir, head: initial.head, tree: initial.tree, index: initial.index, format: initial.format, rules: initial.rules, attributes: hash(await attributes(context.target_root, [...new Set([...Object.keys(initial.entries), ...paths])].sort())), exceptions, initial_untracked: initial.untracked.filter(path => Object.hasOwn(exceptions, path)), documents, configuration_version: configuration.version, plan_version: await this.planVersion(context) };
+    for (const target of targets) documents[targetKey(target)] = { target, read: await this.document(context, target, plan) };
+    const saved: Saved = { ...(plan.policy === "legacy" ? { schema: 1 as const } : { schema: 2 as const, plan_identity_policy: "node-v1" as const }), context, git_dir: gitDir, head: initial.head, tree: initial.tree, index: initial.index, format: initial.format, rules: initial.rules, attributes: hash(await attributes(context.target_root, [...new Set([...Object.keys(initial.entries), ...paths])].sort())), exceptions, initial_untracked: initial.untracked.filter(path => Object.hasOwn(exceptions, path)), documents, configuration_version: configuration.version, plan_version: plan.version };
     validateSaved(saved);
-    const id = `git-v1:${hash(saved)}`;
+    const id = savedId(saved);
     const first = await this.sample(location, saved, id);
     const second = await this.sample(location, saved, id);
-    if (!same(first, second) || !same(initial, await snapshot(context.target_root, [], this.options.onContentRead)) || configuration.version !== second.facts.configuration.version || saved.plan_version !== await this.planVersion(context)) throw new Error("Concurrent baseline capture; original execution claim retained");
+    if (!same(first, second) || !same(initial, await snapshot(context.target_root, [], this.options.onContentRead)) || configuration.version !== second.facts.configuration.version || !same(plan, await this.planVersion(context, plan.policy))) throw new Error("Concurrent baseline capture; original execution claim retained");
     // Check every captured exception/document against the final sample, including unchanged dirty content.
     if (first.facts.changes.length || Object.values(first.facts.documents).some(d => d.before !== d.after)) throw new Error("Concurrent baseline content modification");
     const reference = { id, initial_version: first.version };
@@ -193,7 +213,7 @@ export class GitBaselineProvider implements BaselineProvider {
   }
 
   private async load(location: Located, reference: BaselineReference): Promise<Saved> {
-    if (!object(reference) || !exact(reference, "id,initial_version") || !/^git-v1:[0-9a-f]{64}$/.test(reference.id) || !sha(reference.initial_version)) throw new Error("Foreign or invalid baseline reference; recapture is forbidden");
+    if (!object(reference) || !exact(reference, "id,initial_version") || !/^git-v[12]:[0-9a-f]{64}$/.test(reference.id) || !sha(reference.initial_version)) throw new Error("Foreign or invalid baseline reference; recapture is forbidden");
     await safeDirectory(location.gitDir, "docsync", false);
     await safeDirectory(dirname(location.runtime), location.context.execute_id, false);
     const raw = await readRaw(location.runtime, "baseline.json");
@@ -201,7 +221,7 @@ export class GitBaselineProvider implements BaselineProvider {
     let envelope: unknown; try { envelope = JSON.parse(raw.bytes.toString()); } catch { throw new Error("Corrupt baseline JSON"); }
     if (!object(envelope) || !exact(envelope, "saved,reference") || JSON.stringify(envelope) !== raw.bytes.toString()) throw new Error("Corrupt or noncanonical baseline envelope");
     validateSaved(envelope.saved);
-    if (!object(envelope.reference) || !exact(envelope.reference, "id,initial_version") || reference.id !== envelope.reference.id || reference.initial_version !== envelope.reference.initial_version || reference.id !== `git-v1:${hash(envelope.saved)}` || !same(envelope.saved.context, location.context) || envelope.saved.git_dir !== location.gitDir) throw new Error("Foreign or corrupt baseline binding");
+    if (!object(envelope.reference) || !exact(envelope.reference, "id,initial_version") || reference.id !== envelope.reference.id || reference.initial_version !== envelope.reference.initial_version || reference.id !== savedId(envelope.saved) || !same(envelope.saved.context, location.context) || envelope.saved.git_dir !== location.gitDir) throw new Error("Foreign or corrupt baseline binding");
     return envelope.saved;
   }
 
@@ -223,29 +243,47 @@ export class GitBaselineProvider implements BaselineProvider {
     if (before.dev !== after.dev || before.ino !== after.ino || before.mode !== after.mode || before.ctimeNs !== after.ctimeNs || before.mtimeNs !== after.mtimeNs || after.size !== 0n || raw.kind !== "file" || raw.bytes?.length !== 0) throw new Error("Concurrent finalize lock modification");
     return true;
   }
-  private async planVersion(context: PhaseContext): Promise<string> {
+  private async planVersion(context: PhaseContext, expected?: PlanIdentityPolicy): Promise<PlanSample> {
     const raw = await readRaw(context.governance_root, relative(context.governance_root, context.plan_path), this.options.onContentRead);
     if (raw.kind !== "file" || !raw.bytes) throw new Error("Missing or unsafe Plan");
-    return digest(planBytes(raw.bytes));
+    const text = raw.bytes.toString("utf8");
+    if (!Buffer.from(text).equals(raw.bytes)) throw new Error("Non-UTF8 Plan");
+    const metadata = parseFrontmatter(text).metadata;
+    const declared = metadata.identity_policy;
+    if (declared !== undefined && declared !== "node-v1") throw new Error("Unsupported Plan identity policy");
+    const policy = declared ?? "legacy";
+    if (expected !== undefined && policy !== expected) throw new Error("Plan identity policy changed; baseline-preserving recovery required");
+    let bytes: Buffer;
+    if (policy === "legacy") bytes = planBytes(raw.bytes);
+    else {
+      if (!this.options.planIdentityResolver) throw new Error("Trusted Plan identity resolver required for node-v1 baseline");
+      const identity = await this.options.planIdentityResolver(context, text);
+      if (!object(identity) || !exact(identity, "policy,identity") || identity.policy !== policy || !sha(identity.identity)) throw new Error("Invalid trusted Plan identity");
+      bytes = Buffer.from(JSON.stringify({ schema: "pi-plan/baseline/node-v1", phase_id: context.phase_id, identity: identity.identity }));
+    }
+    return { policy, bytes, version: digest(bytes), rawVersion: digest(raw.bytes) };
   }
-  private async document(context: PhaseContext, target: DocumentTarget): Promise<DocumentRead> {
+  private async document(context: PhaseContext, target: DocumentTarget, plan: PlanSample): Promise<DocumentRead> {
     if (targetPath(target) !== this.targetPlan(context)) return readDocument(context.target_root, target);
-    const raw = await readRaw(context.target_root, targetPath(target), this.options.onContentRead);
-    if (raw.kind === "symlink") throw new Error("Symlink document target");
-    return documentIdentity(raw.bytes ? planBytes(raw.bytes) : null, target);
+    if (plan.policy === "node-v1" && typeof target !== "string") throw new Error("Section targets for a node-v1 Plan are unsupported; configure the whole Plan document");
+    return documentIdentity(plan.bytes, target);
   }
-  private async current(context: PhaseContext, path: string, state: Snapshot, attrs: Record<string, string>, original?: ContentIdentity): Promise<ContentIdentity> {
+  private async current(context: PhaseContext, path: string, state: Snapshot, attrs: Record<string, string>, plan: PlanSample, original?: ContentIdentity): Promise<ContentIdentity> {
     const raw = await readRaw(context.target_root, path, this.options.onContentRead);
     if (raw.kind === "missing") return missing;
     if (raw.kind === "symlink") return blobIdentity(raw.bytes!, raw.mode, state.format);
     let bytes = raw.bytes!;
-    if (path === this.targetPlan(context)) bytes = planBytes(bytes);
+    if (path === this.targetPlan(context)) {
+      if (digest(bytes) !== plan.rawVersion) throw new Error("Concurrent Plan source modification");
+      bytes = plan.bytes;
+    }
     let originalBytes: Buffer | undefined;
     if (original?.kind === "file" && (attrs.text === "auto" || attrs.text === "unspecified" && state.autocrlf !== "false")) originalBytes = await git(context.target_root, ["cat-file", "blob", original.oid]);
     return blobIdentity(normalize(bytes, attrs, state.autocrlf, originalBytes), raw.mode, state.format);
   }
   private async sample(location: Located, saved: Saved, id: string): Promise<Sample> {
     const { context } = location, root = context.target_root;
+    const plan = await this.planVersion(context, savedPolicy(saved));
     const state = await snapshot(root, Object.keys(saved.exceptions), this.options.onContentRead);
     if (state.rules !== saved.rules || state.format !== saved.format) throw new Error("Git normalization rules changed; restore original rules, never recapture this execution");
     const original = await treeEntries(root, saved.tree, saved.format);
@@ -259,7 +297,7 @@ export class GitBaselineProvider implements BaselineProvider {
     for (const path of paths) {
       if (!original[path] && !Object.hasOwn(saved.exceptions, path) && await this.reservedFinalizeLock(context, path, state)) continue;
       const before = Object.hasOwn(saved.exceptions, path) ? saved.exceptions[path]! : original[path] ?? missing;
-      const after = await this.current(context, path, state, attrs[path]!, original[path]);
+      const after = await this.current(context, path, state, attrs[path]!, plan, original[path]);
       if (!same(before, after)) changes.push({ path, before, after });
     }
     const configuration = await readConfiguration(context.governance_root);
@@ -282,14 +320,13 @@ export class GitBaselineProvider implements BaselineProvider {
           else before = documentIdentity(bytes, target);
         }
       }
-      const after = await this.document(context, target);
+      const after = await this.document(context, target, plan);
       documents[key] = { target, before: before.identity, after: after.identity, ...((before.error || after.error) ? { error: [before.error, after.error].filter(Boolean).join("; ") } : {}) };
       documentVersions.push([key, after.file_version, after.identity, after.error ?? null]);
     }
-    const planVersion = await this.planVersion(context);
     const final = await snapshot(root, Object.keys(saved.exceptions), this.options.onContentRead);
-    if (!same(state, final) || configuration.version !== (await readConfiguration(context.governance_root)).version || planVersion !== await this.planVersion(context)) throw new Error("Concurrent repository/configuration modification");
+    if (!same(state, final) || configuration.version !== (await readConfiguration(context.governance_root)).version || !same(plan, await this.planVersion(context, savedPolicy(saved)))) throw new Error("Concurrent repository/configuration modification");
     const facts = { context, configuration, changes, documents };
-    return { facts, version: hash([id, changes, documentVersions, configuration.version, planVersion, saved.rules]), stamp: hash(final) };
+    return { facts, version: hash([id, changes, documentVersions, configuration.version, plan.version, saved.rules]), stamp: hash([final, plan.rawVersion]) };
   }
 }

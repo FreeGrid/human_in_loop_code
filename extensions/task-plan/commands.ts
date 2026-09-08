@@ -1,3 +1,4 @@
+import { selectedNode } from "./node-approval.ts";
 import type { RecoveryInspection } from "./operation-journal.ts";
 import { PhaseExecutionService } from "./phase-execution.ts";
 import { configureManualVerificationAuthority, manualAcceptanceContext } from "./evidence.ts";
@@ -66,7 +67,7 @@ async function executePhase(pi: ExtensionAPI, args: string, ctx: ExtensionComman
     if (!target_root || !governance_root || !await ctx.ui.confirm("Authorize this phase execution?", `${task_id}\nTarget: ${target_root}\nGovernance: ${governance_root}\n${phaseSwitchHelp()}`)) return;
     const approvedDocument = await readPlanDocument(current.path!);
     if (approvedDocument.document_hash !== current.document_hash) return ctx.ui.notify("Plan changed during confirmation; authorize the new version explicitly.", "error");
-    state.humanCapability = issueHumanCapability("execute", await documentAuthorityContext(approvedDocument, task_id, { target_root, governance_root }), { source: "slash", input_id: randomUUID(), text: `/plan:execute ${current.path}; Human confirmed ${task_id}, target=${target_root}, governance=${governance_root}` });
+    state.humanCapability = issueHumanCapability("execute", await documentAuthorityContext(approvedDocument, task_id, { target_root, governance_root },state.phaseDependencies?.evidence), { source: "slash", input_id: randomUUID(), text: `/plan:execute ${current.path}; Human confirmed ${task_id}, target=${target_root}, governance=${governance_root}` });
   }
   const result = await service.executePhase({ expected_document_hash: current.document_hash, planPath: current.path, task_id, target_root, governance_root });
   notify(ctx, result);
@@ -88,7 +89,7 @@ async function docsync(args: string, ctx: ExtensionCommandContext, state: TaskPl
   if (!ctx.hasUI || !await ctx.ui.confirm(`Set DocSync ${setting}?`, `${task_id}\n${phaseSwitchHelp(setting === "on")}`)) return ctx.ui.notify("No Human confirmation; DocSync unchanged. Natural-language Human input is also supported.", "info");
   const document = await readPlanDocument(current.path!);
   if (document.document_hash !== current.document_hash) return ctx.ui.notify("Plan changed during Human decision; reread and confirm the new version.", "error");
-  state.humanCapability = issueHumanCapability(setting === "on" ? "docsync_on" : "docsync_off", await documentAuthorityContext(document, task_id), { source: "slash", input_id: randomUUID(), text: `/docsync ${setting}; Human confirmed ${task_id}` });
+  state.humanCapability = issueHumanCapability(setting === "on" ? "docsync_on" : "docsync_off", await documentAuthorityContext(document, task_id,{},state.phaseDependencies?.evidence), { source: "slash", input_id: randomUUID(), text: `/docsync ${setting}; Human confirmed ${task_id}` });
   notify(ctx, await service.setPhaseDocSync({ expected_document_hash: current.document_hash, task_id, enabled: setting === "on" }));
 }
 
@@ -139,7 +140,8 @@ async function edit(args: string, ctx: ExtensionCommandContext, state: TaskPlanS
   const service = new TaskPlanService(ctx.cwd, state);
   const current = await service.get();
   if (!current.document_hash) return notify(ctx, current);
-  return notify(ctx, await service.submitSection({ expected_document_hash: current.document_hash, content: args }));
+  const node=(current.snapshot as {format?:string}|undefined)?.format === "v2" ? args.match(/^### (T\d{3}) — /) : null;
+  return notify(ctx,node ? await service.submitNode({expected_document_hash:current.document_hash,node_id:node[1]!,content:args}) : await service.submitSection({ expected_document_hash: current.document_hash, content: args }));
 }
 
 async function approve(pi: ExtensionAPI, args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState, modelConfig: Required<TaskPlanModelSwitchConfig>) {
@@ -181,7 +183,7 @@ async function review(args: string, ctx: ExtensionCommandContext, state: TaskPla
   const service = new TaskPlanService(ctx.cwd, state);
   const current = await service.get();
   if (!current.document_hash) return notify(ctx, current);
-  return notify(ctx, await service.review({ expected_document_hash: current.document_hash, summary: args.trim() || undefined }));
+  return notify(ctx, await service.review({ expected_document_hash: current.document_hash, task_id: /^T\d{3}$/.test(args.trim()) ? args.trim() : undefined, summary: /^T\d{3}$/.test(args.trim()) ? undefined : args.trim() || undefined }));
 }
 
 async function task(args: string, ctx: ExtensionCommandContext, state: TaskPlanSessionState) {
@@ -224,7 +226,7 @@ async function run(ctx: ExtensionCommandContext, state: TaskPlanSessionState, fn
 
 function queueNewPlanFollowUp(pi: ExtensionAPI, brief: string): void {
   const instruction = `Start a new Harness Plan for this original request:\n\n${brief}\n\nBefore calling plan_start, summarize the original request into one concise descriptive title for the plan filename. Requirements for the title: capture the actual subject, not conversational filler; prefer 2 to 8 English words or roughly 4 to 18 Chinese characters; do not include numbering, file extensions, quotes, markdown, punctuation wrappers, or explanations. Call plan_start with the full original request as goal and the concise title as title. Draft the What / Why exactly as a normal /plan follow-up would, but keep it concise and do not add a separate Why heading; if rationale matters, fold it into Goal or Desired Outcome. Include Open Questions instead of blocking when information is missing, then submit it. Stop after submission; do not advance to Plan. Final user-facing reply requirements, in Chinese: start by saying you are their Plan assistant and what you just helped organize; show the generated section content (the generated What / Why content) in the reply so the user can review without opening the file; then show the saved file path; then explain both edit paths: they can tell you natural-language changes such as “把 X 加进去/范围缩小一点”, or manually edit the Markdown file and say “我改好了，检查一下”; finally state the exact next phrase “继续” and explain that it will approve this What / Why and start drafting the Plan. Do not mention internal tool names.`;
-  pi.sendMessage({ customType: "pi-plan-guided-draft", content: instruction, display: false }, { triggerTurn: true, deliverAs: "followUp" });
+  pi.sendMessage({ customType: "pi-plan-guided-draft", content: `${instruction}\nFormat rule: inspect snapshot.format first. For native v2, submit shared Strategy via plan_submit_section and individual canonical nodes via plan_submit_node; never submit duplicate Plan/Tasks projections. Native nodes use Round, Outcome, Work, Acceptance, Verification, Progress and Depends On (last). Review exactly one task_id, then separate Human contract approval and execution authorization.`, display: false }, { triggerTurn: true, deliverAs: "followUp" });
 }
 
 function queueDraftFollowUp(pi: ExtensionAPI, stage: string, path?: string): void {
@@ -234,7 +236,7 @@ function queueDraftFollowUp(pi: ExtensionAPI, stage: string, path?: string): voi
     : stage === "plan"
       ? `Continue the current Harness Plan${path ? ` at ${path}` : ""}. Use plan_get, draft the Plan from approved What / Why, and use plan_submit_section. The Plan must use T001/T002/T003 as stage headings: T001 is the current stage and most detailed, T002 is required but less detailed, and later stages are increasingly fuzzy/conditional. Do not add completion markers or executable Tasks/Acceptance/Depends On subsections yet. Stop after submission; do not create executable Tasks. Next phrase: “继续” or “开始拆任务”; explain that it will approve this Plan and expand the current T001 stage into concrete Tasks. ${replyContract}`
       : `Continue the current Harness Plan${path ? ` at ${path}` : ""}. Use plan_get, draft executable Tasks only for the approved Plan's current T001 stage, and use plan_submit_section. Use the same heading as “### T001 — Stage title [ ]”; do not expand T002 or later stages yet. Put smaller tasks under its “#### Tasks” subsection using trailing status markers like “- Smaller task [ ]”. Keep the executable stage concise with only Tasks, Acceptance, and Depends On subsections; do not add visible Round, Outcome, Why, Inputs, Work, or Outputs. If the current round is after R000, add only the hidden metadata line \`<!-- pi-plan:round:RNNN -->\` immediately below each new stage Task heading. Stop after submission; do not run Review. In the final reply, show the generated Tasks with their heading completion marker intact. Next phrase: “检查一下这些任务”; explain that it will review the current-stage Tasks for coverage, necessity, atomicity, dependencies, verifiability, and scope before execution approval. ${replyContract}`;
-  pi.sendMessage({ customType: "pi-plan-guided-draft", content: instruction, display: false }, { triggerTurn: true, deliverAs: "followUp" });
+  pi.sendMessage({ customType: "pi-plan-guided-draft", content: `${instruction}\nFormat rule: inspect snapshot.format first. For native v2, submit shared Strategy via plan_submit_section and individual canonical nodes via plan_submit_node; never submit duplicate Plan/Tasks projections. Native nodes use Round, Outcome, Work, Acceptance, Verification, Progress and Depends On (last). Review exactly one task_id, then separate Human contract approval and execution authorization.`, display: false }, { triggerTurn: true, deliverAs: "followUp" });
 }
 
 function notify(ctx: ExtensionCommandContext, result: { status: string; snapshot?: unknown }) {
@@ -248,7 +250,8 @@ async function confirmAuthority(ctx: ExtensionCommandContext, state: TaskPlanSes
   if (!ctx.hasUI) { ctx.ui.notify("Human confirmation UI unavailable; use a concrete trusted input adapter.", "error"); return false; }
   const document = await readPlanDocument(path);
   if (document.document_hash !== hash) { ctx.ui.notify("Plan changed; reread before confirmation.", "error"); return false; }
-  const context = await documentAuthorityContext(document, node);
+  if(document.metadata.identity_policy === "node-v1" && ["approve_contract","authorize_execution"].includes(action))node=selectedNode(document);
+  const context = await documentAuthorityContext(document, node,{},state.phaseDependencies?.evidence);
   if (!await ctx.ui.confirm(`Authorize ${action}?`, `${path}\n${node}\nDocument: ${hash}\nContract: ${context.contract_hash}\nTarget: ${context.target_root}\nGovernance: ${context.governance_root}`)) return false;
   state.humanCapability = issueHumanCapability(action, context, { source: "slash", input_id: randomUUID(), text: `Human confirmed ${action} for ${path} ${node}` });
   return true;
@@ -271,7 +274,7 @@ async function manualCriterion(args: string, ctx: ExtensionCommandContext, state
     if (document.document_hash !== current.document_hash) throw new Error("stale_document_hash");
     const phase = new PhaseExecutionService(state.phaseDependencies);
     const approved_input = await phase.prepareManualAcceptance(document,task_id,acceptance_id);
-    const baseContext = await documentAuthorityContext(document,task_id);
+    const baseContext = await documentAuthorityContext(document,task_id,{},state.phaseDependencies?.evidence);
     const actual = await ctx.ui.input(`Observed result for ${acceptance_id} (expected: ${approved_input.expected})`);
     if (!actual?.trim()) return;
     const context = manualAcceptanceContext(baseContext,{approved_input,actual,artifact_refs:[]});
