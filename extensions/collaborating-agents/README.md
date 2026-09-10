@@ -1,427 +1,160 @@
-# Collaborating Agents
+# 多 Agent 协作：让分工和交接看得见
 
-[← Back to the toolkit overview](../../README.md)
+[返回首页](../../README.md) · [先跑通一个项目](../../docs/getting-started.md) · [模型配置](../../docs/models.md)
 
-This Pi extension spawns subagents and gives them shared coordination
-primitives for messages, file reservations, session inspection, and result
-delivery.
+一个研究任务可能同时需要调查代码、补测试、写论文说明和审阅实现。全塞进一个会话，局部细节会越积越多；随意启动很多会话，又可能让两个 Agent 同时改一个文件，彼此不知道对方正在做什么。协作扩展提供的是分工、消息、文件预留和结果交接，让并行工作能够被观察。
 
-All sessions auto-register immediately when they start; so when a new Pi session is started, it is already part of the collaborating agents system.
+Agent 是一个可以调用工具的模型会话。父 Agent 负责协调，子 Agent 接受一项具体任务。小而直接的工作通常由一个会话完成即可；适合分出去的，是有清楚输入、交付物和文件范围的工作。例如，一个会话只核对 KM 负权案例，另一个只整理已有命令行说明。需要共同决定接口或写同一个文件时，先讨论清楚，再依次执行，未必开得越多越快。
 
-## Setting up `AGENTS.md`
+## 先派出一个范围清楚的任务
 
-Use `pi config` to activate both the `pi-collaborating-agents` extension and the `collaborating-agents-system` skill, and (optionally) add the following to `AGENTS.md` for more specific instructions.
+确认 `pi config` 已启用 `collaborating-agents` 与 `collaborating-agents-system`。在 Pi 中输入：
 
 ```text
-Before handling the task, first learn the `collaborating-agents-system` skill. Use it to understand the available collaboration capabilities, including:
-
-- spawning and coordinating subagents
-- parallelizing suitable tasks
-- sending direct and broadcast messages between agents
-- reserving and releasing files/directories before edits
-
-Then execute the task under these rules:
-
-1. Prefer parallelism for read-heavy exploration and review tasks.
-2. Reserve files/directories before any write.
-3. Keep process logging single-writer when possible.
-4. Use direct messages for blockers and decisions.
-5. Use broadcasts for shared status updates.
-6. Prefer low-coupling task decomposition; avoid conflicting parallel edits.
-
-Choose an appropriate split of work, coordinate subagents carefully, and keep the execution process organized and auditable.
+/subagent 阅读 ../matching_code 中的 KM 实现，只检查负权处理，报告具体位置和理由，不修改文件。
 ```
 
-## Opening the _Agents and Messages_ Overlay with the `/agents` Command
+没有指定类型时使用默认 worker，通常继承父会话模型。成功启动后会看到运行名称、Batch ID 和子任务 Run ID。默认后台执行，父会话会自动收集子 Agent 的最终输出；子 Agent 不需要再发送一条重复的最终消息，但遇到阻塞或需要决策时可以主动联系父 Agent。
 
-The `/agents` slash command opens an integrated _agents and messages_ overlay with four tabs:
+结果返回只表示这个工作单元交付了答复，不能自动批准实现或合并 PR。若它声称测试通过，应查看实际运行依据；独立审阅需要不同会话、合理信息边界和真实检查，不靠名字叫 `reviewer` 就自动成立。
 
-  - `Agents` tab contains a list of all active and recently completed agents, and it allows the user to switch to the selected active session and tracks the target session in real time.
-  - `Feed` tab shows recent message activity across agents.
-  - `File reservations` tab shows active reservation patterns and which agent currently owns each one.
-  - `Chat` tab provides a shared chat stream and input box for `@all` broadcasts and direct `@AgentName` messages.
+也可指定已配置的角色：
 
-Newly-started agents show up immediately; if their transcript file is not persisted yet they are marked `session pending`. Completed subagents remain visible in the `Agents` tab as `completed` until the next time an orchestrator agent spawns new subagents, which clears prior historical completed-subagent entries from that list.
-
-Messaging input is available in the `Chat` tab. Use `@AgentName message` for direct messages or `@all message` for broadcast. Prefix the message body with `!!` to mark it urgent.
-
-Examples:
-
-- Direct: `@BlueFalcon Status update: parsing complete.`
-- Direct + urgent: `@BlueFalcon !! Need your decision now.`
-- Broadcast: `@all Wave 2 complete.`
-- Broadcast + urgent: `@all !! Stop edits in src/server/ until migration finishes.`
-
-## Spawning a subagent via the `/subagent` command
-
-The user can spawn a single subagent manually using the `/subagent [type] <task>` slash command. By default it runs as a background child process, but you can switch it to a visible cmux pane with `subagentLaunchMode`. When no type is specified, the extension resolves the default subagent type (`worker`/`default`) using the normal override order described below. In slash-command usage, the first token is treated as a type only if it matches a known subagent type; otherwise the full input is treated as the task. All agents use readable two-word callsigns (for example: `SilverHarbor`). An immediate `Spawning subagent ...` status message with runtime name and prompt will be shown immediately.
-
-If you want spawned agents to appear in a visible cmux pane instead of only running as background child processes, set `subagentLaunchMode` to `"cmux-pane"` in your collaborating-agents config. That mode uses `cmux new-split` plus `cmux send`, then launches a real `pi` session directly in the new pane so you see Pi's own terminal output there while the orchestrator still collects the final subagent response automatically. The extension now applies a two-phase layout strategy: it first chooses a balanced split target from the current managed pane tree, then runs a best-effort reconciliation pass with `cmux list-panes`, `cmux list-pane-surfaces`, `cmux move-surface`, and `cmux reorder-surface` so existing managed surfaces are moved back into the intended panes if the workspace drifted. This mode must be invoked from a Pi session that is already running inside a cmux terminal surface; otherwise subagent launch fails.
-
-### Usage
-
-```bash
-# Use default subagent type
-/subagent "Implement user authentication"
-
-# Use a specific subagent type
-/subagent scout "Find all TypeScript files in the project"
-/subagent documenter "Write API documentation for the auth module"
-/subagent reviewer "Check for security issues in src/auth/"
+```text
+/subagent scout 查找读取命令行参数的入口，只返回相关文件与函数。
+/subagent documenter 检查命令行指南是否与当前参数一致，先报告差异。
+/subagent reviewer 审阅这次提交，关注负权和输入边界，暂不改文件。
 ```
 
-The parent (orchestrator agent) sessions automatically collect final subagent outputs on completion (single and parallel), without requiring subagents to send a separate final direct message summary. All direct subagent → parent status messages are optional, but are useful for blockers/questions only. Inbox delivery uses Pi's message routing: normal messages are queued with `followUp`, and `urgent: true` messages interrupt immediately with `steer`.
+只有第一个词匹配已知角色时，才按角色解释，否则整段输入都作为任务。自带角色可能指定了你没有配置的模型；先使用默认 worker，或按下文覆盖角色模型，再尝试专用角色。Task Plan 的三个阶段预设不会自动覆盖这些角色文件。
 
-## Autonomous Tool API for Agents
+## 打开协作面板
 
-The following tools are provided for agents to call autonomously. Users should use the slash commands above.
+在 Pi 输入 `/agents`，可以看到四个页签。`Agents` 显示会话和状态，可切换到选中的活跃会话；`Feed` 展示消息流；`File reservations` 展示文件预留；`Chat` 用来直接与其他 Agent 沟通。启用扩展的会话启动后会登记；刚启动但还没有持久会话文件的记录可能显示 `session pending`。
 
-### The `agent_message` Tool
+Chat 中使用 `@名称` 私信，`@all` 广播。例如把面板中真实名称替换进下面的 `BlueFalcon`：
 
-The extension provides a dedicated **`agent_message`** tool for autonomous agent-to-agent messaging.
-
-Actions:
-
-- `status` – current identity, focus mode, peer count, and your reservation count
-- `list` – list active agents (includes reservation counts when present)
-- `sessions` – list scoped subagent run/session records; completed/failed are included by default, set `includeCompleted: false` for active runs only
-- `session` – resolve one subagent run/session record
-- `tail` – read a concise transcript tail for one resolved subagent run/session
-- `send` – send direct message (`to` + `message`, optional `replyTo`, optional `urgent`)
-- `broadcast` – send to all active peers (`message`, optional `urgent`)
-- `feed` – recent global message log (`limit` optional)
-- `thread` – direct-message thread with one peer (`to`, `limit` optional)
-- `reserve` – reserve files/directories for write/edit coordination (`paths`, optional `reason`)
-- `release` – release reservations (`paths` optional; omit to release all)
-
-Reservation patterns are validated. Empty patterns are rejected, and broad patterns (for example `.`, `/`, `./`, `../`, or a top-level directory like `src/`) are allowed but return warnings.
-
-Examples:
-
-```ts
-agent_message({ action: "list" })
-agent_message({ action: "sessions" })
-agent_message({ action: "sessions", includeCompleted: false })
-agent_message({ action: "session", runId: "subagent-run-id" })
-agent_message({ action: "tail", runId: "subagent-run-id" })
-agent_message({ action: "tail", to: "latest" })
-agent_message({ action: "send", to: "BlueFalcon", message: "I finished parsing" })
-agent_message({ action: "send", to: "BlueFalcon", message: "Following up on your last note", replyTo: "msg-123" })
-agent_message({ action: "send", to: "BlueFalcon", message: "Need your decision now", urgent: true })
-agent_message({ action: "broadcast", message: "Wave 2 complete" })
-agent_message({ action: "thread", to: "BlueFalcon", limit: 10 })
-agent_message({ action: "reserve", paths: ["src/server/", "src/routes/account.tsx"], reason: "auth refactor" })
-agent_message({ action: "release", paths: ["src/server/"] })
-agent_message({ action: "release" })
+```text
+@BlueFalcon 请先暂停修改，输入格式还需要确认。
+@all T001 的接口已确认，可以按各自范围继续。
+@BlueFalcon !! 请立即停止修改 src/cli/，有人正在处理同一处冲突。
 ```
 
-### Subagent Session Inspection
+普通消息排队到接收者本轮结束后处理，`!!` 标记的紧急消息通过 steering 尽快打断当前活动。不要用广播代替每项任务的清楚交接。已完成子 Agent 会保留在面板中一段时间，下一次协调者启动新子任务时会清理旧的面板历史项；持久运行记录用于之后的定位。
 
-Coordinators should inspect spawned subagents with `agent_message` instead of searching transcript files directly. Do not scan `~/.pi/agent/sessions` manually for normal subagent inspection; use the run registry so selectors stay scoped to the current coordinator.
+## 文件预留解决协作冲突，不代替权限隔离
 
-Common calls:
+开始修改前，Agent 可以预留具体文件或小目录。另一活跃 Agent 用 Pi 的 `write` 或 `edit` 写入匹配路径时会被拦住，并得到占用者和原因，随后可以发送消息协调。读取仍允许。
+
+预留只覆盖这个工具钩子，不拦截所有 shell、外部编辑器或其他进程的写入；它不是操作系统沙箱。空模式会被拒绝，过宽的 `.`、`/` 或顶层目录会给出警告。尽量预留实际负责的文件，做完释放，避免用一个很大的范围阻塞所有人。
+
+同一个 control/code 工作空间里，委派时说清目标目录：实现进 code，测试进 control，论文进对应 paper。公共运行状态目录可以让会话彼此发现，但目录共用本身不授予跨项目修改权限。
+
+## 查看子任务，不扫描全部聊天记录
+
+模型可以用 `agent_message` 查询当前协调者范围内的子运行记录，再查看短尾部。人可直接要求“查看刚才子任务的最新输出”，无需自己翻 `~/.pi/agent/sessions`。下面是工具调用形式，供理解和排障，不是需要在终端运行的 TypeScript：
 
 ```ts
 agent_message({ action: "sessions" })
 agent_message({ action: "sessions", includeCompleted: false })
-agent_message({ action: "session", runId: "subagent-run-id" })
-agent_message({ action: "tail", runId: "subagent-run-id" })
-agent_message({ action: "tail", to: "latest" })
+agent_message({ action: "session", runId: "子任务运行ID" })
+agent_message({ action: "tail", runId: "子任务运行ID" })
 ```
 
-Selectors accepted by `session` and `tail`:
+默认列表包括完成或失败记录，`includeCompleted: false` 只看活跃运行。精确选取可用 child run id（也称 `recordId`）、display name（显示名）、canonical name（运行名称）、session id prefix（会话 ID 前缀）或 `latest`。batch id 只有恰好对应一个孩子时才能唯一解析；并行批次会要求选择具体 Run ID，不能随意挑一份输出。
 
-- child run id / `recordId`: the stable per-child id returned by `subagent` and launch notices
-- display name: the readable subagent name shown in launch/completion output
-- canonical name: the runtime subagent name recorded by the extension
-- batch id: accepted only when it resolves to one child; parallel batches are ambiguous and return candidates
-- session id prefix: matches the reported Pi session id prefix
-- `latest`: newest subagent run for the current coordinator
+后台 process 子会话通常要等孩子登记或按会话 ID 发现文件后才能读取尾部。若出现 `Process-mode session file unavailable until child registration or fallback discovery provides one.`，先查看运行状态，稍后再用 Run ID 查询，不要用不相关会话文件补上。cmux 模式有显式会话文件，也要等文件实际出现。
 
-`sessions` lists active, completed, and failed records for the current coordinator by default. Pass `includeCompleted: false` to show only launching/running runs. `session` returns run metadata, session id, session file status, launch mode, cwd, and task preview. `tail` reads and formats the resolved session JSONL tail; it rejects raw file paths so agents do not bypass selector scoping.
+## 常用工具对照
 
-Process-mode subagents are launched as background `pi` child processes without a deterministic `--session` file. The extension records the session id from child output and attaches a session file only after child self-registration or fallback discovery by session id. Until then, tailing can report: `Process-mode session file unavailable until child registration or fallback discovery provides one.` In `cmux-pane` mode, the extension creates an explicit session file under `~/.pi/agent/sessions/collaborating-agents-subagents/` and tails that file after it appears.
+| 模型工具或动作 | 用途 |
+| --- | --- |
+| `subagent` 的 `task` | 启动一项任务，可带 `type`、`cwd` |
+| `subagent` 的 `tasks` | 启动多项并行任务，每项可给 `cwd`；顶层 `type` 应用于这批任务 |
+| `sessionControl` | 是否给孩子传 `--session-control`，默认 true |
+| `agent_message`：`status` / `list` | 当前身份、对方状态与预留数量 |
+| `sessions` / `session` / `tail` | 查询子运行记录与短输出 |
+| `send` / `broadcast` | 私信或广播；可用 `urgent`，私信可用 `replyTo` |
+| `feed` / `thread` | 查看近期全局消息或与指定 Agent 的消息，可给 `limit` |
+| `reserve` / `release` | 预留或释放 `paths`；省略 release 的路径表示释放全部 |
 
-### The `subagent` Tool
-
-The extension also provides a lightweight **`subagent`** tool for agents to call when they need to spawn subagents.
-
-Modes:
-
-- Single: `{ task }` or `{ type, task }`
-- Parallel: `{ tasks: [{ task, cwd? }, ...] }` or `{ type, tasks: [...] }`
-
-Parameters:
-
-- `task` (string, optional) – Task prompt for single-mode
-- `tasks` (array, optional) – Array of task objects for parallel-mode
-- `type` (string, optional) – Subagent type to use (e.g., "scout", "documenter", "reviewer")
-- `cwd` (string, optional) – Working directory for spawned subagents
-- `sessionControl` (boolean, optional) – Spawn with `--session-control` (default: true)
-
-Examples:
-
-```ts
-// Default subagent type
-subagent({ task: "Implement auth tags and report back via agent_message" })
-
-// With specific subagent type
-subagent({
-  type: "scout",
-  task: "Find all TypeScript files in the project"
-})
-
-// Parallel subagents
-subagent({
-  tasks: [
-    { task: "Implement backend pieces" },
-    { task: "Implement frontend pieces" }
-  ]
-})
-
-// Parallel with specific type (applies to all tasks)
-subagent({
-  type: "documenter",
-  tasks: [
-    { task: "Document backend API" },
-    { task: "Document frontend components" }
-  ]
-})
-```
-
-Launch responses and background launch notices include a Batch ID plus one child Run ID per spawned subagent. Prefer those Run IDs for `agent_message({ action: "session", runId: "..." })` and `agent_message({ action: "tail", runId: "..." })`; use `agent_message({ action: "sessions" })` to rediscover active and recent completed runs, or `includeCompleted: false` for active runs only.
-
-## Subagent Type Configuration
-
-You can define custom subagent types using TOML configuration files. These allow you to create specialized subagents with different prompts, models, and reasoning levels.
-
-### Configuration locations
-
-Subagent type configurations are loaded in precedence order (later entries override earlier ones when names match):
-
-1. **Bundled defaults**: `examples/subagents/*.toml` (included with this extension)
-2. **User overrides**:
-   - Legacy: `~/.pi/agent/subagents/*.toml`
-   - Also supported: `~/.pi/subagents/*.toml`
-   - Preferred: `~/.pi/agents/*.toml`
-3. **Project overrides** (nearest ancestor from current cwd):
-   - Legacy: `.pi/subagents/*.toml`
-   - Preferred: `.pi/agents/*.toml`
-
-If no override directory contains a matching type, the extension falls back to the included `examples/subagents` configuration files.
-
-### TOML format
-
-Each `.toml` file defines one subagent type:
-
-```toml
-name = "scout"
-description = "Exploration specialist for finding files and patterns"
-
-# Optional: Override the model (defaults to parent session's model)
-model = "openai/gpt-4o-mini"
-
-# Optional: Set reasoning level (low, medium, high, xhigh)
-reasoning = "low"
-
-# Required: The system prompt for this subagent type
-prompt = """You are a Scout subagent specialized in exploration...
-
-## Guidelines
-- Be quick and focused
-- Use bash, find, grep efficiently
-- Report findings in structured format
-"""
-```
-
-### Default subagent type
-
-When no type is specified, the extension resolves the default in this order:
-
-1. the highest-precedence non-bundled `worker.toml` override found in user/project directories
-2. otherwise the highest-precedence non-bundled `default.toml` override found in user/project directories
-3. bundled discovered `worker`
-4. bundled `examples/subagents/worker.toml`
-5. Emergency inline fallback (only if bundled files are unavailable)
-
-To customize the default behavior, create `worker.toml` in one of the supported user or project override directories.
-
-### Example subagent types
-
-The extension includes example configurations for common use cases:
-
-| Type | Purpose | Reasoning |
-|------|---------|-----------|
-| `worker` | General-purpose development tasks | medium |
-| `scout` | Exploration and discovery | low |
-| `documenter` | Documentation writing | medium |
-| `reviewer` | Code review and analysis | high |
-
-See the `examples/subagents/` directory for complete example configurations.
-
-### Using subagent types
-
-**Via slash command:**
-```bash
-/subagent scout "Find all API endpoints in src/"
-/subagent documenter "Write README for the auth module"
-/subagent reviewer "Check src/auth.ts for security issues"
-```
-
-**Via the `subagent` tool:**
-```ts
-// Single subagent with type
-subagent({
-  type: "scout",
-  task: "Find all TypeScript files"
-})
-
-// Parallel subagents with types
-subagent({
-  tasks: [
-    { task: "Document auth module" },  // uses default/worker type
-    { task: "Review auth module" }     // uses default/worker type
-  ],
-  type: "documenter"  // applies to all tasks
-})
-```
-
-## Configuration
-
-This extension supports both **JSON config files** and **environment variables**.
-
-### Configuration file locations and precedence
-
-The extension loads and merges configuration in this order:
-
-1. Built-in defaults
-2. Global config: `~/.pi/agent/collaborating-agents.json`
-3. Project config: `<cwd>/.pi/collaborating-agents.json` (overrides global)
-
-Invalid config values fall back to defaults. Numeric fields such as `messageHistoryLimit` must be positive.
-
-### Config keys
-
-#### `messageHistoryLimit` (number, default: `400`)
-
-Default history depth used by the overlay feed/chat loader.
-
-- Larger values allow more history at once but increase read/format work.
-- Smaller values keep UI snappier in very high-message sessions.
-
-This is a default baseline; runtime calls may still request larger limits.
-
-#### `subagentLaunchMode` (`"process" | "cmux-pane"`, default: `"process"`)
-
-Controls how spawned subagents are launched.
-
-- `"process"` keeps the current behavior: spawn a background `pi` child process directly.
-- `"cmux-pane"` launches the subagent in a new visible cmux split pane in the current workspace by calling `cmux new-split` and then sending a real `pi` launch command into that pane.
-- In `"cmux-pane"` mode, the extension tracks the orchestrator pane plus visible subagent panes in the workspace and picks the shallowest managed pane for the next split (preferring subagent panes over the orchestrator on ties). It alternates horizontal and vertical split directions by tree depth so the layout trends toward a balanced grid instead of repeatedly slicing columns off the orchestrator pane.
-- After each new pane is created, the extension also snapshots live cmux panes/surfaces and performs a best-effort rebalance pass. If managed surfaces drifted because of manual pane moves or closes, it uses `move-surface`/`reorder-surface` to restore the planned arrangement before continuing.
-
-Use `"cmux-pane"` when you want every spawned agent to have a real visible terminal in cmux while still preserving automatic result collection in the parent session. The pane shows Pi's native terminal session output instead of a custom JSON renderer.
-
-By default, successfully completed `"cmux-pane"` subagents are auto-closed after the orchestrator has collected their final output and the pane has stayed idle for a short grace period. If the pane reports a non-zero post-output exit during that grace period, or if close/idle detection fails, the pane is left open so you can inspect diagnostics.
-
-`"cmux-pane"` requires the orchestrator itself to be running inside cmux so the extension can split the current workspace.
-
-Example:
+适合并行时，可以让协调者调用下面这样的工具参数；输入是任务说明，不是对全部仓库的笼统授权：
 
 ```json
 {
-  "subagentLaunchMode": "cmux-pane",
+  "tasks": [
+    { "task": "只读核对负权测试覆盖，报告缺口", "cwd": "/data/research/matching_control" },
+    { "task": "只读核对命令行指南的参数例子，报告差异", "cwd": "/data/research/matching_code" }
+  ]
+}
+```
+
+## 角色配置：给特定工作一份稳定说明
+
+角色文件是 TOML，一种简单的配置文本。一个文件对应一个角色，普通用户可以从例子修改，不必写扩展源码。以下内容保存为 control 中 `.pi/agents/km-reviewer.toml`，然后在该 control 目录启动 Pi：
+
+```toml
+name = "km-reviewer"
+description = "只读检查 KM 算法和需求的一致性"
+model = "custom-qwen/qwen38-27b-fp8"
+reasoning = "high"
+prompt = """先阅读当前需求与限定范围的代码。
+检查负权、匹配完整性和输入输出边界，不改文件。
+报告具体问题、位置、依据和未能检查的部分。
+需要更多上下文时向父 Agent 说明，不扩大任务。"""
+```
+
+调用 `/subagent km-reviewer 检查当前实现是否满足已确认的 KM 需求` 即使用这个角色。示例模型要先在 Pi 登记；不指定 `model` 时继承父模型。角色的 `reasoning` 接受 `low`、`medium`、`high`、`xhigh`，与 Task Plan 可接受的全部等级并不相同。部署模型如何响应 thinking，仍取决于 [模型接入](../../docs/models.md)。
+
+配置按从低到高覆盖同名角色：包内 `examples/subagents/*.toml`；用户目录 `~/.pi/agent/subagents`、`~/.pi/subagents`、`~/.pi/agents`；从当前目录向上寻找的项目 `.pi/subagents`、`.pi/agents`。新配置推荐最后两种 `agents` 路径。没有指定角色时，优先用户/项目覆盖的 worker，再考虑覆盖的 default，然后使用包内 worker 与兜底实现。
+
+自带角色和实际模型配置见 [角色示例目录](../../examples/subagents)。例如当前 scout 配置了 `openai-codex/gpt-5.4-mini`，documenter/reviewer 配置了 `openai-codex/gpt-5.5`；它们不是账号赠送或可用性保证，应该按自己的可用模型覆盖。
+
+## 后台运行还是可见终端
+
+默认 `process` 在后台启动 Pi 子进程，适合先跑通流程。如果你使用支持分屏的 cmux 终端，并且父 Pi 已经运行在 cmux 内，可选择 `cmux-pane`，每个子任务都有可见的 Pi 终端。没有 cmux 环境时不要开启这个选项。
+
+配置从默认值、全局 `~/.pi/agent/collaborating-agents.json`、当前目录 `.pi/collaborating-agents.json` 依次覆盖。项目文件相对**实际 cwd**，不像角色搜索那样寻找最近祖先。下面是完整的基础示例，保存后重启 Pi：
+
+```json
+{
+  "messageHistoryLimit": 400,
+  "subagentLaunchMode": "process",
   "closeCompletedCmuxPanes": true
 }
 ```
 
-#### `closeCompletedCmuxPanes` (boolean, default: `true`)
+`messageHistoryLimit` 决定面板默认读取的消息数量，必须为正数；更大意味着一次读取和显示更多内容。`subagentLaunchMode` 只接受 `process` 或 `cmux-pane`。`closeCompletedCmuxPanes` 默认 true，成功子任务结果被收集并经过短暂空闲后关闭面板；设 false 则保留。失败、非零退出或无法确认空闲时会保留诊断窗口。无效配置值回退默认。
 
-Controls whether successfully completed `"cmux-pane"` subagents automatically close their terminal surface after the parent orchestrator has collected the final output and the pane has remained idle for a short grace period.
+cmux 模式会尝试平衡新分屏的位置，并在手动移动或关闭面板后尽力重新整理受管理面板。这不保证任意桌面布局都原样不动；希望保持人工布局时，可使用后台模式。
 
-- `true` closes successful completed panes by calling `cmux close-surface --surface <ref>` after turn-finished output plus a short idle grace.
-- `false` keeps completed panes open for manual inspection.
+| 环境变量 | 作用 |
+| --- | --- |
+| `COLLABORATING_AGENTS_DIR` | 改共享状态根目录，默认 `~/.pi/agent/collaborating-agents`；可用不同位置隔离项目 |
+| `PI_AGENT_NAME` | 显式指定运行名称；日常可保留自动生成 |
+| `PI_COLLAB_SUBAGENT_DEPTH` | 当前子任务层级，由运行流程传递 |
+| `PI_COLLAB_SUBAGENT_MAX_DEPTH` | 默认最多 2 层，当前深度达到上限后不再生成孩子 |
 
-This setting only affects `"cmux-pane"` launch mode. Failures or non-zero exits detected during the idle grace leave panes open so logs remain visible.
+状态根目录包含 `registry/` 登记、`inbox/` 消息队列、`runs/` 子运行记录和 `messages.jsonl` 消息历史。这些属于协作运行状态，不写入 readable Plan。修改存储位置后，只有使用相同位置的会话才能共享这些记录。
 
-### Environment variables
+<details>
+<summary>维护者：兼容术语与人工核对入口</summary>
 
-#### `COLLABORATING_AGENTS_DIR`
+会话检索规则：Do not scan `~/.pi/agent/sessions` manually。请通过运行记录选择子会话，避免混入其他项目。
 
-Overrides the storage root used by the extension. Default:
-
-- `~/.pi/agent/collaborating-agents`
-
-This affects:
-
-- `registry/` (active agent registrations)
-- `inbox/` (per-agent inbound queue)
-- `runs/` (durable subagent run/session records)
-- `messages.jsonl` (global append-only message log)
-
-Use this to isolate per-project state or relocate agent data.
-
-#### `PI_AGENT_NAME`
-
-Forces an explicit runtime agent name instead of auto-generated names.
-
-Useful for deterministic scripts/tests or named coordinator sessions.
-
-#### `PI_COLLAB_SUBAGENT_DEPTH` and `PI_COLLAB_SUBAGENT_MAX_DEPTH`
-
-Recursion guard for nested subagent spawning.
-
-- `PI_COLLAB_SUBAGENT_DEPTH` tracks current depth.
-- `PI_COLLAB_SUBAGENT_MAX_DEPTH` sets max allowed depth (default max is `2`).
-
-If `depth >= max`, subagent spawn is blocked.
-
-## How It Works
-
-Messages use Pi's delivery system: normal messages queue until the recipient finishes their current turn, urgent ones interrupt immediately. No polling is needed.
-
-Reservations are enforced by hooking Pi's edit and write tools. When an agent tries to edit a reserved file, the tool call gets blocked and the agent sees who reserved it, why, and a suggestion to coordinate via the `agent_message({ action: "send", ... })` tool. Write and edit calls are blocked when another active agent has a matching reservation. Reads remain allowed.
-
-States in this extension are stored at `~/.pi/agent/collaborating-agents/`:
-
-```
-.pi/agent/collaborating-agents/
-├── registry/          # One JSON file per agent
-├── inbox/{name}/      # Inbound messages as JSON files, watched with fs.watch, one directory for each agent
-├── runs/              # Durable subagent run/session records, one JSON file per child run
-└── messages.jsonl     # Append-only log of all messages in the system
-```
-
-
-## Validation
-
-Use `bun test` for implementation and docs validation. Useful focused checks for the subagent session inspection surface:
+现有上游验证入口（在本工具源码检出中运行；不要求新手执行）：
 
 ```bash
 bun test extensions/collaborating-agents/docs.test.ts
 bun test extensions/collaborating-agents/index.test.ts --test-name-pattern "tool documentation metadata|agent_message subagent sessions|subagent launch identity"
 bun test extensions/collaborating-agents/session-tail.test.ts
-bun test
 npm pack --dry-run
 ```
 
-Keep `npm pack --dry-run` as the packaging check before publishing or validating package contents.
+Manual smoke: process mode：用默认后台模式启动一项只读任务，核对 Run ID、登记和短输出。
 
-Manual smoke: process mode
+Manual smoke: parallel ambiguity：两项并行任务共用 batch id 时应要求选择孩子，再用 child Run ID 读取。
 
-1. Use default `subagentLaunchMode: "process"` and spawn a single subagent.
-2. Confirm the launch notice shows Batch ID, Run ID, runtime name, and session status.
-3. Run `agent_message({ action: "sessions" })`, then `agent_message({ action: "session", runId: "<run-id>" })`.
-4. Run `agent_message({ action: "tail", runId: "<run-id>" })`; if the session file is still unavailable, confirm the process-mode unavailable reason is shown.
+Manual smoke: cmux mode：在 cmux 内启动可见子会话，核对窗口、会话文件、结果收集和成功关闭行为。
 
-Manual smoke: parallel ambiguity
-
-1. Spawn at least two parallel subagents in one batch.
-2. Run `agent_message({ action: "session", runId: "<batch-id>" })` and confirm it reports an ambiguous selector with candidate child Run IDs.
-3. Run `agent_message({ action: "tail", runId: "<child-run-id>" })` for a specific child.
-
-Manual smoke: cmux mode
-
-1. When running inside cmux, set `subagentLaunchMode: "cmux-pane"` and spawn a subagent.
-2. Confirm a visible pane opens and the launch/session-ready notices include a session file.
-3. Run `agent_message({ action: "tail", runId: "<run-id>" })` and confirm it tails the cmux session file.
+</details>
