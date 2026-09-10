@@ -22,7 +22,7 @@ pi --version
 pi
 ```
 
-在 Pi 内输入 `/login`，选择你已有账号支持的提供方并完成登录；也可以按照提供方说明设置 API Key。接着输入 `/model` 选择可用模型，再发一句普通问题确认能收到回答。自部署服务需要先在 `~/.pi/agent/models.json` 登记地址和模型，配置入口见 [模型相关工作流](../extensions/task-plan/v3-workflow.md)。这里的 `~` 表示你的用户目录，配置属于你自己的 Pi，不能把真实密钥提交到项目仓库。
+在 Pi 内输入 `/login`，选择你已有账号支持的提供方并完成登录；也可以按照提供方说明设置 API Key。接着输入 `/model` 选择可用模型，再发一句普通问题确认能收到回答。自部署服务需要先在 `~/.pi/agent/models.json` 登记地址和模型，配置入口见 [模型指南](models.md)。这里的 `~` 表示你的用户目录，配置属于你自己的 Pi，不能把真实密钥提交到项目仓库。
 
 安装与登录方式以 [Pi 官方入门](https://github.com/earendil-works/pi/tree/main/packages/coding-agent#quick-start) 为准。本文核对的是上面的版本，不代表所有历史或未来版本行为相同。
 
@@ -105,7 +105,7 @@ Plan 保存在 control 下的 `plans/` 中，通常形如 `001-km.md`。它应�
 PI_TASK_PLAN_MODEL_SWITCH=0 pi
 ```
 
-这行设置仅影响本次 Pi 进程。要长期设置三个阶段，按 [Plan 工作流](../extensions/task-plan/v3-workflow.md) 配置，不需要改源码。
+这行设置仅影响本次 Pi 进程。要长期设置三个阶段，按 [模型指南](models.md) 配置，不需要改源码。
 
 ## 明天继续，不重新建立一遍
 
