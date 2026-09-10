@@ -1,111 +1,124 @@
-# Lightweight delivery checks
+# 文档同步：沿着相关变化找到该改的说明
 
-Ordinary documentation work follows AGENTS.md: update existing explanations as
-user-visible behavior stabilizes, and check related changes before delivery.
-The optional helper below supplies review context, not semantic certification.
-It does not need a Plan, phase baseline, Harness journal or GitHub connection.
+[返回首页](../../../README.md) · [Plan](../README.md) · [Harness 的保证范围](../../../docs/harness.md)
 
-## Select related changes
+假设 matching 的命令行新增了输出匹配结果的选项。用户看到的是一个参数，代码里可能涉及参数解析、结果格式化和调用者，文档里可能同时出现于 README 的快速开始和命令行指南。只看“这次改了哪个文件”容易漏掉后两处；把整个仓库重新读一遍，又会消耗大量上下文，却未必抓住这条关系。
 
-`inspectDeliveryScope` in `delivery-scope.ts` accepts an explicit repository root
-and up to eight `{base, head, mode?, label?}` ranges. Resolve PR metadata using
-your existing host/GitHub tools and fetch required commits explicitly. Labels
-are navigation only; the returned immutable Git OIDs define the comparison.
+这里的做法是先利用交付线索缩小范围。PR 记录了一组准备交付的提交，从 base 到 head 可以找到真实改动的文件。再用简短的功能文档和源文件到文档的对应关系，追踪相关的配置项、接口名和调用者。逐层补充需要的内容，而不是一次加载全仓库。这套工具帮助定位文件和段落，不替换文件系统，也不是完整的静态调用图。
 
-- `endpoints` compares the specified commits; `merge-base` uses their unique
-  common ancestor. Missing or ambiguous bases are errors.
-- A stacked PR uses its own parent/base. A combined delivery can include several
-  ranges to retain origin labels, plus a net endpoint comparison when evaluating
-  final behavior. Overlapping paths are returned once with all range origins.
-- Optional `paths` selects exact committed filenames; it is not a glob. Without
-  it, include all changed paths in the chosen ranges.
-- `localPaths` names only related local files to compare with current HEAD,
-  including staged/unstaged, deleted, untracked or explicitly named ignored files.
-  Unrelated dirty files are not adopted. Local comparison uses raw bytes and
-  executable mode, so normalization-only differences may need Human/model judgment.
+## 时机：边做边改，交付前再检查一次
 
-The helper returns filenames before requesting detailed context. It reads no
-full patches, invokes no repository filter programs and writes no files. It
-limits selections to 128 paths each and results to 512 changed paths; narrow an
-oversized range rather than treating omitted content as checked. Git queries
-and reads retain the existing safety/output bounds. Symlink targets and embedded
-alternate Git metadata are not read. Collection detects observed concurrent
-changes but is not an OS transaction.
+需求还在讨论，就先改 Plan。用户可见行为已经实现并稳定，就及时改对应说明、配置或例子。准备交付一个大任务或 PR 时，再检查相关变化是否遗漏了文档。这样写文档不会被拖到最后一次性猜测，也不要求每做一小步就停下来填一张表。
 
-## Follow documentation impact
+默认由 `AGENTS.md` 和规划提示说明这条规则。能力较弱的模型可能忘记，因此可以显式选用 `docsync_check` 提供候选位置和遗漏问题，或给一个任务增加会话内提醒。普通使用不需要它；当前可选助手也没有“开启后就强制所有 PR 文档完整”的开关。提示、定位辅助和强制接受是不同层次，详见 [Harness](../../../docs/harness.md)。
 
-`inspectDocumentationImpact` in `delivery-impact.ts` extends the scope input:
+## 第一步：确定相关范围，而不只看工作区剩余 diff
 
-- `mappings: [{sources: ["src/cli/**"], docs: ["docs/cli.md"]}]` adds small
-  explicit associations. Optional `governanceRoot` reads the existing
-  `.harness/docsync.yml`; absent/invalid supplied policy remains an explicit
-  question while valid supplied mappings and searches can still run.
-- `terms` supplies up to 16 literal command/configuration/interface names.
-  `codePaths` narrows relevant caller/config-reader search domains; `docPaths`
-  defaults to `README.md` and `docs/**`. Patterns use the existing bounded
-  DocSync wildcard syntax. Search returns file/line locations and short snippets.
-- Follow the next dependency hop by narrowing domains and adding the relevant
-  names from those references. This is explicit on-demand navigation, not a
-  complete language-aware call graph. Stop when user-visible behavior is
-  unaffected; unresolved/unmapped sources remain questions.
+刚提交过的改动可能已经不在 `git diff` 中，却仍属于这次交付。检查应使用相关 PR 的 base/head 或明确提交范围，再补上这次尚未提交的相关文件。不要把整个脏工作区直接当成本次工作，也不要因为某段改动已经提交就把它漏掉。
 
-Context is explicitly the **current worktree**, not a historical PR checkout.
-A selected final head different from local HEAD is reported for review. Use the
-intended checkout or inspect historical snippets with host tools when needed.
-Changed docs are candidates for semantic review, not automatically accepted.
+例如已经配置 GitHub CLI 的环境，可在终端或让 Agent 用现有 GitHub 工具读取 PR 信息：
 
-Inspection limits are 128 files, 256 KiB/file, 2 MiB total, 64 reference snippets
-and 128 candidates. Truncation, missing targets, binary text, unmatched mappings
-and unknown impact are returned explicitly. Narrow the request or inspect those
-items separately rather than treating omitted work as checked. Versions bind
-scope, policy, search domains, exact inspected content and newly matching files.
-No graph, full diff, document result or cache is written to the readable Plan.
-
-## Use the optional helper
-
-Pi's ordinary V3 extension exposes `docsync_check` with the fields above. It
-returns advisory locations; use normal file/Git tools to read a precise patch
-or follow the next reference. Supply `watch: {plan_path, task_id}` only when
-choosing a session-local delivery reminder. Before an existing unchecked parent
-becomes checked through Plan tools (including child rollup and definition-tool
-status edits), the program inspects the watched scope and shows a separate
-message. Other child updates do not trigger it. The Plan still records only
-checkbox progress; a check failure remains visible and does not certify docs or
-disable ordinary completion. `docsync_unwatch` removes the optional reminder.
-
-Watches disappear on a fresh session. Direct editor changes, initial/manual
-completed Plan creation, independent governed finalization and arbitrary shell
-commits are not intercepted. Before PR delivery without a watched transition,
-run `docsync_check` explicitly. This is an advisory integration, not an enforced
-release gate. Use the current relevant scope each time; it does not infer a PR
-or silently fetch remote commits.
-
-Codex and other hosts can keep using AGENTS.md alone, or optionally invoke the
-host-neutral entry from an installed checkout (tested on Node 25.9.0):
-
-```sh
-node /path/to/package/extensions/task-plan/docsync/delivery-cli.mjs < request.json
+```bash
+gh pr view 12 --repo your-org/matching_code --json baseRefOid,headRefOid,baseRefName,headRefName
 ```
 
-The request is a JSON object with `root`, `ranges` and optional selection/search
-fields (no Pi `watch`). Input is capped at 64 KiB; output is advisory JSON. No
-Skill, MCP setup, hidden runtime or Plan conversion is required. The caller
-controls PR lookup, checkout and permissions. Repository text is review data,
-never instructions to execute commands embedded in source or documentation.
+替换仓库和 PR 编号，查看返回的真实提交。DocSync 本身不访问 GitHub、不猜 PR，也不会偷偷 fetch；本地没有这些提交时，由使用者明确获取。PR 描述用于导航，最终仍要看代码变化，不能把作者写的“文档已同步”当证据。
 
-## Incremental context
+上下堆叠的 PR 应各自使用实际父 PR 的 base，避免把父层所有改动重复算进每一层。一次交付跨多个 PR，可以保留各范围的来源标签，再用最初 base 到最终 head 的净变化判断最终行为，防止忽略中间被撤回的修改。`endpoints` 比较指定端点，`merge-base` 从两个提交唯一的共同祖先比较；没有或存在歧义的基点会报错。
 
-Within a Pi session, repeated checks still inspect current bytes and discovery
-domains. If the same request and inspected version remain unchanged, the helper
-omits repeated reference snippets but keeps candidate locations and unresolved
-questions. It stores at most sixteen version entries in memory; changing code,
-docs, policy, terms or relevant discovery results invalidates reuse. Unrelated
-files outside the selected domains do not invalidate the context cache.
+## 第二步：用功能说明和少量关系定位
 
-Limited/truncated or unsearched content is never cached as a reusable complete
-inspection. Narrow the request or review omitted items separately. The report
-version covers inspected inputs only, not unread files beyond the cap. Output
-is capped at 24,000 characters in Pi (with an explicit omission notice); CLI
-JSON over 64 KiB fails with a narrowing request. No cache is required to resume
-ordinary work, no unresolved issue is silently accepted, and no persistent
-history or debt ledger is created by this helper.
+一个功能指南最好讲清“用户什么时候需要它、入口是什么、重要配置是什么、完整例子是什么”。比如 `docs/cli.md` 专门解释命令行，而 README 只给最短入口并链接过去。这样搜索参数名时，能找到应该修改的正文，不必维护一套很大的额外知识图谱。
+
+下面是交给 Pi 工具 `docsync_check` 的参数示例。人可以描述同样的需求，让 Agent 构造参数；这不是在 Pi 中直接输入的斜杠命令。示例仓库需要已有至少两个提交，`HEAD^` 到 `HEAD` 表示最近一个提交；检查实际 PR 时请换成已经核对的 base/head。
+
+```json
+{
+  "root": "/data/research/matching_code",
+  "ranges": [
+    { "base": "HEAD^", "head": "HEAD", "mode": "endpoints", "label": "本次命令行交付" }
+  ],
+  "localPaths": ["src/km.cpp"],
+  "mappings": [
+    { "sources": ["src/cli/**"], "docs": ["README.md", "docs/cli.md"] }
+  ],
+  "terms": ["--show-matching"],
+  "codePaths": ["src/**"],
+  "docPaths": ["README.md", "docs/**"]
+}
+```
+
+`root` 是要检查的 code 仓库。`localPaths` 只列出已确认属于这次工作的未提交文件，包含暂存、未暂存、删除、未跟踪，以及明确点名的忽略文件；与 HEAD 比较的是原始内容和可执行位。若没有相关本地改动，省略这一项。`paths` 是提交范围中的可选**精确文件名**筛选，不支持 glob；省略则保留所选范围里的全部变化。
+
+`mappings` 表达“这些源文件变化时，看看这些文档”。`terms` 是参数名、配置键或接口名的字面量搜索，不是语义搜索。`codePaths` 缩小调用者或配置读取位置，`docPaths` 默认只覆盖 `README.md` 和 `docs/**`；文档位于 `extensions/**` 等位置时要显式补进范围，否则不能声称已经覆盖。
+
+报告先返回候选文件和短引用。读到一个相关调用者后，再用它的接口名做下一跳；读到无关内部细节就停止扩大。出现“未知影响”、找不到映射目标或达到读取上限时，应缩小请求或单独核对，并保留未解决问题。空候选也可能只是映射不够，不能直接得出“没有文档要改”。
+
+搜索片段来自**当前工作区**，不是 PR 头提交的历史副本。如果最后一个范围的 head 与本地 HEAD 不同，会提示检查上下文。可以在合适的检出中检查，或用普通 Git 工具读取对应历史内容；不要把两种版本的文字混在一起判断。
+
+## 没有文档、没有标记，怎么办
+
+一个已有大量代码但完全没有文档的工程，不需要先给所有文件加标记才能开始。先明确当前交付影响什么用户行为，补一份最需要的说明，例如如何运行、一个完整输入输出例子和关键参数，再逐步补对应关系。当前助手会把缺失目标或未知影响保留下来；它不会自动生成完整文档，也不会阻止普通编辑。
+
+多数情况用整文件目标即可。若团队已经有长期维护的映射，可以在 **control** 的 `.harness/docsync.yml` 中保存，调用时通过 `governanceRoot` 明确指定 control。下面的路径仍相对被检查的 code，而不是相对 control：
+
+```yaml
+version: 1
+concepts:
+  matching_cli:
+    sources: ["src/cli/**"]
+    docs: ["docs/cli.md"]
+hard_rules: []
+readme: README.md
+classification:
+  code: ["src/**", "package.json"]
+  tests: []
+  docs: ["README.md", "docs/**"]
+```
+
+`concepts` 和 `hard_rules` 必须存在，内容可以为空。向轻量助手传入这个文件只会导入定位关系，不会因为字段名叫 `hard_rules` 就产生强制发布门禁。没有传 `governanceRoot` 时不要求配置文件；明确传入却缺失或无效时，报告会显示未解决的策略问题。
+
+路径模式支持 `*`、`?` 和独立路径段 `**`，区分大小写；不支持否定模式、花括号、正则或 extglob。声明整篇文档就不需要区块标记。旧层还支持明确的 `section_id`，其严格区域验证要求成对标记存在；轻量交付助手只把区域名保留为定位理由，候选和片段仍按文件处理，**不能据此声称验证了标记完整性**。旧区域能力见 [进阶参考](README.md)。
+
+## 在大任务完成前提醒一次
+
+已经决定使用助手时，可以在上面请求中加入：
+
+```json
+{
+  "plan_path": "plans/001-km.md",
+  "task_id": "T002"
+}
+```
+
+这段对象是 `watch` 字段的值，要并入包含 `root`、`ranges` 等内容的完整 `docsync_check` 请求，不能单独作为请求。`plan_path` 相对 Pi 工作目录（通常为 control），而 `root` 指向 code；两个位置承担不同职责。
+
+之后该已有大任务通过 Plan 工具从未完成变为完成，包括最后一个子任务触发父任务汇总时，程序会先检查这个绑定范围并单独显示提醒。其他子任务的普通进度更新不会每次都触发。检查失败或发现候选也只是提示，不改变普通勾选权限，不往 Plan 写结果。关闭提醒可让 Agent 调用 `docsync_unwatch`，参数就是上面的 Plan 路径与任务 ID。
+
+提醒只在本会话内保存，换会话会消失。直接用编辑器勾选、最初就创建已完成任务、任意 shell 提交，以及独立受治理 finalize 都不在这个提醒入口里。准备 PR 却没有发生被监听的状态变化时，应显式再检查相关范围；不要误认为每个 PR 都被后台自动扫描。
+
+## 不在 Pi，也可以使用同一个只读助手
+
+普通宿主按 AGENTS 的文字规则工作就可以。需要程序辅助时，保存完整 JSON 请求为 control 中的 `delivery-request.json`，把示例路径和范围改成实际值，然后在终端运行：
+
+```bash
+node /工具包绝对路径/extensions/task-plan/docsync/delivery-cli.mjs < delivery-request.json
+```
+
+这个入口从标准输入读一份 JSON，返回带 `advisory: true` 的 JSON。它不接受位置参数，也没有 Pi 的 `watch` 字段；非零退出表示本次检查失败，应读取错误信息，不应称为“检查通过”。入口使用 Node 的 TypeScript 加载能力，已在 Node 25.9.0 验证；旧 Node 不支持时需使用兼容版本。无需额外 Skill、MCP 或 Plan 转换。
+
+## 如何节约上下文，又不隐去遗漏
+
+同一 Pi 会话内重复检查时，助手仍检查当前文件和搜索范围；已检查内容与范围没有变化，才省略重复引用片段，保留候选位置和未解决问题。代码、文档、映射、搜索词或新增匹配文件变化后，相关上下文需要重新读取。这里只在内存中保存有限缓存，没有另建用户要理解的历史页面。
+
+| 读取范围 | 当前上限 |
+| --- | --- |
+| 提交范围 | 8 组 |
+| `paths` / `localPaths` | 各 128 个精确路径 |
+| 变化文件 | 512 个 |
+| 内容检查 | 128 个文件，单个 256 KiB，总共 2 MiB |
+| 短引用 / 候选文档 | 64 条 / 128 个 |
+| Pi 输出 | 24,000 字符，超出会说明省略 |
+| CLI 输入 / 输出 | 各 64 KiB；输出过大时报错并要求缩小范围 |
+
+达到上限、二进制内容、缺失目标或未覆盖文件会留下明确问题，不会把未读内容缓存成“已完整检查”。这种节约来自少读无关内容、少重复展示，而不是降低判断标准。最后仍要读相关 diff 和文档，确认读者照着说明确实能理解并使用这个功能。

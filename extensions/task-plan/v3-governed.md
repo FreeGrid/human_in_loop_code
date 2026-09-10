@@ -1,31 +1,51 @@
-# Choosing governed execution
+# 可选受治理执行：让完成有真实的接受依据
 
-Ordinary Plan use needs no setup or certification. A Human may check a task directly, and a copied Plan works in a fresh session. Governed execution is an optional host integration for additional authorization, scope, verification and independent review. Its unavailable or invalid state affects that flow only.
+[先了解为什么需要 Harness](../../docs/harness.md) · [普通 Plan](README.md) · [集成接口](v3-kernel.md)
 
-An embedding host supplies `TaskPlanExtensionConfig.governed`, a trusted factory `(canonicalPlanPath, extensionContext) => V3Governed`. The ordinary entry imports the adapter only when used. The factory must construct `createV3Governed` with the selected Plan's `createV3Runtime`, persistent runtime and evidence keys, a stable implementer identity, reviewed policy, a real execution sandbox, process-bound verification handles and an independent reviewer handle. The runtime must never depend on a private control repository. Factories, keys, capabilities and review/verification providers are not model tool arguments.
+普通使用可以由人直接勾选，也能在新会话打开复制来的 Plan。这里介绍的是另外一条明确选择的执行路径：宿主用程序检查授权、执行范围、验证与独立审阅，条件满足后才能正式接受任务。它的状态缺失或无效只影响这条路径，不禁止普通工作。
 
-After opening a V3 Plan, an explicitly configured host provides:
+## 先确认宿主已经接入
 
-| Command | Effect |
-|---|---|
-| `/plan:governed prepare` | Prepare a hidden contract for the current task |
-| `/plan:governed approve` | Review the concrete definition and policy, then approve the contract |
-| `/plan:governed authorize` | Separately authorize the displayed execution boundaries |
-| `plan_governed_run` | Run an allowed child process after explicit selection and authorization |
-| `/plan:governed verify` | Execute the configured verification methods |
-| `/plan:governed review` | Obtain independent review bound to current evidence |
-| `/plan:governed finalize` | Check readiness, request final confirmation, then check the retained current subtasks and parent |
-| `/plan:governed status` | Inspect this optional flow |
-| `/plan:governed recover` | Confirm recovery of an interrupted operation without replacing later manual edits |
+默认安装没有自动通过的验证器，也不会把任意 shell 命令都包进受治理执行。集成者必须给 `TaskPlanExtensionConfig.governed` 提供可信工厂，按当前 Plan 创建 `V3Governed`。工厂使用 `createV3Governed` 和 `createV3Runtime`，配置持久运行时与证据密钥、稳定的实施者身份、已审阅策略、真实执行沙箱、进程绑定的验证器，以及独立 reviewer。
 
-Human decisions require a confirmation UI. Confirmation shows the current brief/task, target and governance roots, read/write/forbidden scopes, allowed executables and quoted verification criteria. A decision binds the displayed definition and action; edits while the dialog is open cannot acquire fresh authority automatically. Recovery instead displays the inspected operation's target and exact recovery semantics. Approval is never inferred from a model string or boolean. Model run requests cannot initialize or discover actors, and session replacement clears actor selection.
+这些能力由可信宿主提供，不由模型在工具参数里自行声明。模型不能传一句“我是 reviewer”就获得接受权限，也不能在运行请求中发现或初始化一个执行身份。切换会话会清理选择。普通用户没有这些服务时，可以继续用 `/plan:next`，不必伪造一个 always-pass 适配器。
 
-The trusted policy must test the user's current requirements rather than add deliverables. Exact quotations and complete subtask coverage provide structural checks; a reviewed policy and Human decision remain necessary to assess method meaning. Permission to write a path does not turn it into a requested deliverable. A new requirement belongs in the brief before a new contract is prepared.
+## 一次受治理任务怎么走
 
-Verification failure, stale inputs, out-of-scope writes, invalid authority and missing review prevent governed completion. Finalize repeats readiness checks after confirmation, durably records acceptance and pending projection, then checks all retained subtasks of the accepted task and finally its parent. Other tasks and their recorded children remain unchanged. No result summary is appended. Ordinary `[x]` never synthesizes verified evidence. An observed material definition change retires old evidence even if the text is later restored.
+宿主已配置、并已打开 V3 Plan 后，下面的命令才有完整意义。人不需要把内部字段复制到 Plan，界面会展示需要作出决定的具体内容。
 
-The sandbox currently supports Darwin launched child processes, with allowed executables and protected runtime/Plan/key paths. It does not isolate the whole host. Cancellation terminates the child; partial permitted writes still require verification. Unsupported platforms/files/aliases and missing providers reject the governed action while ordinary work remains available. The raw scope inventory is deliberately conservative, including ignored files. Full authenticated-store rollback requires an external detection anchor; edits never observed by the kernel cannot be detected retrospectively.
+| 步骤 | 入口 | 发生的事情 |
+| --- | --- | --- |
+| 准备 | `/plan:governed prepare` | 从当前任务和可信策略准备内部执行合同 |
+| 批准合同 | `/plan:governed approve` | 阅读当前需求、任务定义和策略后确认 |
+| 授权执行 | `/plan:governed authorize` | 单独确认这次可读写的位置及允许程序 |
+| 实际执行 | 模型工具 `plan_governed_run` | 通过已选且已授权的执行身份运行受限子进程 |
+| 验证 | `/plan:governed verify` | 执行配置的真实验证方法 |
+| 独立审阅 | `/plan:governed review` | 获得与当前证据绑定的独立审阅 |
+| 最终接受 | `/plan:governed finalize` | 再检查就绪条件，向人确认，再更新当前任务及保留的子任务勾选 |
+| 查看状态 | `/plan:governed status` | 查看这条可选路径的当前状态 |
+| 恢复中断 | `/plan:governed recover` | 审阅实际中断操作后确认恢复，不覆盖后来的人工编辑 |
 
-Contract and runtime details are in [the integration boundary](v3-kernel.md). The ordinary [workflow](v3-workflow.md) and [file format](v3-format.md) remain independent of these controls. DocSync continues in the explicitly selected legacy integration; no DocSync state enters V3.
+人类决定需要确认界面，会展示需求和任务、目标与治理目录、读取/写入/禁止范围、允许的程序，以及对应的验证标准。确认绑定的是眼前的定义和动作；对话框打开后发生修改，不会自动把旧批准转给新定义。恢复时展示的是具体中断操作及其恢复含义。
 
-When model switching is enabled, `/plan:governed review` passes the globally resolved review preset as `request.model` to `V3GovernedConfiguration.reviewer`. The callback must use its `provider`, `model` and optional `thinkingLevel` when launching the independent review session, or report that it cannot satisfy the request. The library forwards an isolated preset; it does not launch that external model or prove that a custom callback honored it. It does not switch the implementer session to the reviewer model. Fresh-session identity and evidence validation still apply; a model selection alone never grants review authority. With model switching disabled, or old direct `review()` calls, the optional model field is omitted and the trusted host keeps its own selection. Existing two-argument factories remain compatible.
+## 合同要验证需求，不能创造需求
+
+可信策略中的验证方法要对应需求原文，并覆盖当前子任务。精确引用能够检查关联，却不能证明方法在语义上充分。策略作者和人需要确认：它测试的是已经同意的功能，没有偷偷增加输入范围、输出文件或产品能力。
+
+例如目录写权限只是实现权限，不是新增交付物的授权。新的能力先进入需求段落，再准备新合同。当前合同不需要装进未来任务的所有细节，除非可信策略明确声明了与它们的依赖。
+
+## 什么时候拒绝正式完成
+
+验证失败、输入过期、越界修改、授权失效或缺少审阅，都会阻止受治理完成。finalize 在人确认之后还会重复检查，先持久记录接受与待投影状态，再把当前任务保留的子任务全部勾选，最后勾选父任务。其他任务不改，也不往 Plan 追加结果总结。
+
+手写 checkbox 不会合成验证记录。已经被内核观察到的实质定义变化，会使旧证据失效，即使后来把文字改回来，也不能无条件复用。普通 `[x]` 可以继续表示人的当前判断，受治理是否接受则另有内部状态。
+
+## 平台、恢复和模型边界
+
+当前沙箱支持 Darwin/macOS 上通过这条路径启动的子进程，限制允许程序并保护运行时、Plan 和密钥位置，不隔离整个宿主。取消会终止子进程，但已经发生的允许范围内写入仍需验证。平台、路径、别名或验证提供者不受支持时，拒绝的是受治理动作，普通功能仍可使用。
+
+若有人把整份认证存储连同其头记录一起恢复到旧版本，需要外部锚点才能检测完整回滚；从未观察到的编辑也不能被事后追溯。内核具体恢复约束见 [接口说明](v3-kernel.md)。
+
+启用模型切换时，受治理 review 把 [审阅预设](../../docs/models.md) 作为 `request.model` 交给可信 reviewer 回调。宿主必须用请求的 provider、model 和 thinking 启动独立会话，或报告无法满足。扩展传递请求，不替外部服务证明它确实照做，也不通过切换实施者模型冒充独立审阅。关闭切换或旧的直接调用没有这个可选字段时，保留宿主自己的选择。
+
+[轻量 DocSync](docsync/delivery.md) 可独立定位文档影响，但不会自动拦截这条 finalize。旧 DocSync 的严格阶段入口属于 [旧流程参考](docsync/README.md)，不能和 V3 的默认使用混为一谈。

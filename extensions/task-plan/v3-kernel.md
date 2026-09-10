@@ -1,17 +1,29 @@
-# Optional execution kernel integration
+# 可选执行内核的集成边界
 
-The ordinary Plan API never opens an execution store. Manual completion remains valid, including when a file is copied to a fresh session. This integration is for hosts that explicitly choose additional execution controls; a failure here does not restrict ordinary Plan editing or host work.
+[面向使用者的 Harness 说明](../../docs/harness.md) · [受治理命令](v3-governed.md)
 
-`prepareReadableContract(plan, policy)` creates a typed contract for the current task. Its definition contains the current brief, task text and current small work. The trusted host supplies the policy: verification methods tied to exact requirement quotations, read/write/forbidden paths, allowed executables and any prior-task dependencies. These fields are not part of the readable domain and cannot be supplied as model tool authority. Each current subtask needs a verification criterion. Future task edits do not enter the current contract unless they affect an explicitly declared dependency.
+这页面向接入宿主的开发者。普通 Plan API 不打开执行存储，人为勾选在复制文件或换会话后仍然有效。只有宿主明确选择时才加载额外执行约束；内核失败不应限制普通 Plan 编辑和普通宿主工具。
 
-Quotation checks establish traceability, not semantic completeness. The trusted policy author must check that each method tests its quoted requirement and introduces no extra deliverable. A new limit, output, file or capability belongs in the user-owned brief first. Permission to write paths or run executables requires a separate concrete Human decision at the governed host boundary; planning does not grant it.
+## 从当前理解形成内部合同
 
-`createV3Runtime(configuration)` requires explicit canonical Plan, target and governance paths, a separate runtime root and a persisted authentication key of at least 32 bytes. Protect persisted runtime/evidence key paths from child execution. Product runtime code must not discover or depend on a private control repository. The authentication key remains in trusted host memory; it is not stored in the Plan or exposed through model schemas.
+`prepareReadableContract(plan, policy)` 为当前任务建立合同，定义只包含当前需求、任务文字与小工作。可信宿主提供策略：与需求原文对应的验证方法、读取/写入/禁止路径、允许程序和明确的前置任务依赖。当前每个子任务需要验证标准。未声明依赖的未来任务不进入当前合同。
 
-The optional store authenticates journal generations and its committed head, binds execution revisions and Human receipts, and preserves pending checkbox projection intent. Transactions use owned locks and compare the expected generation. Recovery can inspect interrupted head advancement and exact private publication links after process death; unknown aliases or active owners are rejected. This internal recovery history has no user-facing Plan representation.
+这些字段不属于 readable domain，也不能由模型工具冒充授权。引用检查建立可追溯关系，不保证语义完整；策略作者应检查每种方法确实测试对应需求且不增加交付物。新的限制、输出、文件或能力先进入用户需求。路径或程序权限另需具体人类决定，计划本身不授予执行权限。
 
-After verification, review and authority checks pass, finalization checks all retained current subtasks and their parent together. Other tasks and children are unchanged. Historical parent-only projections remain readable and recover their exact recorded child checkboxes; they are not silently upgraded to the new projection. Contract matching includes retained subtask text and order, so removing or redefining that work invalidates its governed acceptance. Historical authenticated projections that removed completed subtasks remain readable, and already-written bytes can be acknowledged without rewriting the file. Missing child requirements no longer match their old contract: ordinary completion remains valid, while verified status requires a matching definition. Recovery refuses to apply a pending historical pruning projection to a file that still has those children. No automatic restoration or migration is performed.
+## 运行时配置与持久化
 
-Restoring the entire authenticated store together with its head cannot be detected without an external rollback anchor. The readable file remains usable independently. Ordinary checkboxes do not become verified receipts when a store is reconstructed; verified completion is a separate query inside the governed integration.
+`createV3Runtime(configuration)` 要求明确且规范的 Plan、target、governance 路径、单独 runtime 目录，以及至少 32 字节的持久认证密钥。runtime 与 evidence 密钥位置必须免受子进程写入。密钥保留在可信宿主内存与其受保护存储中，不进入 Plan 或模型工具 schema。
 
-The contract and runtime primitives are available from `v3-contract.ts` and `v3-runtime.ts`. They are deliberately absent from the ordinary entry's static import graph. The authority/verification/review/finalize adapter is a separate layer.
+通用产品运行代码不发现或依赖某个私人 control 仓库。宿主可以显式提供使用者项目中的治理路径；运行时不能把本项目私有验证仓库当作安装依赖。
+
+内部存储认证 journal 代次和已提交头，绑定执行修订与人类回执，保留待写入 checkbox 的投影意图。事务通过所属锁和预期代次比较协调；恢复检查进程退出后中断的头推进与私有发布链接。未知别名或仍活跃的锁拥有者会被拒绝。这是崩溃恢复机制，不是给用户增加一套 Plan 历史页面。
+
+## Finalize 与保留子任务
+
+验证、审阅和授权通过后，finalize 一起勾选当前任务保留的所有子任务及其父任务。其他条目保持原样。合同匹配包含子任务文字与顺序，删除或重定义这些工作会使受治理接受失效。
+
+兼容历史投影时只恢复当时记录的语义。旧的仅父任务投影保留其原孩子状态，不静默升级；旧的剪除子任务投影可读取，但不能把尚保留孩子的当前文件恢复成剪除版本。已经写入的历史字节可以被确认，缺少的子任务要求不能再匹配旧合同。不自动恢复内容或迁移 Plan。
+
+完整回滚认证库及其头记录，需要外部 rollback anchor 才能检测。重建执行库不能把普通 checkbox 变成验证回执。普通文件始终可独立使用，受治理接受另行查询。
+
+接口分别位于 `v3-contract.ts`、`v3-runtime.ts` 和 `v3-governed.ts`。普通入口不静态导入执行内核；工厂、验证能力和 reviewer 是明确的可信集成。集成者应提供真实适配器，不使用演示用自动通过实现来承诺接受保证。

@@ -1,4 +1,8 @@
-# Git facts and documentation obligations
+# 旧 DocSync 的事实与候选层（进阶技术参考）
+
+新项目默认阅读 [中文交付检查指南](delivery.md)。本页保留旧阶段生命周期的英文接口参考，描述 baseline、区域身份和候选义务，不代表当前轻量助手已经实现强制门禁。旧决策、欠账处置与受限 Maintainer 仍是未完成能力；不能把候选 ready 当作正式接受。区域标记只在明确选用它的校验层必需，普通全文档目标无需标记。
+
+## Legacy API reference
 
 For ordinary V3/Codex work, see [lightweight delivery checks](delivery.md).
 That optional read-only helper uses explicit PR/commit ranges and related local
@@ -108,7 +112,7 @@ Normally `/plan:execute` creates the baseline once. An embedding application can
 inspect the **recorded** context/reference rather than capture a replacement:
 
 ```ts
-import { GitBaselineProvider, collectCandidates } from "./extensions/task-plan/index.ts";
+import { GitBaselineProvider, collectCandidates } from "./extensions/task-plan/legacy-index.ts";
 
 const facts = await new GitBaselineProvider().inspect(record.context, record.baseline);
 const result = await collectCandidates(record.context, record.baseline, currentPhaseNotes);
