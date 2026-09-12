@@ -51,7 +51,7 @@
 
 ## 分阶段模型和普通审阅
 
-`/plan`、`/plan:edit` 进入 planning；`/plan:next`、`plan_continue` 进入 normal；`/plan:review` 进入 review。自然语言阶段变更要求模型调用 `plan_set_mode`，没有额外的关键词识别器替它保证路由。单纯记录进度不会强行切回规划模型。
+`/plan`、`/plan:edit` 进入 planning；`/plan:next`、`plan_continue` 进入 normal；`/plan:review` 进入 review。自然语言明确要求编写或修改 Plan、审阅代码，或从规划/审阅恢复实施时，模型才调用 `plan_set_mode`；继续 Plan 实施使用已包含 normal 切换的 `plan_continue`。普通工作不需要先选阶段。启动子代理、运行命令、等待等临时请求直接使用普通工具，即使已有选中的 Plan，也不因此读取、创建或修改 Plan。只有用户要求规划或上下文明确定义为当前 Plan 的工作才进入 Plan 流程。切换后应在同一轮继续完成请求。自然语言路由依赖模型遵循这些说明，没有额外的关键词识别器保证路由。单纯记录进度不会强行切回规划模型。
 
 三个阶段可以分别配置，也可以使用同一个模型。完整默认值、环境变量、Qwen/vLLM 示例和配置生效方法集中在 [模型指南](../../docs/models.md)，Plan 文件不保存这些设置。
 

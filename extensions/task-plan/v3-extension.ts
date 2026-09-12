@@ -104,14 +104,14 @@ export function registerReadablePlanExtension(pi: ExtensionAPI, options: Readabl
     return response(`${lines.length ? `已更新：\n${lines.map(line => `- ${line}`).join("\n")}` : "内容没有变化。"}\n${current ? `当前任务：${current.id} ${current.text}` : "所有任务已勾选完成。"}`);
   };
 
-  pi.registerTool({ name: "plan_set_mode", label: "选择工作阶段", description: "Before drafting a Plan, performing ordinary work, or reviewing code, select planning, normal, or review to apply the globally configured model preference. This grants no permissions and does not create independent review evidence. Do not repeatedly retry an unavailable preference.",
+  pi.registerTool({ name: "plan_set_mode", label: "选择工作阶段", description: "Select a model preference only for a requested activity transition: planning for explicit Plan drafting/revision, review for requested code review, normal for returning to implementation from planning/review. Do not call for standalone commands, subagent spawning, waiting, or ordinary work in the current/default activity. Plan continuation uses plan_continue instead. Continue the requested work after switching. This grants no permissions and does not create independent review evidence. Do not repeatedly retry an unavailable preference.",
     parameters: Type.Object({ mode: Type.Union([Type.Literal("planning"), Type.Literal("normal"), Type.Literal("review")]) }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, signal, _update, ctx) {
       signal?.throwIfAborted();
       const switched = await switchModel(ctx, params.mode); remember();
       return response(!options.modelConfig.enabled ? "模型自动切换已关闭，继续使用当前模型。" : switched ? `已切换到 ${params.mode} 模型偏好。按用户要求继续；阶段选择不增加执行权限，也不代表完成或审阅通过。` : "模型偏好暂不可用，继续使用当前模型；不要重复尝试切换。");
     } });
-  pi.registerTool({ name: "plan_start", label: "创建 Plan", description: "Create a Plan only when none exists, or when the Human explicitly requests a new one (new_plan=true). Existing Plans, even completed ones, must normally be read and updated with plan_update. Save current deduplicated requirements and a rolling checklist. One task without subtasks is valid. Add detail only when useful; nearby unfinished tasks may be refined before execution. This does not start implementation.",
+  pi.registerTool({ name: "plan_start", label: "创建 Plan", description: "Create a Plan only when the user requests planning and none exists, or when the Human explicitly requests a new one (new_plan=true). Do not create a Plan for standalone operations merely because they are actionable. Existing Plans, even completed ones, must normally be read and updated with plan_update. Save current deduplicated requirements and a rolling checklist. One task without subtasks is valid. Add detail only when useful; nearby unfinished tasks may be refined before execution. This does not start implementation.",
     parameters: Type.Object({ title: Type.String(), brief: Type.String(), tasks, new_plan: Type.Optional(Type.Boolean({ description: "True only when the Human explicitly requested another/new Plan. Do not set it for added requirements, changed goals, completed work, or read failures." })) }, { additionalProperties: false }), executionMode: "sequential",
     async execute(_id, params, signal, _update, ctx) {
       if (signal?.aborted) throw new Error("plan_start aborted");
