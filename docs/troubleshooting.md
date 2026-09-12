@@ -12,7 +12,7 @@
 
 ## 初始化成功，目录却没有切换
 
-普通持久会话中的 `/control:init` 应自动进入 control，包含刚启动 Pi 的首个命令场景。自然语言通过工具初始化后，需要按提示再运行 `/control:enter`。刚初始化的同一会话可省略路径；重启以后使用：
+普通持久会话中的 `/control:init` 和 `/control-init-herdr` 应自动进入 control，包含刚启动 Pi 的首个命令场景。自然语言通过工具初始化后，需要按提示再运行 `/control:enter`。刚初始化的同一会话可省略路径；重启以后使用：
 
 ```text
 /control:enter /完整路径/xxx_control
@@ -24,7 +24,13 @@
 
 自然语言不是硬编码命令。先确认你已明确请求实施，而不仅仅是批准计划文字；然后使用 `/plan:next` 给出直接的执行交接。如果当前文件的所有任务都已经勾选，先添加实际新需求或重开相应任务，不要期待它自动制造下一阶段。
 
-出现多份 Plan 时使用 `/plan:open plans/001-km.md` 指定文件。已选文件打不开，应恢复或改选；读取失败不该导致另建一份计划。新增需求默认仍修改同一份，明确 `/plan:new` 才另建。见 [Plan 工作流](../extensions/task-plan/v3-workflow.md)。
+出现多份 Plan 时使用 `/plan:open plans/001-km.md` 指定文件。已选文件打不开，应恢复或改选；读取失败不该导致另建一份计划。在已请求的 Plan 流程内，新增需求默认仍修改同一份，明确 `/plan:new` 才另建。见 [Plan 工作流](../extensions/task-plan/v3-workflow.md)。
+
+## 只让它运行命令，却先建 Plan 或切模型
+
+独立问答、文件查看、运行命令、启动子 Agent 或等待，应直接使用普通工具，不因已有 Plan 而读取、创建、修改或继续它，也不先调用 `plan_set_mode`。只有要求规划或上下文明确定义为当前 Plan 的工作才进入 Plan 流程。
+
+明确编写或修改 Plan、请求代码审阅，或从规划/审阅恢复实施时，才选择对应阶段；继续 Plan 实施用 `plan_continue`，已包含 normal 切换。阶段切换后还应在同一轮继续完成请求。自然语言路由依赖模型遵循说明；若仍走错，先核对已加载版本和工作指令，不必为临时请求另建 Plan。
 
 ## 子任务做完了，为什么父任务没有更新
 
@@ -42,7 +48,7 @@ PI_TASK_PLAN_MODEL_SWITCH=0 pi
 
 长期配置要在启动 Pi 前设置环境；改 `~/.zshrc` 后旧进程不会自动继承。Pi 0.84.4 的 `models.json` 用 `"$VLLM_API_KEY"` 读取密钥环境变量，不是裸变量名。Qwen 的 `qwen-chat-template` 映射里 high/medium 都打开 thinking，没有从这个等级表自动分配不同预算。按 [模型指南](models.md) 逐层排查。
 
-子 Agent 仍使用另一个模型时，再检查其 `.pi/agents/*.toml`：角色可覆盖父模型，不由 Plan 阶段配置统一接管。见 [协作配置](../extensions/collaborating-agents/README.md)。
+Pi native 后端的子 Agent 仍使用另一个模型时，再检查其 `.pi/agents/*.toml`：角色可覆盖父模型，不由 Plan 阶段配置统一接管。见 [协作配置](../extensions/collaborating-agents/README.md)。
 
 ## DocSync 没找到文档，或者范围太大
 
@@ -64,7 +70,15 @@ PI_TASK_PLAN_MODEL_SWITCH=0 pi
 
 包更新不自动改写工作空间规则。进入 control，运行 `/control:update`，通过高级结构化更新保留原名称并审阅重新生成的规则。标记外的人工内容会保留；标记内有手工修改时需要明确解决差异。出现 `preview-stale` 就重新读取预览，不要覆盖并发变化。步骤见 [规则更新](../extensions/control-init/README.md#更新现有工作空间的规则)。
 
-## 子 Agent 启动了，却找不到输出文件
+## 选了 Herdr，助手却仍使用原生协作工具
+
+先看 control 的 `CONTROL_INDEX.json`：`agents.delegation_backend` 应为 `herdr`，缺少字段按 `native` 解释。默认 `/control:init` 不启用 Herdr；已有工作空间应通过 `control_workspace_update` 明确设置 `delegationBackend: "herdr"`，不要重新初始化。普通规则更新保留现有后端。
+
+确认当前宿主加载了 control 的工作指令，并检查托管块外是否还有冲突的旧规则。Herdr 子 Agent 的任务包也要携带后端选择和相关 control 规则；在 code 启动并不保证自动加载它们。Herdr 模式统一通过 Herdr 创建、通信、等待和收集结果，不使用 `/subagent`、`/agents` 或 cmux 流程。
+
+初始化只生成规则，不安装 Herdr 程序或 skill。实际委派前检查 skill 可读、控制者身处 Herdr 且 `HERDR_ENV=1`；缺少前提时按 [Herdr 初始化说明](../extensions/control-init/README.md#用-herdr-管理子-agent) 补齐，不猜命令或自动切回 native。
+
+## 子 Agent 启动了，却找不到输出文件（Pi native）
 
 新子会话可能还没落盘。先用 `/agents` 查看状态，或让父 Agent 按 Run ID 查询 `sessions`、`session`、`tail`；不要遍历所有用户聊天记录寻找“看起来像”的文件。并行 batch id 可能对应多个孩子，应选择明确的 child Run ID。
 
