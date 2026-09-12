@@ -639,6 +639,7 @@ function mergeUpdateInput(input: UpdateWorkspaceInput, index: ControlIndex, cont
     workspaceId: input.workspaceId ?? index.workspace_id,
     name: input.name ?? index.name,
     userRequirements: input.userRequirements ?? index.policies.user_requirements,
+    delegationBackend: input.delegationBackend ?? index.agents.delegation_backend,
     agentsExistingStrategy: input.agentsExistingStrategy ?? "append-managed-block",
     bootstrap: input.bootstrap,
     ...(input.controlPath !== undefined ? { controlPath: input.controlPath } : {}),
@@ -654,6 +655,9 @@ function describeChanges(before: ControlIndex, after: ControlIndex, request?: st
   const changes: string[] = [];
   if (request?.trim()) changes.push(`Requested: ${request.trim()}`);
   if (before.topology_profile !== after.topology_profile) changes.push(`Profile: ${before.topology_profile} -> ${after.topology_profile}`);
+  if ((before.agents.delegation_backend ?? "native") !== (after.agents.delegation_backend ?? "native")) {
+    changes.push(`Delegation backend: ${before.agents.delegation_backend ?? "native"} -> ${after.agents.delegation_backend ?? "native"}.`);
+  }
   const beforeRepos = new Map(before.repositories.map((repository) => [repository.id, repository]));
   const afterRepos = new Map(after.repositories.map((repository) => [repository.id, repository]));
   for (const id of beforeRepos.keys()) if (!afterRepos.has(id)) changes.push(`Unbound repository ${id}; no directory or Git data was deleted.`);
@@ -894,6 +898,7 @@ export class ControlWorkspaceService {
       input.workspaceId,
       input.name,
       input.userRequirements,
+      input.delegationBackend,
       input.codePath,
       input.latexRepositories,
       input.customRepositories,

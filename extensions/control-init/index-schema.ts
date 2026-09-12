@@ -7,7 +7,7 @@ const TOP_LEVEL_KEYS = ["schema", "workspace_id", "name", "topology_profile", "c
 const REPOSITORY_KEYS = ["id", "kind", "path", "role", "visibility", "git_remote", "owns"];
 const RELATIONSHIP_KEYS = ["from", "to", "type", "description"];
 const POLICY_KEYS = ["runtime_dependency_direction", "dirty_worktree", "task_activation", "agent_git_workflow", "merge_and_release", "commit_granularity", "pr_granularity", "user_requirements"];
-const AGENT_KEYS = ["template_version", "focus_areas", "managed_block_hash"];
+const AGENT_KEYS = ["template_version", "focus_areas", "managed_block_hash", "delegation_backend"];
 
 const TOPOLOGY_PROFILES = ["control-code", "control-code-latex", "custom"] as const;
 const REPOSITORY_KINDS = ["control", "code", "latex", "custom"] as const;
@@ -46,7 +46,7 @@ function rejectUnknownKeys(object: JsonObject, allowed: readonly string[], path:
     if (!allowedSet.has(key)) schemaIssue(issues, `${path}.${key}`, "unknown-field", `Unknown V1 field ${key}.`);
   }
   for (const key of allowed) {
-    if (!(key in object) && key !== "description") schemaIssue(issues, `${path}.${key}`, "missing-field", `Missing required field ${key}.`);
+    if (!(key in object) && key !== "description" && key !== "delegation_backend") schemaIssue(issues, `${path}.${key}`, "missing-field", `Missing required field ${key}.`);
   }
 }
 
@@ -166,6 +166,7 @@ export function parseControlIndex(value: unknown): ControlIndex {
       user_requirements: readStringArray(policies, "user_requirements", "$.policies", issues),
     },
     agents: {
+      ...(agents.delegation_backend !== undefined ? { delegation_backend: readLiteral(agents, "delegation_backend", ["native", "herdr"] as const, "$.agents", issues) } : {}),
       template_version: readString(agents, "template_version", "$.agents", issues) as ControlIndex["agents"]["template_version"],
       focus_areas: readStringArray(agents, "focus_areas", "$.agents", issues),
       managed_block_hash: readString(agents, "managed_block_hash", "$.agents", issues),

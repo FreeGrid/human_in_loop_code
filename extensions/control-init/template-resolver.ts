@@ -316,6 +316,7 @@ function buildBuiltInIndex(
     relationships,
     policies: defaultPolicies(input.userRequirements ?? []),
     agents: {
+      ...(input.delegationBackend !== undefined ? { delegation_backend: input.delegationBackend } : {}),
       template_version: AGENTS_TEMPLATE_VERSION,
       focus_areas: [...profile.focus_areas],
       managed_block_hash: managedBlockHash,
@@ -360,6 +361,7 @@ function buildCustomIndex(
     relationships: (input.customRelationships ?? []).map((relationship) => ({ ...relationship })),
     policies: defaultPolicies(input.userRequirements ?? []),
     agents: {
+      ...(input.delegationBackend !== undefined ? { delegation_backend: input.delegationBackend } : {}),
       template_version: AGENTS_TEMPLATE_VERSION,
       focus_areas: input.focusAreas === undefined
         ? getBuiltInProfile("control-code").focus_areas

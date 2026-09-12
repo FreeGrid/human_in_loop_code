@@ -40,6 +40,7 @@ export const ControlInitParameters = Type.Object({
   workspaceId: Type.Optional(Type.String()),
   name: Type.Optional(Type.String({ description: "Base workspace name. With no controlPath/codePath, local creation uses <name>_control and <name>_code under Pi's current directory." })),
   userRequirements: Type.Optional(Type.Array(Type.String())),
+  delegationBackend: Type.Optional(StringEnum(["native", "herdr"] as const, { description: "Delegation instructions: host-native (default) or exclusively Herdr, regardless of child agent kind" })),
   focusAreas: Type.Optional(Type.Array(Type.String({ description: "Known AGENTS focus module name; custom topology only" }))),
   customRepositories: Type.Optional(Type.Array(CustomRepositorySchema)),
   customRelationships: Type.Optional(Type.Array(RelationshipSchema)),
