@@ -78,6 +78,7 @@ export function registerControlWorkspaceInitTool(pi: ExtensionAPI, sessionState?
       "For a local name-only creation request, pass the base name and omit controlPath/codePath; the tool deterministically uses Pi's current directory and adds _control/_code.",
       "Never invent paths for custom or existing repositories. Retry only with the answers returned under needs_input or conflict.",
       "A control+code request selects control-code; one or more paper repositories selects control-code-latex.",
+      "When the user requests Herdr orchestration, set delegationBackend to herdr. Otherwise preserve the default host-native subagent mechanisms (Pi, Codex or Claude).",
     ],
     parameters: ControlInitParameters,
     executionMode: "sequential",

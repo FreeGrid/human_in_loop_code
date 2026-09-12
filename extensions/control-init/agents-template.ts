@@ -113,12 +113,15 @@ export function renderAgentsManagedContent(index: ControlIndex): string {
     return loadAgentResource(resource);
   }).join("\n\n");
 
+  // Backend instructions rely on these safety rules even for a minimal custom focus set.
+  const delegationRules = seen.has("delegation-review") ? "" : loadAgentResource("focus-modules/delegation-review.md");
+
   const latexCount = index.repositories.filter((repository) => repository.kind === "latex").length;
   const paperNote = latexCount > 0
     ? `### Paper isolation\n\nThis workspace binds ${latexCount} independent paper ${latexCount === 1 ? "repository" : "repositories"}. Each represents one paper and may refer to the code repository; code must not depend on a paper repository, and paper repositories must remain independent from one another.`
     : "";
 
-  return [baseline, "## Repository role rules", roles, paperNote, "## Operating rules", loadAgentResource("readable-plan.md"), loadAgentResource("documentation-sync.md"), focus]
+  return [baseline, "## Repository role rules", roles, paperNote, "## Operating rules", loadAgentResource("readable-plan.md"), loadAgentResource("documentation-sync.md"), focus, delegationRules, loadAgentResource(`delegation/${index.agents.delegation_backend ?? "native"}.md`)]
     .filter((section) => section.length > 0)
     .join("\n\n")
     .trim();

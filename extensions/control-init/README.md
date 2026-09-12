@@ -46,6 +46,28 @@ research/
 
 模型调用的初始化工具不弹交互框，会返回已应用、还需输入或存在冲突等状态。缺少信息时，模型应只询问返回的问题。工具不能在一次模型执行中直接替换会话，初始化完成后需要按提示运行 `/control:enter`。
 
+## 用 Herdr 管理子 Agent
+
+希望把子 Agent 放进 Herdr pane，并通过 Herdr 创建、通信和等待时，在 Pi 输入框使用新增入口：
+
+```text
+/control-init-herdr
+```
+
+它使用同一套仓库选择、预览、取消和进入 control 的流程，但生成 Herdr 专用的协作指令。原 `/control:init` 保留：生成的默认规则按当前宿主使用原生机制，Pi 用 Pi 的协作工具，Codex 和 Claude 保留各自的 spawn subagent 机制。选择 Herdr 后，无论控制者或子 Agent 是 Pi、Codex 还是 Claude，都统一走 Herdr，不再混用这些宿主的原生多 Agent 工具。两种模式共用八条委派原则：普通跟进不必等待验收，先补充信息或纠偏，确实不适合继续时再换会话。首次独立审查使用新会话，未参与实现的原 Reviewer 可以继续复核修复。普通任务无需额外日志、工作流标识或交接文档；Herdr 具体操作按需读取 skill。
+
+先安装 Herdr，并让实际执行委派的控制者运行在 Herdr 内。Herdr skill 可按上游提供的方式安装：
+
+```bash
+npx skills add herdrdev/herdr --skill herdr -g
+```
+
+安装时选择需要使用的宿主，并确认它能够读取该 skill。上游的 [v0.9.0 skill](https://github.com/herdrdev/herdr/blob/v0.9.0/skills/herdr/SKILL.md) 是本功能的参考；上面的安装命令未固定版本，实际命令语法应读取安装后的 skill 和 `herdr --help`。skill 安装不等于安装 Herdr 程序。初始化不会执行这条全局安装命令，也不会启动、拆分或控制终端；仅生成规则时不要求身处 Herdr，真正操作前则必须检查 `HERDR_ENV=1`。
+
+选择记录在 `CONTROL_INDEX.json` 的 `agents.delegation_backend`，值为 `herdr` 或 `native`；旧索引没有此字段时按 `native` 解释。`/control:update` 更新名称、论文绑定或要求时会保留该选择。已初始化的工作空间不要重跑初始化来切换：可以明确要求助手使用 `control_workspace_update`，传入 `delegationBackend: "herdr"` 或 `"native"`。生成的托管块会替换为对应模式；若自己写在托管块之外的旧指令指定了另一套工具，需要一并检查并解决冲突。
+
+自然语言初始化也可以明确要求 Herdr，模型应向 `control_workspace_init` 传入 `delegationBackend: "herdr"`。上述 slash 入口属于 Pi 扩展；它们不会自动成为 Codex 或 Claude 的命令。换宿主后，确保当前会话实际加载 control 中的工作指令；Herdr 子 Agent 的任务包也必须携带后端选择和相关 control 规则，不能假设 code 目录会自动读取 control 的 AGENTS.md。
+
 ## 绑定已有代码，稍后再增加论文
 
 已有工程不需要搬空重来。运行 `/control:init`，选择使用已有目录，再提供 control 和 code 的具体路径。相对路径从 Pi 当前工作目录解析，第一次操作更建议使用完整路径。已有非 Git 目录可以在确认后原地 `git init`，已有文件保持不变；这仍不会产生远端或第一次提交。
@@ -99,6 +121,7 @@ research/
 | 你要做的事 | Pi 命令 | 模型使用的工具 |
 | --- | --- | --- |
 | 建立或绑定工作空间 | `/control:init` | `control_workspace_init` |
+| 初始化 Herdr 协作规则 | `/control-init-herdr` | `control_workspace_init`，指定 `delegationBackend: "herdr"` |
 | 进入已经初始化的 control | `/control:enter [control路径]` | 需要命令上下文，模型工具不直接切会话 |
 | 查看路径、Git 状态和待处理项 | `/control:status [control路径]` | `control_workspace_status` |
 | 检查目录、身份和规则是否一致 | `/control:doctor [control路径]` | `control_workspace_doctor` |

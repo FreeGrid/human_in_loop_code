@@ -73,6 +73,8 @@ PI_TASK_PLAN_MODEL_SWITCH=0 pi
 
 如果 matching 本来就是一个已有代码工程，这一步改选“使用已有目录”，填入 control 和 code 的实际路径。绑定前后各看一次已有文件和 `git status --short`，确认手头的代码、还没提交的修改都在原处。这次主要增加的是仓库关系和工作规则；已有目录还没用 Git 的话，向导会询问是否在原地建立版本记录。旧工程里混放的资料，可以等绑定完成后再慢慢整理。
 
+如需用 Herdr 管理所有子 Agent，改用 `/control-init-herdr`，并按 [Herdr 初始化说明](../extensions/control-init/README.md#用-herdr-管理子-agent) 安装 skill。原 `/control:init` 继续保留 Pi、Codex、Claude 各自的原生协作机制；Herdr 模式则统一使用 Herdr。
+
 应用成功后，Pi 会带着当前对话进入 control。先运行 `/control:status` 和 `/control:doctor` 看看两份仓库的路径，有提示就顺着它指出的位置检查。再让助手运行 `pwd`，并用相对路径读一下 `CONTROL_INDEX.json`。把返回的目录与 control 路径对上，再看看关系表里是不是刚才那两份仓库，这样就连文件工具的工作位置也一起确认了。
 
 还可以另开一个终端窗口，查询两份仓库的根目录：

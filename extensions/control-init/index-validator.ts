@@ -354,6 +354,9 @@ export function validateControlIndex(index: ControlIndex): ValidationIssue[] {
     }
   }
 
+  if (index.agents.delegation_backend !== undefined && !["native", "herdr"].includes(index.agents.delegation_backend)) {
+    issue(issues, "error", "invalid-delegation-backend", "agents.delegation_backend must be native or herdr.");
+  }
   const focusAreas = new Set<string>();
   if (index.agents.focus_areas.length === 0) {
     issue(issues, "error", "empty-focus-areas", "agents.focus_areas must enable at least one known focus module.");

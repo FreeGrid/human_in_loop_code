@@ -1,6 +1,8 @@
 export const CONTROL_INDEX_SCHEMA = "human-in-loop/control-index/v1" as const;
 export const AGENTS_TEMPLATE_VERSION = "control-agents/v1" as const;
 
+export type DelegationBackend = "native" | "herdr";
+
 export type TopologyProfile = "control-code" | "control-code-latex" | "custom";
 export type RepositoryKind = "control" | "code" | "latex" | "custom";
 export type BuiltInRepositoryKind = Exclude<RepositoryKind, "custom">;
@@ -45,6 +47,8 @@ export interface ControlIndex {
   policies: ControlPolicies;
   agents: {
     template_version: typeof AGENTS_TEMPLATE_VERSION;
+    /** Omitted by legacy indexes; defaults to host-native orchestration. */
+    delegation_backend?: DelegationBackend;
     focus_areas: string[];
     managed_block_hash: string;
   };
@@ -92,6 +96,7 @@ export interface InitWorkspaceInput {
   workspaceId?: string;
   name?: string;
   userRequirements?: string[];
+  delegationBackend?: DelegationBackend;
   /** Explicit focus-module selection; accepted only for custom topologies. */
   focusAreas?: string[];
   customRepositories?: CustomRepositoryInput[];
