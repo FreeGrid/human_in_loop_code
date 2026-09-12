@@ -15,10 +15,14 @@
 | 分配模型 | 设置规划、执行、审阅预设，理解 Qwen/vLLM 配置 | [模型指南](models.md) |
 | 交付说明 | 通过相关 PR、映射和引用找到要更新的文档 | [文档同步](../extensions/task-plan/docsync/delivery.md) |
 | 选择约束 | 分清普通完成、可选提醒和受治理接受 | [Harness](harness.md) |
-| 扩大分工 | 派发有范围的子任务、查看消息、配置角色与终端 | [协作指南](../extensions/collaborating-agents/README.md) |
+| 扩大分工 | 区分 native 与 Herdr，再按所选后端派发和跟进子任务 | [协作指南](../extensions/collaborating-agents/README.md) |
 | 遇到卡点 | 找到常见症状对应的最短检查路径 | [排障](troubleshooting.md) |
 
 这条路径中的 matching 是示例项目，不是安装工具包的目录。你可以把名称换成自己的课题。原则保持一致：过程留在 control，交付给程序使用者的内容留在 code，每篇文章有独立的论文仓库；目录和模型名称都使用你的真实配置。
+
+独立小请求可直接完成，无需 Plan 或 `plan_set_mode`；已有 Plan 也不会自动收纳它们。需要规划或明确继续当前 Plan 时，再读 Plan 工作流。
+
+默认 `/control:init` 保留宿主原生（native）协作；可选的 [`/control-init-herdr`](../extensions/control-init/README.md#用-herdr-管理子-agent) 生成统一使用 Herdr 的规则。Herdr 用户从该初始化说明准备程序与 skill；协作指南中的 `/subagent`、`/agents`、角色配置和 cmux 用法仅适用于 Pi native 后端。
 
 ## 经常查的参考
 

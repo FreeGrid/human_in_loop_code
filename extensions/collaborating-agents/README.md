@@ -6,7 +6,15 @@
 
 Agent 是一个可以调用工具的模型会话。父 Agent 负责协调，子 Agent 接受一项具体任务。小而直接的工作通常由一个会话完成即可；适合分出去的，是有清楚输入、交付物和文件范围的工作。例如，一个会话只核对 KM 负权案例，另一个只整理已有命令行说明。需要共同决定接口或写同一个文件时，先讨论清楚，再依次执行，未必开得越多越快。
 
-## 先派出一个范围清楚的任务
+## 先确认协作后端
+
+本文下面的 `/subagent`、`/agents`、`agent_message`、角色 TOML、文件预留与 process/cmux 配置，均适用于 **Pi native 后端**。默认 `/control:init` 生成 native 规则；在 Codex、Claude 中则使用各自原生协作机制，Pi 命令不会自动成为其他宿主的命令。
+
+可选的 `/control-init-herdr` 生成统一使用 Herdr 的规则，无论控制者或子 Agent 使用哪种宿主，都按已安装的 Herdr skill 创建、通信、等待和收集结果，不混用本文的 Pi 原生工具或 cmux 流程。初始化只生成规则；Herdr 程序、skill 和实际委派所需的 `HERDR_ENV=1` 环境，以及已有工作空间的后端切换方式，见 [Herdr 初始化说明](../control-init/README.md#用-herdr-管理子-agent)。任务包需携带后端选择和相关 control 规则，不能假设 code 会自动读取 control 的 AGENTS.md。
+
+两种后端都应优先跟进上下文仍适用的熟悉 Agent，先补充信息或纠偏；反复偏离要求或任务已不适合原上下文时，再通过实际后端另开会话。普通跟进不必等待验收，也无需额外日志、工作流标识或交接文档。独立审查从不继承实现者对话的新会话开始，Reviewer 不实现自己裁定的改动，但可以继续复核修复。最终由控制者核对结果，并保留明确指定的 Human 或独立验收权限。
+
+## 先派出一个范围清楚的任务（Pi native）
 
 确认 `pi config` 已启用 `collaborating-agents` 与 `collaborating-agents-system`。在 Pi 中输入：
 
@@ -110,7 +118,7 @@ prompt = """先阅读当前需求与限定范围的代码。
 
 自带角色和实际模型配置见 [角色示例目录](../../examples/subagents)。例如当前 scout 配置了 `openai-codex/gpt-5.4-mini`，documenter/reviewer 配置了 `openai-codex/gpt-5.5`；它们不是账号赠送或可用性保证，应该按自己的可用模型覆盖。
 
-## 后台运行还是可见终端
+## 后台运行还是可见终端（Pi native）
 
 默认 `process` 在后台启动 Pi 子进程，适合先跑通流程。如果你使用支持分屏的 cmux 终端，并且父 Pi 已经运行在 cmux 内，可选择 `cmux-pane`，每个子任务都有可见的 Pi 终端。没有 cmux 环境时不要开启这个选项。
 

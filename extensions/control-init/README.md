@@ -131,7 +131,7 @@ npx skills add herdrdev/herdr --skill herdr -g
 
 ## 更新现有工作空间的规则
 
-安装新版本工具包不会自动改写已有 `AGENTS.md`。如果你希望旧项目获得新的 readable Plan 或文档同步规则，在 Pi 中运行 `/control:update`，选择 `Advanced or combined structured update`，保持预填的 `name` 不变，再审阅重新生成的预览并应用。这会刷新规则模板，而不要求换名字或重绑仓库。
+安装新版本工具包不会自动改写已有 `AGENTS.md`。如果你希望旧项目获得新的 readable Plan、文档同步或委派与独立审阅规则，在 Pi 中运行 `/control:update`，选择 `Advanced or combined structured update`，保持预填的 `name` 不变，再审阅重新生成的预览并应用。这会刷新规则模板，而不要求换名字或重绑仓库；已有的协作后端选择会保留。需要切换 native/Herdr 时，按上面的 [Herdr 后端更新步骤](#用-herdr-管理子-agent) 显式指定。
 
 扩展只拥有 `AGENTS.md` 中这对标记之间的内容：
 
