@@ -1,3 +1,4 @@
+import type { DelegationBackend } from "../types.js";
 import { runInitWizard } from "../wizard.js";
 import type { ControlWorkspaceSessionState } from "../session-state.js";
 import { continueSessionInControlRepository } from "../session-navigation.js";
@@ -8,9 +9,10 @@ export async function handleControlInit(
   _args: string,
   ctx: ControlCommandContext,
   sessionState?: ControlWorkspaceSessionState,
+  delegationBackend?: DelegationBackend,
 ): Promise<void> {
   try {
-    const controlPath = await runInitWizard(ctx);
+    const controlPath = await runInitWizard(ctx, delegationBackend);
     if (controlPath) {
       if (sessionState) sessionState.activeControlPath = controlPath;
       await continueSessionInControlRepository(ctx, controlPath);

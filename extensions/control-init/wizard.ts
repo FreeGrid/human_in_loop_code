@@ -395,7 +395,7 @@ async function collectCustomInput(ctx: WizardContext): Promise<InitWorkspaceInpu
   }
 }
 
-async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | { controlPath: string } | void> {
+async function runInitWizardAttempt(ctx: WizardContext, delegationBackend?: InitWorkspaceInput["delegationBackend"]): Promise<"revise" | { controlPath: string } | void> {
   const profileChoice = await ctx.ui.select("Choose a topology", [PROFILE_CONTROL_CODE, PROFILE_WITH_LATEX, PROFILE_CUSTOM]);
   if (profileChoice === undefined) {
     cancelled(ctx);
@@ -443,6 +443,7 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | { co
     }
   }
 
+  if (delegationBackend !== undefined) input.delegationBackend = delegationBackend;
   ctx.ui.notify(profileDefaultsText(input.topologyProfile), "info");
   const exceptions = await ctx.ui.editor("Optional requirements (leave empty to accept the displayed profile defaults)", "");
   if (exceptions === undefined) {
@@ -496,14 +497,17 @@ async function runInitWizardAttempt(ctx: WizardContext): Promise<"revise" | { co
   }
 }
 
-export async function runInitWizard(ctx: WizardContext): Promise<string | undefined> {
-  if (!requireUI(ctx, "/control:init")) return;
+export async function runInitWizard(ctx: WizardContext, delegationBackend?: InitWorkspaceInput["delegationBackend"]): Promise<string | undefined> {
+  if (!requireUI(ctx, delegationBackend === "herdr" ? "/control-init-herdr" : "/control:init")) return;
+  if (delegationBackend === "herdr") {
+    ctx.ui.notify("Herdr mode: all subagent orchestration uses Herdr, including Pi, Codex and Claude children. Setup: npx skills add herdrdev/herdr --skill herdr -g. This wizard only generates workspace rules; it does not install skills or start agents. Run the controller inside Herdr before delegating.", "info");
+  }
   ctx.ui.notify(
     "Choose a workspace topology. Quick setup asks for one workspace name, then creates separate <name>_control and <name>_code repositories under the current directory. The LaTeX profile also adds one private repository per paper.",
     "info",
   );
   for (;;) {
-    const outcome = await runInitWizardAttempt(ctx);
+    const outcome = await runInitWizardAttempt(ctx, delegationBackend);
     if (outcome === "revise") {
       ctx.ui.notify("Returning to initialization answers. Review the new preview before applying.", "info");
       continue;

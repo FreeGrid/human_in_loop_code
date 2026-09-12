@@ -22,6 +22,10 @@ export default function controlInitExtension(pi: ExtensionAPI): void {
     description: "Interactively initialize a template-first control workspace",
     handler: (args, ctx) => handleControlInit(args, ctx, sessionState),
   });
+  pi.registerCommand("control-init-herdr", {
+    description: "Initialize a control workspace with exclusive Herdr subagent orchestration",
+    handler: (args, ctx) => handleControlInit(args, ctx, sessionState, "herdr"),
+  });
   pi.registerCommand("control:enter", {
     description: "Continue Pi from the initialized control repository",
     handler: (args, ctx) => handleControlEnter(args, ctx, sessionState),
