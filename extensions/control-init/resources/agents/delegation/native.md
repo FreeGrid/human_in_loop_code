@@ -1,6 +1,13 @@
 ### Delegation backend: host-native
 
-- Preserve the current host's native subagent mechanism. In Pi, use its collaborating-agents `subagent` and `agent_message` tools and read the installed `collaborating-agents-system` skill. In Codex, retain Codex's own spawn, messaging, waiting and continuation tools. In Claude, retain Claude's own subagent and task mechanisms. Read the current host's available tool schemas; do not assume another host's tools exist or translate tool names across hosts.
-- Pi children are inspected using the returned run IDs through `agent_message` (`sessions`, `session`, `tail`); follow the installed skill for messaging, reservations and delivery semantics. These Pi instructions apply only in Pi, not in Codex or Claude.
-- Keep each child under the mechanism that created it throughout communication, waiting and reuse. Do not route native children through Herdr automatically. Missing native capabilities are a setup limitation, not permission to silently switch orchestration backends.
-- The shared delegation, continuity and independent-review rules above decide whether to delegate and whether reuse is allowed. Preserve native spawn behavior within those rules, including fresh Sessions for independent reviewers; tool availability alone does not authorize work.
+- Preserve the current host's native subagent mechanism: Pi uses its
+  collaborating-agents tools, Codex uses its own subagent tools, and Claude uses
+  its own subagent and task mechanisms. Follow the available tool schemas;
+  read the installed `collaborating-agents-system` skill when operating Pi's
+  collaboration tools. Pi-specific instructions apply only in Pi.
+- Keep each child under the backend that created it for follow-ups and result
+  collection. If required tools are unavailable, report the limitation rather
+  than guessing tool names or automatically switching to Herdr.
+- The shared delegation, continuity and independent-review rules above apply
+  to every host, including continued review of fixes by the same independent
+  reviewer. Tool availability alone does not authorize work.

@@ -54,7 +54,7 @@ research/
 /control-init-herdr
 ```
 
-它使用同一套仓库选择、预览、取消和进入 control 的流程，但生成 Herdr 专用的协作指令。原 `/control:init` 保留：生成的默认规则按当前宿主使用原生机制，Pi 用 Pi 的协作工具，Codex 和 Claude 保留各自的 spawn subagent 机制。选择 Herdr 后，无论控制者或子 Agent 是 Pi、Codex 还是 Claude，都统一走 Herdr，不再混用这些宿主的原生多 Agent 工具。何时委派、何时复用、独立审查必须使用新会话等规则，两种模式共用。
+它使用同一套仓库选择、预览、取消和进入 control 的流程，但生成 Herdr 专用的协作指令。原 `/control:init` 保留：生成的默认规则按当前宿主使用原生机制，Pi 用 Pi 的协作工具，Codex 和 Claude 保留各自的 spawn subagent 机制。选择 Herdr 后，无论控制者或子 Agent 是 Pi、Codex 还是 Claude，都统一走 Herdr，不再混用这些宿主的原生多 Agent 工具。两种模式共用八条委派原则：普通跟进不必等待验收，先补充信息或纠偏，确实不适合继续时再换会话。首次独立审查使用新会话，未参与实现的原 Reviewer 可以继续复核修复。普通任务无需额外日志、工作流标识或交接文档；Herdr 具体操作按需读取 skill。
 
 先安装 Herdr，并让实际执行委派的控制者运行在 Herdr 内。Herdr skill 可按上游提供的方式安装：
 
