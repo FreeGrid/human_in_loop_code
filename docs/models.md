@@ -6,6 +6,8 @@
 
 这里有两层设置。**Pi 的模型登记**回答“这个模型在哪里，怎么连接”；**Task Plan 的阶段预设**回答“现在做计划或执行时，应该选已登记的哪一个”。只改第二层不会下载模型、启动服务器或创建账号。第一次用已有的 Pi 模型，先运行 `PI_TASK_PLAN_MODEL_SWITCH=0 pi` 就能关闭自动切换，等普通功能跑通后再配置。
 
+Pi 的启动默认模型与阶段预设分别生效：个人 `~/.pi/agent/settings.json` 中的 `defaultProvider`、`defaultModel`、`defaultThinkingLevel` 设置新会话默认值；命令行、项目配置或恢复的会话可能选择其他值。Task Plan 只在规划、审阅或恢复实施等阶段切换时使用下表预设。普通提问、查看文件、临时运行命令或启动子 Agent 无需先调用 `plan_set_mode`，已有选中 Plan 也不会让这些独立请求自动进入计划流程。若希望各阶段始终沿用个人手选模型，用 `PI_TASK_PLAN_MODEL_SWITCH=0 pi` 启动。
+
 ## 先分清三个名字
 
 以自部署 Qwen 为例，`Qwen/Qwen3.8-27B-FP8` 是模型权重仓库名，`qwen38-27b-fp8` 可以是你给服务设置的模型 ID，`custom-qwen` 则是你在 Pi 中定义的提供方名称。后两者必须与你的真实配置一致；它们不是安装本工具后自动出现的服务。
