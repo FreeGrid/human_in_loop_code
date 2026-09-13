@@ -29,6 +29,7 @@ const ORIGINAL_TEST_PI_REGISTER_SELF = process.env.TEST_PI_REGISTER_SELF;
 const ORIGINAL_TEST_PI_REGISTER_SESSION_FILE = process.env.TEST_PI_REGISTER_SESSION_FILE;
 const ORIGINAL_TEST_PI_SKIP_SESSION_EVENT = process.env.TEST_PI_SKIP_SESSION_EVENT;
 const ORIGINAL_TEST_PI_STDERR = process.env.TEST_PI_STDERR;
+const ORIGINAL_TEST_PI_FAIL_ON_MODEL = process.env.TEST_PI_FAIL_ON_MODEL;
 
 function makeTempDir(prefix: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
@@ -73,6 +74,9 @@ afterEach(async () => {
   if (typeof ORIGINAL_TEST_PI_STDERR === "string") process.env.TEST_PI_STDERR = ORIGINAL_TEST_PI_STDERR;
   else delete process.env.TEST_PI_STDERR;
 
+  if (typeof ORIGINAL_TEST_PI_FAIL_ON_MODEL === "string") process.env.TEST_PI_FAIL_ON_MODEL = ORIGINAL_TEST_PI_FAIL_ON_MODEL;
+  else delete process.env.TEST_PI_FAIL_ON_MODEL;
+
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (!dir) continue;
@@ -111,6 +115,27 @@ if (process.env.TEST_PI_REGISTER_SELF === "1" && process.env.COLLABORATING_AGENT
 }
 
 const finish = () => setTimeout(() => process.exit(exitCode), Math.max(0, exitDelayMs));
+
+const failOnModel = process.env.TEST_PI_FAIL_ON_MODEL;
+const modelsFlagIndex = process.argv.indexOf("--models");
+const pinnedModel = modelsFlagIndex >= 0 ? process.argv[modelsFlagIndex + 1] : undefined;
+const modelRejected = !!(failOnModel && pinnedModel && pinnedModel.indexOf(failOnModel) !== -1);
+
+if (modelRejected) {
+  if (process.env.TEST_PI_SKIP_SESSION_EVENT !== "1") {
+    process.stdout.write(JSON.stringify({ type: "session", id: sessionId }) + "\\n");
+  }
+  process.stdout.write(JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: outputText }],
+      stopReason: "error",
+      errorMessage: "Codex error: The '" + pinnedModel + "' model is not supported when using Codex with a ChatGPT account.",
+    },
+  }) + "\\n");
+  process.exit(1);
+}
 
 if (process.env.TEST_PI_FAIL_BEFORE_MESSAGE === "1") {
   process.stderr.write(process.env.TEST_PI_STDERR || "subagent crashed");
@@ -1311,7 +1336,7 @@ describe("subagent launch identity", () => {
     if (!subagentTool) throw new Error("subagent tool was not registered");
 
     const ctx = makeContext(tempDir);
-    const result = await subagentTool.execute("tool-call-lifecycle", { task: "Inspect the repo" }, undefined, undefined, ctx);
+    const result = await subagentTool.execute("tool-call-lifecycle", { task: "Inspect the repo", sessionControl: false }, undefined, undefined, ctx);
     const details = result.details as { batchRunId: string; childRunIds: string[] };
     const recordId = details.childRunIds[0]!;
 
@@ -1463,7 +1488,7 @@ describe("subagent launch identity", () => {
     if (!subagentTool) throw new Error("subagent tool was not registered");
 
     const ctx = makeContext(tempDir);
-    const result = await subagentTool.execute("tool-call-process-unavailable", { task: "Inspect the repo" }, undefined, undefined, ctx);
+    const result = await subagentTool.execute("tool-call-process-unavailable", { task: "Inspect the repo", sessionControl: false }, undefined, undefined, ctx);
     const details = result.details as { childRunIds: string[] };
     const recordId = details.childRunIds[0]!;
 
@@ -1497,7 +1522,7 @@ describe("subagent launch identity", () => {
     if (!subagentTool) throw new Error("subagent tool was not registered");
 
     const ctx = makeContext(tempDir);
-    const result = await subagentTool.execute("tool-call-fallback", { task: "Inspect the repo" }, undefined, undefined, ctx);
+    const result = await subagentTool.execute("tool-call-fallback", { task: "Inspect the repo", sessionControl: false }, undefined, undefined, ctx);
     const details = result.details as { childRunIds: string[] };
     const recordId = details.childRunIds[0]!;
 
@@ -1513,7 +1538,7 @@ describe("subagent launch identity", () => {
     const concurrentSessionFile = path.join(tempDir, "concurrent-session.jsonl");
     process.env.TEST_PI_SKIP_SESSION_EVENT = "1";
     process.env.TEST_PI_EXIT_DELAY_MS = "250";
-    const second = await subagentTool.execute("tool-call-preserve", { task: "Inspect without session" }, undefined, undefined, ctx);
+    const second = await subagentTool.execute("tool-call-preserve", { task: "Inspect without session", sessionControl: false }, undefined, undefined, ctx);
     const secondDetails = second.details as { childRunIds: string[] };
     const secondRecordId = secondDetails.childRunIds[0]!;
     await waitForRunRecord(stateDir, secondRecordId, (record) => record.status === "launching" || record.status === "running");
@@ -1594,6 +1619,221 @@ describe("subagent launch identity", () => {
     expect(String(completionMessage.content)).toContain("fake-ok");
     const completionDetails = completionMessage.details as { lifecycleWarnings?: string[] };
     expect(completionDetails.lifecycleWarnings?.some((warning) => warning.includes("Failed to update subagent run record"))).toBe(true);
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+});
+
+describe("subagent model pin resolution", () => {
+  function makeModelContext(tempDir: string): ExtensionContext {
+    return {
+      ...makeContext(tempDir),
+      model: { provider: "test", id: "parent-model" },
+      modelRegistry: {
+        getAll: () => [
+          { provider: "test", id: "parent-model" },
+          { provider: "test", id: "other-model" },
+          { provider: "test", id: "rejected-model" },
+        ],
+      },
+    } as unknown as ExtensionContext;
+  }
+
+  function writeWorkerType(tempDir: string, modelLine: string): void {
+    fs.mkdirSync(path.join(tempDir, ".pi", "agents"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempDir, ".pi", "agents", "worker.toml"),
+      [
+        'name = "worker"',
+        'description = "Worker"',
+        modelLine,
+        'prompt = "Return concise findings."',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+  }
+
+  test("degrades a pinned model missing from the registry to the session model with a warning", async () => {
+    const tempDir = makeTempDir("collab-index-model-pin-unavailable");
+    writeFakePiBinary(tempDir);
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+    writeWorkerType(tempDir, 'model = "openai-codex/gpt-does-not-exist"');
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const subagentTool = harness.tools.get("subagent");
+    if (!subagentTool) throw new Error("subagent tool was not registered");
+
+    const ctx = makeModelContext(tempDir);
+    await subagentTool.execute("tool-call-pin-unavailable", { task: "Inspect the repo" }, undefined, undefined, ctx);
+
+    const completionMessage = await waitForCompletionMessage(harness);
+    expect(String(completionMessage.content)).toContain('Subagent model pin "openai-codex/gpt-does-not-exist" is not in the model registry');
+    expect(String(completionMessage.content)).toContain("fake-ok");
+    const completionDetails = completionMessage.details as {
+      result?: { resolvedModel?: string; exitCode?: number };
+      pinnedModelWarning?: string;
+    };
+    expect(completionDetails.pinnedModelWarning).toContain("not in the model registry");
+    expect(completionDetails.result?.resolvedModel).toBe("test/parent-model");
+    expect(completionDetails.result?.exitCode).toBe(0);
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+
+  test("passes a registry-valid pinned model through unchanged", async () => {
+    const tempDir = makeTempDir("collab-index-model-pin-valid");
+    writeFakePiBinary(tempDir);
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+    writeWorkerType(tempDir, 'model = "test/other-model"');
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const subagentTool = harness.tools.get("subagent");
+    if (!subagentTool) throw new Error("subagent tool was not registered");
+
+    const ctx = makeModelContext(tempDir);
+    await subagentTool.execute("tool-call-pin-valid", { task: "Inspect the repo" }, undefined, undefined, ctx);
+
+    const completionMessage = await waitForCompletionMessage(harness);
+    const completionDetails = completionMessage.details as {
+      result?: { resolvedModel?: string; exitCode?: number };
+      pinnedModelWarning?: string;
+    };
+    expect(completionDetails.pinnedModelWarning).toBeUndefined();
+    expect(completionDetails.result?.resolvedModel).toBe("test/other-model");
+    expect(completionDetails.result?.exitCode).toBe(0);
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+
+  test("retries with the session model when a registry-valid pin is rejected at runtime", async () => {
+    const tempDir = makeTempDir("collab-index-model-pin-runtime-rejected");
+    writeFakePiBinary(tempDir);
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+    process.env.TEST_PI_FAIL_ON_MODEL = "test/rejected-model";
+    writeWorkerType(tempDir, 'model = "test/rejected-model"');
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const subagentTool = harness.tools.get("subagent");
+    if (!subagentTool) throw new Error("subagent tool was not registered");
+
+    const ctx = makeModelContext(tempDir);
+    await subagentTool.execute("tool-call-pin-runtime-rejected", { task: "Inspect the repo" }, undefined, undefined, ctx);
+
+    const completionMessage = await waitForCompletionMessage(harness);
+    expect(String(completionMessage.content)).toContain("was rejected at runtime; retried with test/parent-model.");
+    expect(String(completionMessage.content)).toContain("fake-ok");
+    const completionDetails = completionMessage.details as {
+      result?: { resolvedModel?: string; exitCode?: number };
+    };
+    expect(completionDetails.result?.resolvedModel).toBe("test/parent-model");
+    expect(completionDetails.result?.exitCode).toBe(0);
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+});
+
+describe("agent_message send waitMs", () => {
+  test("waits for a peer to register when waitMs is provided", async () => {
+    const tempDir = makeTempDir("collab-index-send-wait-peer");
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const agentMessageTool = harness.tools.get("agent_message");
+    if (!agentMessageTool) throw new Error("agent_message tool was not registered");
+
+    const ctx = makeContext(tempDir);
+    const dirs = makeDirs(process.env.COLLABORATING_AGENTS_DIR!);
+    const nowIso = new Date().toISOString();
+    expect(registerSelf(dirs, {
+      name: "Coordinator",
+      pid: process.pid,
+      sessionId: "parent-session",
+      cwd: tempDir,
+      model: "test/model",
+      startedAt: nowIso,
+      lastSeenAt: nowIso,
+    } as AgentRegistration)).toBe(true);
+
+    // The peer registers 300ms after the send starts; waitMs must bridge that.
+    setTimeout(() => {
+      expect(registerSelf(dirs, {
+        name: "LatePeer",
+        pid: process.pid + 1,
+        sessionId: "peer-session",
+        cwd: tempDir,
+        model: "test/model",
+        startedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+      } as AgentRegistration)).toBe(true);
+    }, 300);
+
+    const sent = await agentMessageTool.execute(
+      "tool-call-send-wait",
+      { action: "send", to: "LatePeer", message: "cross-check please", waitMs: 10_000 },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(sent.isError).toBeUndefined();
+    expect(sent.details).toMatchObject({ action: "send", to: "LatePeer", ok: true });
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+
+  test("fails with a waitMs hint when the peer never comes online", async () => {
+    const tempDir = makeTempDir("collab-index-send-wait-timeout");
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const agentMessageTool = harness.tools.get("agent_message");
+    if (!agentMessageTool) throw new Error("agent_message tool was not registered");
+
+    const ctx = makeContext(tempDir);
+    const dirs = makeDirs(process.env.COLLABORATING_AGENTS_DIR!);
+    const nowIso = new Date().toISOString();
+    expect(registerSelf(dirs, {
+      name: "Coordinator",
+      pid: process.pid,
+      sessionId: "parent-session",
+      cwd: tempDir,
+      model: "test/model",
+      startedAt: nowIso,
+      lastSeenAt: nowIso,
+    } as AgentRegistration)).toBe(true);
+
+    const startedAt = Date.now();
+    const sent = await agentMessageTool.execute(
+      "tool-call-send-wait-timeout",
+      { action: "send", to: "GhostPeer", message: "anyone there?", waitMs: 600 },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(sent.isError).toBe(true);
+    expect(String(sent.content[0]?.text)).toContain("Agent 'GhostPeer' is not active");
+    expect(String(sent.content[0]?.text)).toContain("waitMs");
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(500);
 
     await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
   });

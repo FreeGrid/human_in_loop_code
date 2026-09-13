@@ -861,6 +861,91 @@ describe("subagent spawn", () => {
     ]);
   });
 
+  test("passes a parent-controlled --session file to process-mode children by default", async () => {
+    const tempDir = makeTempDir("collab-subagent-process-session-control");
+    const { argsFile } = writeFakePiBinary(tempDir);
+
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.TEST_ARGS_FILE = argsFile;
+
+    const agentDef: SpawnAgentDefinition = {
+      name: "scout",
+      description: "Scout",
+      systemPrompt: "Return concise findings.",
+      source: "bundled",
+      filePath: "/tmp/scout.toml",
+      tools: ["read"],
+    };
+
+    const result = await runSpawnTask(
+      tempDir,
+      {
+        agent: "scout",
+        task: "Find all TypeScript files",
+      },
+      agentDef,
+      {
+        index: 0,
+        runId: "testrun-session-control",
+        recursionDepth: 0,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.output).toBe("fake-ok");
+
+    const capturedArgs = JSON.parse(fs.readFileSync(argsFile, "utf-8")) as string[];
+    const sessionFlagIndex = capturedArgs.indexOf("--session");
+    expect(sessionFlagIndex).toBeGreaterThanOrEqual(0);
+    const sessionArg = capturedArgs[sessionFlagIndex + 1] ?? "";
+    expect(path.isAbsolute(sessionArg)).toBe(true);
+    expect(sessionArg.endsWith(".jsonl")).toBe(true);
+    expect(capturedArgs).not.toContain("--session-control");
+
+    expect(result.sessionFile).toBe(sessionArg);
+    expect(result.sessionFileUnavailableReason).toBeUndefined();
+  });
+
+  test("keeps process-mode children without --session when session control is disabled", async () => {
+    const tempDir = makeTempDir("collab-subagent-process-session-control-off");
+    const { argsFile } = writeFakePiBinary(tempDir);
+
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.TEST_ARGS_FILE = argsFile;
+
+    const agentDef: SpawnAgentDefinition = {
+      name: "scout",
+      description: "Scout",
+      systemPrompt: "Return concise findings.",
+      source: "bundled",
+      filePath: "/tmp/scout.toml",
+      tools: ["read"],
+    };
+
+    const result = await runSpawnTask(
+      tempDir,
+      {
+        agent: "scout",
+        task: "Find all TypeScript files",
+      },
+      agentDef,
+      {
+        index: 0,
+        runId: "testrun-no-session-control",
+        recursionDepth: 0,
+        enableSessionControl: false,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    const capturedArgs = JSON.parse(fs.readFileSync(argsFile, "utf-8")) as string[];
+    expect(capturedArgs).not.toContain("--session");
+    expect(result.sessionFile).toBeUndefined();
+    expect(result.sessionFileUnavailableReason).toBe(
+      "Process-mode session file unavailable until child registration or fallback discovery provides one.",
+    );
+  });
+
   test("accepts process-mode assistant output emitted as message events", async () => {
     const tempDir = makeTempDir("collab-subagent-process-assistant-message");
     const { argsFile } = writeFakePiBinary(tempDir);

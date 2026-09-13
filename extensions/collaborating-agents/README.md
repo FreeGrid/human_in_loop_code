@@ -71,7 +71,7 @@ agent_message({ action: "tail", runId: "子任务运行ID" })
 
 默认列表包括完成或失败记录，`includeCompleted: false` 只看活跃运行。精确选取可用 child run id（也称 `recordId`）、display name（显示名）、canonical name（运行名称）、session id prefix（会话 ID 前缀）或 `latest`。batch id 只有恰好对应一个孩子时才能唯一解析；并行批次会要求选择具体 Run ID，不能随意挑一份输出。
 
-后台 process 子会话通常要等孩子登记或按会话 ID 发现文件后才能读取尾部。若出现 `Process-mode session file unavailable until child registration or fallback discovery provides one.`，先查看运行状态，稍后再用 Run ID 查询，不要用不相关会话文件补上。cmux 模式有显式会话文件，也要等文件实际出现。
+后台 process 子会话默认由父级指定会话文件（`--session <path>`，位于 `~/.pi/agent/sessions/collaborating-agents-subagents/`），启动后即可用 Run ID 读取尾部，不必等待孩子登记或按会话 ID 发现文件。只有显式设置 `sessionControl: false` 时才回退到这条发现路径：若出现 `Process-mode session file unavailable until child registration or fallback discovery provides one.`，先查看运行状态，稍后再用 Run ID 查询，不要用不相关会话文件补上。cmux 模式始终有显式会话文件，也要等文件实际出现。
 
 ## 常用工具对照
 
@@ -79,10 +79,10 @@ agent_message({ action: "tail", runId: "子任务运行ID" })
 | --- | --- |
 | `subagent` 的 `task` | 启动一项任务，可带 `type`、`cwd` |
 | `subagent` 的 `tasks` | 启动多项并行任务，每项可给 `cwd`；顶层 `type` 应用于这批任务 |
-| `sessionControl` | 是否给孩子传 `--session-control`，默认 true |
+| `sessionControl` | 是否为子会话指定父级控制的会话文件（`--session <path>`，便于读取尾部），默认 true；设为 false 则不指定，改由登记或发现补齐 |
 | `agent_message`：`status` / `list` | 当前身份、对方状态与预留数量 |
 | `sessions` / `session` / `tail` | 查询子运行记录与短输出 |
-| `send` / `broadcast` | 私信或广播；可用 `urgent`，私信可用 `replyTo` |
+| `send` / `broadcast` | 私信或广播；可用 `urgent`，私信可用 `replyTo` 与 `waitMs`（等待尚未上线的同伴，单位毫秒，默认 0） |
 | `feed` / `thread` | 查看近期全局消息或与指定 Agent 的消息，可给 `limit` |
 | `reserve` / `release` | 预留或释放 `paths`；省略 release 的路径表示释放全部 |
 
@@ -116,7 +116,7 @@ prompt = """先阅读当前需求与限定范围的代码。
 
 配置按从低到高覆盖同名角色：包内 `examples/subagents/*.toml`；用户目录 `~/.pi/agent/subagents`、`~/.pi/subagents`、`~/.pi/agents`；从当前目录向上寻找的项目 `.pi/subagents`、`.pi/agents`。新配置推荐最后两种 `agents` 路径。没有指定角色时，优先用户/项目覆盖的 worker，再考虑覆盖的 default，然后使用包内 worker 与兜底实现。
 
-自带角色和实际模型配置见 [角色示例目录](../../examples/subagents)。例如当前 scout 配置了 `openai-codex/gpt-5.4-mini`，documenter/reviewer 配置了 `openai-codex/gpt-5.5`；它们不是账号赠送或可用性保证，应该按自己的可用模型覆盖。
+自带角色和实际模型配置见 [角色示例目录](../../examples/subagents)。例如当前 scout 配置了 `openai-codex/gpt-5.4-mini`，documenter/reviewer 配置了 `openai-codex/gpt-5.5`；它们不是账号赠送或可用性保证，应该按自己的可用模型覆盖。扩展会在启动前用模型登记表校验角色的 `model`：不在表内的取值（包括大小写不一致）会降级为父会话模型，并在启动与完成提示里给出警告；表内存在但账号无权使用的取值（例如 Codex 账号限制）会在运行时被拒后自动改用父会话模型重试一次，同样给出警告。角色文件里的示例模型不会让子任务直接失败。
 
 ## 后台运行还是可见终端（Pi native）
 
