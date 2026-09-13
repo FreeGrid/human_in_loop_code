@@ -82,7 +82,7 @@ agent_message({ action: "tail", runId: "子任务运行ID" })
 | `sessionControl` | 是否为子会话指定父级控制的会话文件（`--session <path>`，便于读取尾部），默认 true；设为 false 则不指定，改由登记或发现补齐 |
 | `agent_message`：`status` / `list` | 当前身份、对方状态与预留数量 |
 | `sessions` / `session` / `tail` | 查询子运行记录与短输出 |
-| `send` / `broadcast` | 私信或广播；可用 `urgent`，私信可用 `replyTo` |
+| `send` / `broadcast` | 私信或广播；可用 `urgent`，私信可用 `replyTo` 与 `waitMs`（等待尚未上线的同伴，单位毫秒，默认 0） |
 | `feed` / `thread` | 查看近期全局消息或与指定 Agent 的消息，可给 `limit` |
 | `reserve` / `release` | 预留或释放 `paths`；省略 release 的路径表示释放全部 |
 

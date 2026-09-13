@@ -128,6 +128,7 @@ const AgentMessageParams = Type.Object({
     }),
   ),
   limit: Type.Optional(Type.Number({ description: "Max messages, subagent runs, or tail entries to return; default 20" })),
+  waitMs: Type.Optional(Type.Number({ description: "For send: milliseconds to wait for a peer to come online before failing (default 0). Useful when a sibling subagent may still be starting or you expect it to register soon" })),
   includeCompleted: Type.Optional(Type.Boolean({ description: "For sessions, include completed/failed subagent runs; defaults to true. Set false for active runs only" })),
   raw: Type.Optional(Type.Boolean({ description: "For tail, include structured parsed session entries in details" })),
   paths: Type.Optional(Type.Array(Type.String(), { description: "Reservation path patterns (reserve/release)" })),
@@ -188,6 +189,10 @@ function isProcessAlive(pid: number): boolean {
   } catch {
     return false;
   }
+}
+
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function normalizeSubagentSessionLimit(raw: number | undefined, fallback = 20, max = 100): number {
@@ -2332,7 +2337,7 @@ Actions:
 - sessions: List scoped subagent run/session records (completed/failed included by default; pass includeCompleted: false for active only)
 - session: Resolve one subagent run/session record
 - tail: Read a concise transcript tail for one subagent run/session
-- send: Send direct message to one active agent (set urgent: true to interrupt immediately)
+- send: Send direct message to one active agent (set urgent: true to interrupt immediately; pass waitMs to wait for a peer that may still be starting)
 - broadcast: Send message to all active peers (set urgent: true to interrupt immediately)
 - feed: Read recent global messages
 - thread: Read direct-message thread with one peer agent
@@ -2452,12 +2457,29 @@ Subagent run selectors for session/tail: child run id/recordId, display name, ca
         }
 
         const urgent = params.urgent === true;
-        const resolvedPeer = resolveActiveAgentName(dirs, params.to);
+        // Peer liveness is process lifetime: registration files are removed on
+        // session shutdown, so a sibling can easily exit before the other
+        // thinks to message it. waitMs gives senders a bounded way to wait for
+        // a peer that is still starting instead of failing immediately.
+        const waitMs = typeof params.waitMs === "number" && Number.isFinite(params.waitMs)
+          ? Math.max(0, Math.min(Math.floor(params.waitMs), 300_000))
+          : 0;
+        let resolvedPeer = resolveActiveAgentName(dirs, params.to);
+        if (!resolvedPeer.ok && waitMs > 0 && !resolvedPeer.matches) {
+          const deadline = Date.now() + waitMs;
+          while (!resolvedPeer.ok && Date.now() < deadline) {
+            await sleepMs(250);
+            resolvedPeer = resolveActiveAgentName(dirs, params.to);
+          }
+        }
         if (!resolvedPeer.ok) {
+          const waitHint = resolvedPeer.matches
+            ? ""
+            : " Tip: pass waitMs (milliseconds) to wait for a peer that may still be starting.";
           return {
-            content: [{ type: "text", text: resolvedPeer.error }],
+            content: [{ type: "text", text: `${resolvedPeer.error}${waitHint}` }],
             isError: true,
-            details: { action, error: resolvedPeer.error, matches: resolvedPeer.matches },
+            details: { action, error: resolvedPeer.error, matches: resolvedPeer.matches, waitedMs: waitMs > 0 ? waitMs : undefined },
           };
         }
 

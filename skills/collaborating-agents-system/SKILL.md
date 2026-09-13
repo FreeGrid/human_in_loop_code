@@ -26,7 +26,7 @@ Actions:
 - `sessions` — scoped subagent run/session records; completed/failed included by default, use `includeCompleted: false` for active only
 - `session` — resolve one subagent run/session record
 - `tail` — read a concise transcript tail for one subagent run/session
-- `send` — direct message to one peer (`to`, `message`, optional `replyTo`, optional `urgent`)
+- `send` — direct message to one peer (`to`, `message`, optional `replyTo`, optional `urgent`, optional `waitMs`)
 - `broadcast` — message all peers (`message`, optional `urgent`)
 - `feed` — recent global message log (`limit`, default 20, max 400)
 - `thread` — DM history with one peer (`to`, optional `limit`)
@@ -265,7 +265,7 @@ Agent naming:
 
 ## Failure handling
 
-- `send`: fails if target is inactive, self-targeted, or message is empty
+- `send`: fails if target is inactive, self-targeted, or message is empty. Peer liveness is process lifetime, so pass `waitMs` (milliseconds, max 300000) to wait for a peer that is still starting instead of failing immediately.
 - `broadcast`: fails when no active recipients or message is empty
 - `thread`: requires `to`
 - `reserve`: requires non-empty `paths`

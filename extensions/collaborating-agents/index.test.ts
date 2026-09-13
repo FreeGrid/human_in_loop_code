@@ -1744,3 +1744,97 @@ describe("subagent model pin resolution", () => {
     await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
   });
 });
+
+describe("agent_message send waitMs", () => {
+  test("waits for a peer to register when waitMs is provided", async () => {
+    const tempDir = makeTempDir("collab-index-send-wait-peer");
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const agentMessageTool = harness.tools.get("agent_message");
+    if (!agentMessageTool) throw new Error("agent_message tool was not registered");
+
+    const ctx = makeContext(tempDir);
+    const dirs = makeDirs(process.env.COLLABORATING_AGENTS_DIR!);
+    const nowIso = new Date().toISOString();
+    expect(registerSelf(dirs, {
+      name: "Coordinator",
+      pid: process.pid,
+      sessionId: "parent-session",
+      cwd: tempDir,
+      model: "test/model",
+      startedAt: nowIso,
+      lastSeenAt: nowIso,
+    } as AgentRegistration)).toBe(true);
+
+    // The peer registers 300ms after the send starts; waitMs must bridge that.
+    setTimeout(() => {
+      expect(registerSelf(dirs, {
+        name: "LatePeer",
+        pid: process.pid + 1,
+        sessionId: "peer-session",
+        cwd: tempDir,
+        model: "test/model",
+        startedAt: new Date().toISOString(),
+        lastSeenAt: new Date().toISOString(),
+      } as AgentRegistration)).toBe(true);
+    }, 300);
+
+    const sent = await agentMessageTool.execute(
+      "tool-call-send-wait",
+      { action: "send", to: "LatePeer", message: "cross-check please", waitMs: 10_000 },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(sent.isError).toBeUndefined();
+    expect(sent.details).toMatchObject({ action: "send", to: "LatePeer", ok: true });
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+
+  test("fails with a waitMs hint when the peer never comes online", async () => {
+    const tempDir = makeTempDir("collab-index-send-wait-timeout");
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const agentMessageTool = harness.tools.get("agent_message");
+    if (!agentMessageTool) throw new Error("agent_message tool was not registered");
+
+    const ctx = makeContext(tempDir);
+    const dirs = makeDirs(process.env.COLLABORATING_AGENTS_DIR!);
+    const nowIso = new Date().toISOString();
+    expect(registerSelf(dirs, {
+      name: "Coordinator",
+      pid: process.pid,
+      sessionId: "parent-session",
+      cwd: tempDir,
+      model: "test/model",
+      startedAt: nowIso,
+      lastSeenAt: nowIso,
+    } as AgentRegistration)).toBe(true);
+
+    const startedAt = Date.now();
+    const sent = await agentMessageTool.execute(
+      "tool-call-send-wait-timeout",
+      { action: "send", to: "GhostPeer", message: "anyone there?", waitMs: 600 },
+      undefined,
+      undefined,
+      ctx,
+    );
+
+    expect(sent.isError).toBe(true);
+    expect(String(sent.content[0]?.text)).toContain("Agent 'GhostPeer' is not active");
+    expect(String(sent.content[0]?.text)).toContain("waitMs");
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(500);
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+});
