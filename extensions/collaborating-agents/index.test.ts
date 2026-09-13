@@ -29,6 +29,7 @@ const ORIGINAL_TEST_PI_REGISTER_SELF = process.env.TEST_PI_REGISTER_SELF;
 const ORIGINAL_TEST_PI_REGISTER_SESSION_FILE = process.env.TEST_PI_REGISTER_SESSION_FILE;
 const ORIGINAL_TEST_PI_SKIP_SESSION_EVENT = process.env.TEST_PI_SKIP_SESSION_EVENT;
 const ORIGINAL_TEST_PI_STDERR = process.env.TEST_PI_STDERR;
+const ORIGINAL_TEST_PI_FAIL_ON_MODEL = process.env.TEST_PI_FAIL_ON_MODEL;
 
 function makeTempDir(prefix: string): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
@@ -73,6 +74,9 @@ afterEach(async () => {
   if (typeof ORIGINAL_TEST_PI_STDERR === "string") process.env.TEST_PI_STDERR = ORIGINAL_TEST_PI_STDERR;
   else delete process.env.TEST_PI_STDERR;
 
+  if (typeof ORIGINAL_TEST_PI_FAIL_ON_MODEL === "string") process.env.TEST_PI_FAIL_ON_MODEL = ORIGINAL_TEST_PI_FAIL_ON_MODEL;
+  else delete process.env.TEST_PI_FAIL_ON_MODEL;
+
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
     if (!dir) continue;
@@ -111,6 +115,27 @@ if (process.env.TEST_PI_REGISTER_SELF === "1" && process.env.COLLABORATING_AGENT
 }
 
 const finish = () => setTimeout(() => process.exit(exitCode), Math.max(0, exitDelayMs));
+
+const failOnModel = process.env.TEST_PI_FAIL_ON_MODEL;
+const modelsFlagIndex = process.argv.indexOf("--models");
+const pinnedModel = modelsFlagIndex >= 0 ? process.argv[modelsFlagIndex + 1] : undefined;
+const modelRejected = !!(failOnModel && pinnedModel && pinnedModel.indexOf(failOnModel) !== -1);
+
+if (modelRejected) {
+  if (process.env.TEST_PI_SKIP_SESSION_EVENT !== "1") {
+    process.stdout.write(JSON.stringify({ type: "session", id: sessionId }) + "\\n");
+  }
+  process.stdout.write(JSON.stringify({
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: outputText }],
+      stopReason: "error",
+      errorMessage: "Codex error: The '" + pinnedModel + "' model is not supported when using Codex with a ChatGPT account.",
+    },
+  }) + "\\n");
+  process.exit(1);
+}
 
 if (process.env.TEST_PI_FAIL_BEFORE_MESSAGE === "1") {
   process.stderr.write(process.env.TEST_PI_STDERR || "subagent crashed");
@@ -1594,6 +1619,127 @@ describe("subagent launch identity", () => {
     expect(String(completionMessage.content)).toContain("fake-ok");
     const completionDetails = completionMessage.details as { lifecycleWarnings?: string[] };
     expect(completionDetails.lifecycleWarnings?.some((warning) => warning.includes("Failed to update subagent run record"))).toBe(true);
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+});
+
+describe("subagent model pin resolution", () => {
+  function makeModelContext(tempDir: string): ExtensionContext {
+    return {
+      ...makeContext(tempDir),
+      model: { provider: "test", id: "parent-model" },
+      modelRegistry: {
+        getAll: () => [
+          { provider: "test", id: "parent-model" },
+          { provider: "test", id: "other-model" },
+          { provider: "test", id: "rejected-model" },
+        ],
+      },
+    } as unknown as ExtensionContext;
+  }
+
+  function writeWorkerType(tempDir: string, modelLine: string): void {
+    fs.mkdirSync(path.join(tempDir, ".pi", "agents"), { recursive: true });
+    fs.writeFileSync(
+      path.join(tempDir, ".pi", "agents", "worker.toml"),
+      [
+        'name = "worker"',
+        'description = "Worker"',
+        modelLine,
+        'prompt = "Return concise findings."',
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+  }
+
+  test("degrades a pinned model missing from the registry to the session model with a warning", async () => {
+    const tempDir = makeTempDir("collab-index-model-pin-unavailable");
+    writeFakePiBinary(tempDir);
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+    writeWorkerType(tempDir, 'model = "openai-codex/gpt-does-not-exist"');
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const subagentTool = harness.tools.get("subagent");
+    if (!subagentTool) throw new Error("subagent tool was not registered");
+
+    const ctx = makeModelContext(tempDir);
+    await subagentTool.execute("tool-call-pin-unavailable", { task: "Inspect the repo" }, undefined, undefined, ctx);
+
+    const completionMessage = await waitForCompletionMessage(harness);
+    expect(String(completionMessage.content)).toContain('Subagent model pin "openai-codex/gpt-does-not-exist" is not in the model registry');
+    expect(String(completionMessage.content)).toContain("fake-ok");
+    const completionDetails = completionMessage.details as {
+      result?: { resolvedModel?: string; exitCode?: number };
+      pinnedModelWarning?: string;
+    };
+    expect(completionDetails.pinnedModelWarning).toContain("not in the model registry");
+    expect(completionDetails.result?.resolvedModel).toBe("test/parent-model");
+    expect(completionDetails.result?.exitCode).toBe(0);
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+
+  test("passes a registry-valid pinned model through unchanged", async () => {
+    const tempDir = makeTempDir("collab-index-model-pin-valid");
+    writeFakePiBinary(tempDir);
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+    writeWorkerType(tempDir, 'model = "test/other-model"');
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const subagentTool = harness.tools.get("subagent");
+    if (!subagentTool) throw new Error("subagent tool was not registered");
+
+    const ctx = makeModelContext(tempDir);
+    await subagentTool.execute("tool-call-pin-valid", { task: "Inspect the repo" }, undefined, undefined, ctx);
+
+    const completionMessage = await waitForCompletionMessage(harness);
+    const completionDetails = completionMessage.details as {
+      result?: { resolvedModel?: string; exitCode?: number };
+      pinnedModelWarning?: string;
+    };
+    expect(completionDetails.pinnedModelWarning).toBeUndefined();
+    expect(completionDetails.result?.resolvedModel).toBe("test/other-model");
+    expect(completionDetails.result?.exitCode).toBe(0);
+
+    await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
+  });
+
+  test("retries with the session model when a registry-valid pin is rejected at runtime", async () => {
+    const tempDir = makeTempDir("collab-index-model-pin-runtime-rejected");
+    writeFakePiBinary(tempDir);
+    process.env.PATH = `${tempDir}:${process.env.PATH ?? ""}`;
+    process.env.HOME = tempDir;
+    process.env.USERPROFILE = tempDir;
+    process.env.COLLABORATING_AGENTS_DIR = path.join(tempDir, "state");
+    process.env.TEST_PI_FAIL_ON_MODEL = "test/rejected-model";
+    writeWorkerType(tempDir, 'model = "test/rejected-model"');
+
+    const harness = makeHarness();
+    collaboratingAgentsExtension(harness.pi);
+    const subagentTool = harness.tools.get("subagent");
+    if (!subagentTool) throw new Error("subagent tool was not registered");
+
+    const ctx = makeModelContext(tempDir);
+    await subagentTool.execute("tool-call-pin-runtime-rejected", { task: "Inspect the repo" }, undefined, undefined, ctx);
+
+    const completionMessage = await waitForCompletionMessage(harness);
+    expect(String(completionMessage.content)).toContain("was rejected at runtime; retried with test/parent-model.");
+    expect(String(completionMessage.content)).toContain("fake-ok");
+    const completionDetails = completionMessage.details as {
+      result?: { resolvedModel?: string; exitCode?: number };
+    };
+    expect(completionDetails.result?.resolvedModel).toBe("test/parent-model");
+    expect(completionDetails.result?.exitCode).toBe(0);
 
     await Promise.all((harness.handlers.get("session_shutdown") ?? []).map((handler) => handler(undefined, ctx)));
   });

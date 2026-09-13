@@ -54,6 +54,23 @@ function inspectionHintLines(runId: string | undefined): string[] {
   ];
 }
 
+// Spawn-time warnings (model degradation, type fallback) live in details, but
+// the completion message body is what the coordinator actually reads; surface
+// them so a silent downgrade cannot go unnoticed.
+function collectModelWarningLines(details: Record<string, unknown>): string[] {
+  const warnings: string[] = [];
+  for (const key of ["modelResolutionWarning", "pinnedModelWarning", "modelFallbackWarning"] as const) {
+    const value = details[key];
+    if (typeof value === "string" && value.trim()) warnings.push(value.trim());
+  }
+  if (Array.isArray(details.modelFallbackWarnings)) {
+    for (const value of details.modelFallbackWarnings) {
+      if (typeof value === "string" && value.trim()) warnings.push(value.trim());
+    }
+  }
+  return warnings.map((warning) => `- ⚠️ ${warning}`);
+}
+
 export function buildSubagentCompletionMessagePayload(
   result: SubagentCompletionToolResult,
 ): SubagentCompletionMessagePayload {
@@ -113,6 +130,7 @@ export function buildSubagentCompletionMessagePayload(
 
     body = [
       cmuxNote ? `- ${cmuxNote}` : undefined,
+      ...collectModelWarningLines(result.details),
       (singleResult?.output || result.content[0]?.text || "(no output)").trim() || "(no output)",
       ...inspectionHintLines(runId),
     ]

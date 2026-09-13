@@ -116,7 +116,7 @@ prompt = """先阅读当前需求与限定范围的代码。
 
 配置按从低到高覆盖同名角色：包内 `examples/subagents/*.toml`；用户目录 `~/.pi/agent/subagents`、`~/.pi/subagents`、`~/.pi/agents`；从当前目录向上寻找的项目 `.pi/subagents`、`.pi/agents`。新配置推荐最后两种 `agents` 路径。没有指定角色时，优先用户/项目覆盖的 worker，再考虑覆盖的 default，然后使用包内 worker 与兜底实现。
 
-自带角色和实际模型配置见 [角色示例目录](../../examples/subagents)。例如当前 scout 配置了 `openai-codex/gpt-5.4-mini`，documenter/reviewer 配置了 `openai-codex/gpt-5.5`；它们不是账号赠送或可用性保证，应该按自己的可用模型覆盖。
+自带角色和实际模型配置见 [角色示例目录](../../examples/subagents)。例如当前 scout 配置了 `openai-codex/gpt-5.4-mini`，documenter/reviewer 配置了 `openai-codex/gpt-5.5`；它们不是账号赠送或可用性保证，应该按自己的可用模型覆盖。扩展会在启动前用模型登记表校验角色的 `model`：不在表内的取值（包括大小写不一致）会降级为父会话模型，并在启动与完成提示里给出警告；表内存在但账号无权使用的取值（例如 Codex 账号限制）会在运行时被拒后自动改用父会话模型重试一次，同样给出警告。角色文件里的示例模型不会让子任务直接失败。
 
 ## 后台运行还是可见终端（Pi native）
 

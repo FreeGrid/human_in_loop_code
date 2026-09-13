@@ -1316,6 +1316,65 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
     };
   }
 
+  // Subagent type TOML pins (model = "provider/id") must go through the same
+  // availability check as the parent-model path; otherwise a stale or
+  // unentitled pin fails inside the child process with no warning at spawn
+  // time (registry presence does not imply account entitlement).
+  function resolvePinnedModelByAvailability(args: {
+    pin: string;
+    modelRegistry: ExtensionContext["modelRegistry"];
+  }): { model?: string; warning?: string } {
+    const pin = args.pin.trim();
+    if (!pin) return { model: undefined };
+
+    const all = args.modelRegistry?.getAll?.();
+    // No registry information → cannot claim unavailability; pass the pin through.
+    if (!Array.isArray(all)) return { model: pin };
+    const availableModels = all;
+    const slashIndex = pin.indexOf("/");
+    const requestedProvider = slashIndex >= 0 ? pin.slice(0, slashIndex).trim() : undefined;
+    const requestedModelId = (slashIndex >= 0 ? pin.slice(slashIndex + 1) : pin).trim();
+    if (!requestedModelId) return { model: undefined };
+
+    const pool = requestedProvider
+      ? availableModels.filter((model) => model.provider.toLowerCase() === requestedProvider.toLowerCase())
+      : availableModels;
+
+    const exact = pool.find((model) => model.id.toLowerCase() === requestedModelId.toLowerCase());
+    if (exact) return { model: `${exact.provider}/${exact.id}` };
+
+    let candidate = requestedModelId;
+    while (candidate.length > 0) {
+      const cut = Math.max(candidate.lastIndexOf("-"), candidate.lastIndexOf("_"));
+      if (cut <= 0) break;
+      candidate = candidate.slice(0, cut);
+      const fallback = pool.find((model) => model.id.toLowerCase() === candidate.toLowerCase());
+      if (fallback) {
+        return {
+          model: `${fallback.provider}/${fallback.id}`,
+          warning: `Subagent model pin "${pin}" is unavailable; using ${fallback.provider}/${fallback.id} for subagents.`,
+        };
+      }
+    }
+
+    return {
+      model: undefined,
+      warning: `Subagent model pin "${pin}" is not in the model registry; subagents will use the session model instead.`,
+    };
+  }
+
+  // Registry presence still cannot prove account entitlement (e.g. a Codex
+  // model rejected for ChatGPT-account auth), so a pinned model that the
+  // registry lists can still be rejected inside the child. Detect that shape
+  // of failure and retry once with the session model.
+  function looksLikeModelAvailabilityError(text: string | undefined): boolean {
+    if (!text) return false;
+    return (
+      /\bmodel\b[^\n]{0,120}\b(not supported|unsupported|not available|unavailable|does not exist|no access|not permitted|permission denied)\b/i.test(text) ||
+      /\b(not supported|unsupported|unavailable)[^\n]{0,60}\bmodel\b/i.test(text)
+    );
+  }
+
   function getSubagentDepthState(): { depth: number; maxDepth: number; blocked: boolean } {
     const depthRaw = Number(process.env.PI_COLLAB_SUBAGENT_DEPTH ?? "0");
     const maxRaw = Number(process.env.PI_COLLAB_SUBAGENT_MAX_DEPTH ?? String(SUBAGENT_DEFAULT_MAX_DEPTH));
@@ -1477,11 +1536,49 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
         })
       : { model: undefined };
 
-    // Type config model takes precedence, then fallback to current session model
+    // Type config model pin is validated against the registry before spawn
+    // (same treatment as the parent-model path); unresolvable pins degrade to
+    // the current session model instead of failing inside the child.
+    const pinnedModel = baseAgentDef.model
+      ? resolvePinnedModelByAvailability({ pin: baseAgentDef.model, modelRegistry: ctx.modelRegistry })
+      : { model: undefined, warning: undefined };
+
     const runtimeAgent: SpawnAgentDefinition = {
       ...baseAgentDef,
-      model: baseAgentDef.model || resolvedModel.model,
+      model: pinnedModel.model ?? resolvedModel.model,
     };
+
+    // A pinned model that the registry lists can still be rejected at request
+    // time (e.g. account entitlement); retry once with the session model.
+    const runSpawnWithModelFallback = async (
+      task: SpawnTask,
+      agentDef: SpawnAgentDefinition,
+      spawnOptions: Parameters<typeof runSpawnTask>[3],
+    ): Promise<{ result: SpawnResult; modelFallbackWarning?: string }> => {
+      const result = await runSpawnTask(ctx.cwd, task, agentDef, spawnOptions);
+      const pinnedModelRef = agentDef.model;
+      const parentModel = resolvedModel.model;
+      if (
+        !pinnedModelRef ||
+        !parentModel ||
+        pinnedModelRef === parentModel ||
+        result.exitCode === 0 ||
+        !looksLikeModelAvailabilityError(result.error ?? result.output)
+      ) {
+        return { result };
+      }
+
+      const retry = await runSpawnTask(ctx.cwd, task, { ...agentDef, model: parentModel }, spawnOptions);
+      const modelFallbackWarning = retry.exitCode === 0
+        ? `Pinned subagent model ${pinnedModelRef} was rejected at runtime; retried with ${parentModel}.`
+        : `Pinned subagent model ${pinnedModelRef} was rejected at runtime; retry with ${parentModel} also failed.`;
+      return { result: retry, modelFallbackWarning };
+    };
+
+    const modelWarnings = [
+      resolvedModel.warning,
+      pinnedModel.warning,
+    ].filter((warning): warning is string => Boolean(warning));
 
     const runRecordWarnings: string[] = [];
     const childRunIds = createPlannedSubagentRunRecords(params, ctx, batchRunId, typeConfig.name, runRecordWarnings);
@@ -1494,7 +1591,7 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
         cwd: params.cwd,
       };
 
-      const result = await runSpawnTask(ctx.cwd, taskToRun, runtimeAgent, {
+      const { result, modelFallbackWarning } = await runSpawnWithModelFallback(taskToRun, runtimeAgent, {
         index: 0,
         runId: batchRunId,
         defaultCwd: params.cwd,
@@ -1518,6 +1615,7 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
           markSubagentRunSessionMetadata(childRunIds[0]!, metadata, runRecordWarnings);
         },
       });
+      if (modelFallbackWarning) modelWarnings.push(modelFallbackWarning);
       markSubagentRunFromRegistration(childRunIds[0]!, result.name, runRecordWarnings);
       markSubagentRunCompleted(childRunIds[0]!, result, runRecordWarnings);
 
@@ -1526,7 +1624,7 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
       const resolutionLine = typeNotFoundWarning
         ? `⚠️ ${typeNotFoundWarning}\n\nUsing subagent type '${typeConfig.name}'.`
         : `Using subagent type '${typeConfig.name}'.`;
-      const modelNotice = resolvedModel.warning ? `\n\n⚠️ ${resolvedModel.warning}` : "";
+      const modelNotice = modelWarnings.length > 0 ? `\n\n${modelWarnings.map((w) => `⚠️ ${w}`).join("\n\n")}` : "";
       const launchBlock = formatSingleSubagentLaunchBlock(profile, result);
 
       const ok = result.exitCode === 0;
@@ -1549,6 +1647,8 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
           result,
           lifecycleWarnings,
           modelResolutionWarning: resolvedModel.warning,
+          pinnedModelWarning: pinnedModel.warning,
+          modelFallbackWarning,
           typeNotFoundWarning,
         },
       };
@@ -1575,9 +1675,10 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
     const concurrency = Math.max(1, Math.min(SUBAGENT_MAX_CONCURRENCY, tasks.length));
     const launchStaggerMs = SUBAGENT_LAUNCH_STAGGER_MS;
 
+    const modelFallbackWarnings: Array<string | undefined> = [];
     const results = await mapWithConcurrencyLimit(resolvedTasks, concurrency, async (entry, index) => {
       const recordId = childRunIds[index]!;
-      const result = await runSpawnTask(ctx.cwd, entry.task, entry.def, {
+      const { result, modelFallbackWarning } = await runSpawnWithModelFallback(entry.task, entry.def, {
         index,
         runId: batchRunId,
         defaultCwd: params.cwd,
@@ -1602,10 +1703,15 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
           markSubagentRunSessionMetadata(recordId, metadata, runRecordWarnings);
         },
       });
+      modelFallbackWarnings[index] = modelFallbackWarning;
       markSubagentRunFromRegistration(recordId, result.name, runRecordWarnings);
       markSubagentRunCompleted(recordId, result, runRecordWarnings);
       return result;
     });
+
+    for (const warning of modelFallbackWarnings) {
+      if (warning) modelWarnings.push(warning);
+    }
 
     const lifecycleWarnings = runRecordWarnings.length > 0 ? [...runRecordWarnings] : undefined;
 
@@ -1625,7 +1731,7 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
     const resultSummaryLines = [
       `${typeNotice}Parallel subagents using type '${typeConfig.name}': ${successCount}/${results.length} succeeded`,
       `Launch stagger: ${launchStaggerMs}ms between subagent starts`,
-      resolvedModel.warning ? `⚠️ ${resolvedModel.warning}` : undefined,
+      ...modelWarnings.map((warning) => `⚠️ ${warning}`),
       "",
       "## Result Summary",
       lines.join("\n"),
@@ -1656,6 +1762,8 @@ export default function collaboratingAgentsExtension(pi: ExtensionAPI): void {
         results,
         lifecycleWarnings,
         modelResolutionWarning: resolvedModel.warning,
+        pinnedModelWarning: pinnedModel.warning,
+        modelFallbackWarnings,
         typeNotFoundWarning,
       },
     };
