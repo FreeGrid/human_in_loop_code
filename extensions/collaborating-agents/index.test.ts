@@ -1311,7 +1311,7 @@ describe("subagent launch identity", () => {
     if (!subagentTool) throw new Error("subagent tool was not registered");
 
     const ctx = makeContext(tempDir);
-    const result = await subagentTool.execute("tool-call-lifecycle", { task: "Inspect the repo" }, undefined, undefined, ctx);
+    const result = await subagentTool.execute("tool-call-lifecycle", { task: "Inspect the repo", sessionControl: false }, undefined, undefined, ctx);
     const details = result.details as { batchRunId: string; childRunIds: string[] };
     const recordId = details.childRunIds[0]!;
 
@@ -1463,7 +1463,7 @@ describe("subagent launch identity", () => {
     if (!subagentTool) throw new Error("subagent tool was not registered");
 
     const ctx = makeContext(tempDir);
-    const result = await subagentTool.execute("tool-call-process-unavailable", { task: "Inspect the repo" }, undefined, undefined, ctx);
+    const result = await subagentTool.execute("tool-call-process-unavailable", { task: "Inspect the repo", sessionControl: false }, undefined, undefined, ctx);
     const details = result.details as { childRunIds: string[] };
     const recordId = details.childRunIds[0]!;
 
@@ -1497,7 +1497,7 @@ describe("subagent launch identity", () => {
     if (!subagentTool) throw new Error("subagent tool was not registered");
 
     const ctx = makeContext(tempDir);
-    const result = await subagentTool.execute("tool-call-fallback", { task: "Inspect the repo" }, undefined, undefined, ctx);
+    const result = await subagentTool.execute("tool-call-fallback", { task: "Inspect the repo", sessionControl: false }, undefined, undefined, ctx);
     const details = result.details as { childRunIds: string[] };
     const recordId = details.childRunIds[0]!;
 
@@ -1513,7 +1513,7 @@ describe("subagent launch identity", () => {
     const concurrentSessionFile = path.join(tempDir, "concurrent-session.jsonl");
     process.env.TEST_PI_SKIP_SESSION_EVENT = "1";
     process.env.TEST_PI_EXIT_DELAY_MS = "250";
-    const second = await subagentTool.execute("tool-call-preserve", { task: "Inspect without session" }, undefined, undefined, ctx);
+    const second = await subagentTool.execute("tool-call-preserve", { task: "Inspect without session", sessionControl: false }, undefined, undefined, ctx);
     const secondDetails = second.details as { childRunIds: string[] };
     const secondRecordId = secondDetails.childRunIds[0]!;
     await waitForRunRecord(stateDir, secondRecordId, (record) => record.status === "launching" || record.status === "running");

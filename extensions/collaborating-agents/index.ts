@@ -143,7 +143,7 @@ const SubagentParams = Type.Object({
   task: Type.Optional(Type.String({ description: "Single-mode task prompt" })),
   tasks: Type.Optional(Type.Array(SubagentTaskItem, { description: "Parallel-mode tasks" })),
   cwd: Type.Optional(Type.String({ description: "Default working directory for spawned subagents" })),
-  sessionControl: Type.Optional(Type.Boolean({ description: "Spawn children with --session-control (default true)" })),
+  sessionControl: Type.Optional(Type.Boolean({ description: "Spawn children with a parent-controlled session file (--session <path>) so transcripts can be tailed (default true)" })),
   type: Type.Optional(Type.String({ description: "Subagent type to use (e.g., 'scout', 'documenter', 'reviewer'). Uses default if not specified." })),
 });
 

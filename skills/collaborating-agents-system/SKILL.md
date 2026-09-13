@@ -86,7 +86,7 @@ Supported selectors for `session` and `tail`:
 
 `sessions` lists active, completed, and failed records for the current coordinator by default. Use `includeCompleted: false` to show only launching/running child runs. `tail` accepts selectors only, not raw file paths.
 
-Process mode launches a background `pi` child without a deterministic `--session` file. The extension records the session id from child output and attaches a session file after child self-registration or fallback discovery by session id. Until that happens, tailing may report: `Process-mode session file unavailable until child registration or fallback discovery provides one.` In `cmux-pane` mode, the extension creates an explicit session file under `~/.pi/agent/sessions/collaborating-agents-subagents/`.
+Process mode launches a background `pi` child with a parent-controlled `--session` file under `~/.pi/agent/sessions/collaborating-agents-subagents/` (unless the spawn sets `sessionControl: false`), so its transcript is tailable from launch. Without a deterministic file, the extension records the session id from child output and attaches a session file after child self-registration or fallback discovery by session id; until that happens tailing may report: `Process-mode session file unavailable until child registration or fallback discovery provides one.` In `cmux-pane` mode, the extension creates an explicit session file under `~/.pi/agent/sessions/collaborating-agents-subagents/`.
 
 ## 2) `subagent` (spawn workers)
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fixed every default `subagent` spawn failing on pi 0.85.1: the extension passed a `--session-control` flag that pi does not implement, so children exited immediately with `Unknown option: --session-control`. Session control now hands each child a deterministic `--session <path>` file under `~/.pi/agent/sessions/collaborating-agents-subagents/`, which also makes process-mode transcripts tailable from launch instead of waiting for child registration or fallback discovery. `sessionControl: false` still opts out and keeps the previous discovery behavior.
 - Retain recorded V3 subtasks after completion, reopening and task selection. Ordinary child progress automatically completes the parent after the last child, and reopening a child reopens the parent; governed finalize checks the accepted task and its retained children after verification/review.
 
 - Default Task Plan to readable `pi-plan/v3`: current requirements, current-only rolling detail, concise edits and ordinary manual completion without runtime state.

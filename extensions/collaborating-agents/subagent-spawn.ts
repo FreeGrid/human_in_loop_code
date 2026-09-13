@@ -1549,7 +1549,6 @@ export async function runSpawnTask(
   const childName = sanitizeAgentName(`${task.agent}-${runToken}-${generatedCallsign}`);
 
   const commonArgs: string[] = [];
-  if (options.enableSessionControl !== false) commonArgs.push("--session-control");
 
   const model = agentDef.model;
   if (model) commonArgs.push("--models", model);
@@ -1597,15 +1596,23 @@ export async function runSpawnTask(
   const cwd = task.cwd || options.defaultCwd || runtimeCwd;
 
   const launchMode = options.launchMode ?? "process";
-  // Process-mode uses Pi JSON events for the first iteration. We do not pass
-  // `--session` here until support is proven end-to-end, so transcript tailing
-  // is best-effort until child registration or a fallback scan finds a file.
-  const sessionFile = launchMode === "cmux-pane" ? createSubagentSessionFilePath(childName, options.runId.slice(0, 8)) : undefined;
+  // Session control means the parent hands the child a deterministic `--session`
+  // file path, so the transcript can be tailed without discovery heuristics.
+  // (pi has no `--session-control` flag; older versions of this extension
+  // crashed every default spawn by passing one.) Verified end-to-end against
+  // pi's JSON print mode. cmux panes always need the path for settled-output
+  // tracking regardless of the sessionControl setting.
+  const sessionControlled = options.enableSessionControl !== false;
+  const sessionFile =
+    launchMode === "cmux-pane" || sessionControlled
+      ? createSubagentSessionFilePath(childName, options.runId.slice(0, 8))
+      : undefined;
   const exitMarkerPath = sessionFile ? createSubagentExitMarkerPath(sessionFile) : undefined;
+  if (sessionFile) commonArgs.push("--session", sessionFile);
 
   const args: string[] =
     launchMode === "cmux-pane"
-      ? [...commonArgs, "--session", sessionFile!, wrappedTaskPrompt]
+      ? [...commonArgs, wrappedTaskPrompt]
       : ["--mode", "json", "-p", ...commonArgs, wrappedTaskPrompt];
 
   const launchArgs = [...args];
@@ -1626,7 +1633,7 @@ export async function runSpawnTask(
     exitCode: 1,
     output: "",
     sessionFile,
-    sessionFileUnavailableReason: launchMode === "process" ? PROCESS_MODE_SESSION_FILE_UNAVAILABLE_REASON : undefined,
+    sessionFileUnavailableReason: sessionFile ? undefined : PROCESS_MODE_SESSION_FILE_UNAVAILABLE_REASON,
     launchMode,
     workingDirectory: cwd,
     launchArgs,
